@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo " TensorParallelism Backend Directory Structure:"
+echo " TensorParallelismBeta Backend Directory Structure:"
 echo "-----------------------------------------------"
 
 # Starting from backend/
