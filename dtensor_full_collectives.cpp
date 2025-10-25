@@ -1,4 +1,4 @@
-// dtensor_allreduce.cpp
+// dtensor_full_collectives.cpp
 #include <cuda_runtime.h>
 #include <nccl.h>
 #include <iostream>
@@ -42,18 +42,49 @@ public:
     {
         cudaSetDevice(device_);
         cudaStreamCreate(&all_reduce_stream_);
+        cudaStreamCreate(&reduce_scatter_stream_);
+        cudaStreamCreate(&all_gather_stream_);
+        cudaStreamCreate(&broadcast_stream_);
+
         ncclCommInitRank(&comm_, world_size_, id, rank_);
     }
 
     ~ProcessGroup() {
         ncclCommDestroy(comm_);
         cudaStreamDestroy(all_reduce_stream_);
+        cudaStreamDestroy(reduce_scatter_stream_);
+        cudaStreamDestroy(all_gather_stream_);
+        cudaStreamDestroy(broadcast_stream_);
     }
 
     template<typename T>
     std::shared_ptr<Work> all_reduce(T* data, size_t count, ncclDataType_t dtype) {
         auto work = std::make_shared<Work>(all_reduce_stream_);
         ncclAllReduce(data, data, count, dtype, ncclSum, comm_, all_reduce_stream_);
+        work->markCompleted(true);
+        return work;
+    }
+
+    template<typename T>
+    std::shared_ptr<Work> reduce_scatter(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype) {
+        auto work = std::make_shared<Work>(reduce_scatter_stream_);
+        ncclReduceScatter(send_buf, recv_buf, count_per_rank, dtype, ncclSum, comm_, reduce_scatter_stream_);
+        work->markCompleted(true);
+        return work;
+    }
+
+    template<typename T>
+    std::shared_ptr<Work> all_gather(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype) {
+        auto work = std::make_shared<Work>(all_gather_stream_);
+        ncclAllGather(send_buf, recv_buf, count_per_rank, dtype, comm_, all_gather_stream_);
+        work->markCompleted(true);
+        return work;
+    }
+
+    template<typename T>
+    std::shared_ptr<Work> broadcast(T* data, size_t count, int root, ncclDataType_t dtype) {
+        auto work = std::make_shared<Work>(broadcast_stream_);
+        ncclBroadcast(data, data, count, dtype, root, comm_, broadcast_stream_);
         work->markCompleted(true);
         return work;
     }
@@ -65,6 +96,9 @@ private:
     int rank_, world_size_, device_;
     ncclComm_t comm_;
     cudaStream_t all_reduce_stream_;
+    cudaStream_t reduce_scatter_stream_;
+    cudaStream_t all_gather_stream_;
+    cudaStream_t broadcast_stream_;
 };
 
 // ---------------- DTensor ----------------
@@ -119,20 +153,51 @@ void worker(int rank, int world_size, const ncclUniqueId &id) {
 
     {
         std::lock_guard<std::mutex> lg(g_io_mutex);
-        std::cout << "==== Before AllReduce ====\n";
+        std::cout << "==== Before Any Collective ====\n";
         dt.printSlices();
     }
 
-    for (int i = 0; i < world_size; ++i) {
-        auto w = pg.all_reduce(dt.deviceSlice(i), dt.sliceSize(), ncclFloat32);
-        w->wait();
-    }
+    // --- AllReduce ---
+    for (int i = 0; i < world_size; ++i)
+        pg.all_reduce(dt.deviceSlice(i), dt.sliceSize(), ncclFloat32)->wait();
 
     dt.copyDeviceToHost();
-
     {
         std::lock_guard<std::mutex> lg(g_io_mutex);
         std::cout << "==== After AllReduce ====\n";
+        dt.printSlices();
+    }
+
+    // --- ReduceScatter ---
+    for (int i = 0; i < world_size; ++i)
+        pg.reduce_scatter(dt.deviceSlice(i), dt.deviceSlice(i), dt.sliceSize() / world_size, ncclFloat32)->wait();
+
+    dt.copyDeviceToHost();
+    {
+        std::lock_guard<std::mutex> lg(g_io_mutex);
+        std::cout << "==== After ReduceScatter ====\n";
+        dt.printSlices();
+    }
+
+    // --- AllGather ---
+    for (int i = 0; i < world_size; ++i)
+        pg.all_gather(dt.deviceSlice(i), dt.deviceSlice(i), dt.sliceSize() / world_size, ncclFloat32)->wait();
+
+    dt.copyDeviceToHost();
+    {
+        std::lock_guard<std::mutex> lg(g_io_mutex);
+        std::cout << "==== After AllGather ====\n";
+        dt.printSlices();
+    }
+
+    // --- Broadcast (root=0) ---
+    for (int i = 0; i < world_size; ++i)
+        pg.broadcast(dt.deviceSlice(i), dt.sliceSize(), 0, ncclFloat32)->wait();
+
+    dt.copyDeviceToHost();
+    {
+        std::lock_guard<std::mutex> lg(g_io_mutex);
+        std::cout << "==== After Broadcast ====\n";
         dt.printSlices();
     }
 }
