@@ -1,4 +1,3 @@
-// dtensor_full_collectives.cpp
 #include <cuda_runtime.h>
 #include <nccl.h>
 #include <iostream>
