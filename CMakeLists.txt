@@ -1,0 +1,52 @@
+cmake_minimum_required(VERSION 3.20)
+project(dtensor_pybind LANGUAGES CXX CUDA)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+
+include(FetchContent)
+FetchContent_Declare(
+  pybind11
+  GIT_REPOSITORY https://github.com/pybind/pybind11.git
+  GIT_TAG        v2.13.5
+)
+FetchContent_MakeAvailable(pybind11)
+
+find_package(MPI REQUIRED)
+enable_language(CUDA)
+find_package(CUDAToolkit REQUIRED)
+
+find_path(NCCL_INCLUDE_DIR nccl.h PATH_SUFFIXES include)
+find_library(NCCL_LIBRARY NAMES nccl PATH_SUFFIXES lib lib64)
+if (NOT NCCL_INCLUDE_DIR OR NOT NCCL_LIBRARY)
+  message(FATAL_ERROR "NCCL not found. Set NCCL_INCLUDE_DIR and NCCL_LIBRARY.")
+endif()
+
+include_directories(${NCCL_INCLUDE_DIR})
+include_directories(${MPI_CXX_INCLUDE_DIRS})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/bindings)  # header path
+
+# CUDA arch (pass -DCMAKE_CUDA_ARCHITECTURES=XX; default 86)
+if(NOT CMAKE_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES 86)
+endif()
+message(STATUS "CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
+
+pybind11_add_module(dtensor_cpp
+  bindings/dtensor_pybind.cpp
+  bindings/dtensor_mpi.cpp
+)
+
+target_link_libraries(dtensor_cpp PRIVATE MPI::MPI_CXX CUDA::cudart ${NCCL_LIBRARY})
+set_target_properties(dtensor_cpp PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+# Exclude demo main()/worker() when building the module
+target_compile_definitions(dtensor_cpp PRIVATE DTENSOR_PYBIND_BUILD=1)
+
+install(TARGETS dtensor_cpp
+  LIBRARY DESTINATION python/dtensor
+)
