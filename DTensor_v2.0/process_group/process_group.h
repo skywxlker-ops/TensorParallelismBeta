@@ -38,7 +38,8 @@ public:
     template<typename T>
     std::shared_ptr<Work> broadcast(T* data, size_t count, int root, ncclDataType_t dtype);
 
-    cudaStream_t getStream() { return stream_; }
+    cudaStream_t getStream() const { return stream_; }
+    ncclComm_t getComm() const { return comm_; }
 
 private:
     int rank_, world_size_, device_;
