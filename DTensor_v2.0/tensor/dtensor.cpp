@@ -1,57 +1,66 @@
 #include "dtensor.h"
 #include <cuda_runtime.h>
+#include <nccl.h>
 #include <iostream>
 
-DTensor::DTensor(int world_size, int slice_size, int rank, ProcessGroup* pg)
-    : world_size_(world_size), slice_size_(slice_size), rank_(rank), pg_(pg) {
-    h_data_.resize(slice_size_);
-    for (int j = 0; j < slice_size_; ++j)
-        h_data_[j] = float(rank_ * slice_size_ + j);
-    cudaMalloc(&d_data_, slice_size_ * sizeof(float));
-    cudaMemcpy(d_data_, h_data_.data(), slice_size_ * sizeof(float), cudaMemcpyHostToDevice);
+DTensor::DTensor(int rank, int world_size, ProcessGroup* pg)
+    : rank_(rank), world_size_(world_size), pg_(pg) {
+    size_ = 8;
+    cudaSetDevice(rank_);
+    cudaMalloc(&data_, size_ * sizeof(float));
+    cudaMalloc(&temp_buf_, size_ * world_size_ * sizeof(float));
+
+    std::vector<float> host_data(size_);
+    for (int i = 0; i < size_; i++) {
+        host_data[i] = static_cast<float>(rank_ * size_ + i);
+    }
+    cudaMemcpy(data_, host_data.data(), size_ * sizeof(float), cudaMemcpyHostToDevice);
 }
 
 DTensor::~DTensor() {
-    if (d_data_) cudaFree(d_data_);
+    cudaFree(data_);
+    cudaFree(temp_buf_);
 }
 
-float* DTensor::deviceData() { return d_data_; }
-std::vector<float>& DTensor::hostData() { return h_data_; }
-size_t DTensor::size() const { return slice_size_; }
+// ------------------- NEW METHODS -------------------
 
-void DTensor::copyDeviceToHost() {
-    cudaMemcpy(h_data_.data(), d_data_, slice_size_ * sizeof(float), cudaMemcpyDeviceToHost);
+void DTensor::setData(const std::vector<float>& host_data) {
+    size_ = host_data.size();
+    cudaMemcpy(data_, host_data.data(), size_ * sizeof(float), cudaMemcpyHostToDevice);
 }
+
+std::vector<float> DTensor::getData() const {
+    std::vector<float> host_data(size_);
+    cudaMemcpy(host_data.data(), data_, size_ * sizeof(float), cudaMemcpyDeviceToHost);
+    return host_data;
+}
+
+// ---------------------------------------------------
 
 void DTensor::allReduce() {
-    pg_->allReduce(d_data_, slice_size_, ncclFloat32)->wait();
+    pg_->allReduce<float>(data_, size_, ncclFloat);
+    cudaDeviceSynchronize();
 }
 
 void DTensor::reduceScatter() {
-    int chunk_size = slice_size_ / world_size_;
-    float* recv_chunk;
-    cudaMalloc(&recv_chunk, chunk_size * sizeof(float));
-    pg_->reduceScatter(recv_chunk, d_data_, chunk_size, ncclFloat32)->wait();
-    cudaMemcpy(d_data_, recv_chunk, chunk_size * sizeof(float), cudaMemcpyDeviceToDevice);
-    cudaFree(recv_chunk);
+    pg_->reduceScatter<float>(data_, temp_buf_, size_, ncclFloat);
+    cudaDeviceSynchronize();
 }
 
 void DTensor::allGather() {
-    int chunk_size = slice_size_ / world_size_;
-    float* gathered;
-    cudaMalloc(&gathered, chunk_size * world_size_ * sizeof(float));
-    pg_->allGather(gathered, d_data_, chunk_size, ncclFloat32)->wait();
-    cudaMemcpy(d_data_, gathered, chunk_size * world_size_ * sizeof(float), cudaMemcpyDeviceToDevice);
-    cudaFree(gathered);
+    pg_->allGather<float>(temp_buf_, data_, size_, ncclFloat);
+    cudaDeviceSynchronize();
 }
 
-void DTensor::broadcast() {
-    pg_->broadcast(d_data_, slice_size_, 0, ncclFloat32)->wait();
+void DTensor::broadcast(int root) {
+    pg_->broadcast<float>(data_, size_, root, ncclFloat);
+    cudaDeviceSynchronize();
 }
 
-std::string DTensor::toString() {
-    std::stringstream ss;
-    ss << "[Rank " << rank_ << "] ";
-    for (float v : h_data_) ss << v << " ";
-    return ss.str();
+void DTensor::print() const {
+    std::vector<float> host_data(size_);
+    cudaMemcpy(host_data.data(), data_, size_ * sizeof(float), cudaMemcpyDeviceToHost);
+    std::cout << "[Rank " << rank_ << "] ";
+    for (auto x : host_data) std::cout << x << " ";
+    std::cout << std::endl;
 }

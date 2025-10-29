@@ -1,30 +1,31 @@
 #pragma once
 #include <vector>
 #include <memory>
-#include <string>
-#include <sstream>
-#include "../process_group/process_group.h"
+#include <iostream>
+#include "process_group.h"
 
 class DTensor {
 public:
-    DTensor(int world_size, int slice_size, int rank, ProcessGroup* pg);
+    DTensor(int rank, int world_size, ProcessGroup* pg);
     ~DTensor();
 
-    float* deviceData();
-    std::vector<float>& hostData();
-    size_t size() const;
-
-    void copyDeviceToHost();
     void allReduce();
     void reduceScatter();
     void allGather();
-    void broadcast();
+    void broadcast(int root);
 
-    std::string toString();
+    void print() const;
+    int size() const { return size_; }
+
+    void setData(const std::vector<float>& data);
+    std::vector<float> getData() const;
+
 
 private:
-    int world_size_, slice_size_, rank_;
-    std::vector<float> h_data_;
-    float* d_data_ = nullptr;
+    int rank_;
+    int world_size_;
+    int size_;
+    float* data_;
+    float* temp_buf_;  // used for scatter/gather
     ProcessGroup* pg_;
 };
