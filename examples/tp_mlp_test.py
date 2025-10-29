@@ -119,18 +119,6 @@ if __name__ == "__main__":
 import atexit
 
 def safe_finalize():
-    try:
-        # ensure PG and buffers are destroyed before finalize
-        # (they go out of scope here; gc collects soon after)
-        pass
-    finally:
-        try:
-            dt.mpi_barrier()
-        except Exception:
-            pass
-        try:
-            dt.mpi_finalize()
-        except Exception:
-            pass
+    dt.mpi_barrier()
 
 atexit.register(safe_finalize)
