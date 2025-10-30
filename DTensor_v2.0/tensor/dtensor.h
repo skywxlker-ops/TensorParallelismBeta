@@ -2,6 +2,7 @@
 #include <vector>
 #include <memory>
 #include <iostream>
+#include <string>
 #include "process_group.h"
 
 class DTensor {
@@ -20,12 +21,21 @@ public:
     void setData(const std::vector<float>& data);
     std::vector<float> getData() const;
 
+    // ------------------- NEW METHODS -------------------
+    void saveCheckpoint(const std::string& path) const;
+    void loadCheckpoint(const std::string& path);
+    // ---------------------------------------------------
 
 private:
     int rank_;
     int world_size_;
     int size_;
     float* data_;
-    float* temp_buf_;  // used for scatter/gather
+    float* temp_buf_;
     ProcessGroup* pg_;
+
+    // ------------------- NEW METADATA -------------------
+    int shape_[1];             // Currently 1D tensor
+    std::string dtype_ = "float32";
+    // ---------------------------------------------------
 };
