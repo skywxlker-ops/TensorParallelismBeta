@@ -133,28 +133,11 @@ CachingAllocator gAllocator;
 
 DTensor::DTensor(int rank, int world_size, ProcessGroup* pg)
     : rank_(rank), world_size_(world_size), pg_(pg),
-      data_(nullptr), temp_buf_(nullptr), data_block_(nullptr), temp_block_(nullptr) {
-
-    size_ = 8;
-    shape_[0] = size_;
+      data_(nullptr), temp_buf_(nullptr), data_block_(nullptr), temp_block_(nullptr),
+      size_(0) {
 
     cudaSetDevice(rank_);
     cudaStreamCreate(&stream_);
-
-    // Allocate using our stream-aware caching allocator
-    data_block_ = gAllocator.allocateMemory(size_ * sizeof(float), stream_);
-    temp_block_ = gAllocator.allocateMemory(size_ * world_size_ * sizeof(float), stream_);
-
-    data_ = static_cast<float*>(data_block_->addr);
-    temp_buf_ = static_cast<float*>(temp_block_->addr);
-
-    std::vector<float> host_data(size_);
-    for (int i = 0; i < size_; i++) {
-        host_data[i] = static_cast<float>(rank_ * size_ + i);
-    }
-
-    cudaMemcpyAsync(data_, host_data.data(), size_ * sizeof(float), cudaMemcpyHostToDevice, stream_);
-    cudaStreamSynchronize(stream_);
 }
 
 DTensor::~DTensor() {
@@ -164,11 +147,24 @@ DTensor::~DTensor() {
     cudaStreamDestroy(stream_);
 }
 
-// ---------------- EXISTING METHODS ----------------
+// ---------------- SETUP AND DATA ----------------
 
 void DTensor::setData(const std::vector<float>& host_data) {
     size_ = host_data.size();
     shape_[0] = size_;
+    dtype_ = "float32";
+
+    // Free old allocations if necessary
+    if (data_block_) gAllocator.freeMemory(data_block_);
+    if (temp_block_) gAllocator.freeMemory(temp_block_);
+
+    // Allocate GPU buffers based on *current* size
+    data_block_ = gAllocator.allocateMemory(size_ * sizeof(float), stream_);
+    temp_block_ = gAllocator.allocateMemory(size_ * world_size_ * sizeof(float), stream_);
+    data_ = static_cast<float*>(data_block_->addr);
+    temp_buf_ = static_cast<float*>(temp_block_->addr);
+
+    // Upload data
     cudaMemcpyAsync(data_, host_data.data(), size_ * sizeof(float), cudaMemcpyHostToDevice, stream_);
     cudaStreamSynchronize(stream_);
 }
@@ -179,6 +175,8 @@ std::vector<float> DTensor::getData() const {
     cudaStreamSynchronize(stream_);
     return host_data;
 }
+
+// ---------------- COLLECTIVES ----------------
 
 void DTensor::allReduce() {
     pg_->allReduce<float>(data_, size_, ncclFloat);
@@ -200,17 +198,21 @@ void DTensor::broadcast(int root) {
     cudaStreamSynchronize(stream_);
 }
 
+// ---------------- PRINT ----------------
+
 void DTensor::print() const {
     std::vector<float> host_data(size_);
     cudaMemcpyAsync(host_data.data(), data_, size_ * sizeof(float), cudaMemcpyDeviceToHost, stream_);
     cudaStreamSynchronize(stream_);
 
     std::cout << "[Rank " << rank_ << "] ";
-    for (auto x : host_data) std::cout << x << " ";
+    for (int i = 0; i < std::min((int)size_, 10); ++i)
+        std::cout << host_data[i] << " ";
+    if (size_ > 10) std::cout << "...";
     std::cout << std::endl;
 }
 
-// ---------------- CHECKPOINT METHODS ----------------
+// ---------------- CHECKPOINT ----------------
 
 void DTensor::saveCheckpoint(const std::string& path) const {
     std::vector<float> host_data(size_);
@@ -253,7 +255,7 @@ void DTensor::loadCheckpoint(const std::string& path) {
     file.close();
 
     if (saved_size != size_) {
-        gAllocator.freeMemory(data_block_);
+        if (data_block_) gAllocator.freeMemory(data_block_);
         data_block_ = gAllocator.allocateMemory(saved_size * sizeof(float), stream_);
         data_ = static_cast<float*>(data_block_->addr);
 
@@ -266,3 +268,4 @@ void DTensor::loadCheckpoint(const std::string& path) {
 
     std::cout << "[Rank " << rank_ << "] Checkpoint loaded from " << path << std::endl;
 }
+
