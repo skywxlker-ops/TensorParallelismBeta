@@ -12,7 +12,7 @@ if(NOT DEFINED CMAKE_INSTALL_CONFIG_NAME)
     string(REGEX REPLACE "^[^A-Za-z0-9_]+" ""
            CMAKE_INSTALL_CONFIG_NAME "${BUILD_TYPE}")
   else()
-    set(CMAKE_INSTALL_CONFIG_NAME "Release")
+    set(CMAKE_INSTALL_CONFIG_NAME "RelWithDebInfo")
   endif()
   message(STATUS "Install configuration: \"${CMAKE_INSTALL_CONFIG_NAME}\"")
 endif()
@@ -48,21 +48,29 @@ if(NOT CMAKE_INSTALL_LOCAL_ONLY)
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so" AND
-     NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
+  if(EXISTS "$ENV{DESTDIR}/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so" AND
+     NOT IS_SYMLINK "$ENV{DESTDIR}/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
     file(RPATH_CHECK
-         FILE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so"
-         RPATH "")
+         FILE "$ENV{DESTDIR}/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so"
+         RPATH "\$ORIGIN")
   endif()
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/python/dtensor" TYPE MODULE FILES "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
-  if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so" AND
-     NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
+  list(APPEND CMAKE_ABSOLUTE_DESTINATION_FILES
+   "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
+  if(CMAKE_WARN_ON_ABSOLUTE_INSTALL_DESTINATION)
+    message(WARNING "ABSOLUTE path INSTALL DESTINATION : ${CMAKE_ABSOLUTE_DESTINATION_FILES}")
+  endif()
+  if(CMAKE_ERROR_ON_ABSOLUTE_INSTALL_DESTINATION)
+    message(FATAL_ERROR "ABSOLUTE path INSTALL DESTINATION forbidden (by caller): ${CMAKE_ABSOLUTE_DESTINATION_FILES}")
+  endif()
+  file(INSTALL DESTINATION "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor" TYPE MODULE FILES "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
+  if(EXISTS "$ENV{DESTDIR}/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so" AND
+     NOT IS_SYMLINK "$ENV{DESTDIR}/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
     file(RPATH_CHANGE
-         FILE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so"
-         OLD_RPATH "/usr/lib/x86_64-linux-gnu/openmpi/lib:"
-         NEW_RPATH "")
+         FILE "$ENV{DESTDIR}/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so"
+         OLD_RPATH "/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/openmpi/lib:"
+         NEW_RPATH "\$ORIGIN")
     if(CMAKE_INSTALL_DO_STRIP)
-      execute_process(COMMAND "/usr/bin/strip" "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
+      execute_process(COMMAND "/usr/bin/strip" "$ENV{DESTDIR}/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/python/dtensor/dtensor_cpp.cpython-310-x86_64-linux-gnu.so")
     endif()
   endif()
 endif()

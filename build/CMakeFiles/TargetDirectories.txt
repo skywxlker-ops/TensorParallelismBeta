@@ -1,4 +1,4 @@
-/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles/dtensor_cpp.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles/dtensor_alloc.dir
 /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles/edit_cache.dir
 /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles/rebuild_cache.dir
 /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles/list_install_components.dir

@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -O3 -DNDEBUG -flto -shared  -o dtensor_opt.cpython-310-x86_64-linux-gnu.so CMakeFiles/dtensor_opt.dir/bindings/dtensor_alloc.cpp.o CMakeFiles/dtensor_opt.dir/bindings/cachingAllocator.cpp.o  /usr/lib/x86_64-linux-gnu/libcudart.so 
