@@ -3,6 +3,7 @@
 #include <nccl.h>
 #include <mpi.h>
 #include <memory>
+#include <iostream>
 
 // ---------------- Work ----------------
 class Work {
@@ -46,3 +47,13 @@ private:
     ncclComm_t comm_;
     cudaStream_t stream_;
 };
+
+// === NCCL Type helper ===
+inline ncclDataType_t getNcclType(const std::string& dtype) {
+    if (dtype == "float32") return ncclFloat;
+    if (dtype == "float64") return ncclDouble;
+    if (dtype == "int32") return ncclInt;
+    if (dtype == "int64") return ncclInt64;
+    std::cerr << "Unsupported dtype for NCCL: " << dtype << std::endl;
+    std::exit(1);
+}
