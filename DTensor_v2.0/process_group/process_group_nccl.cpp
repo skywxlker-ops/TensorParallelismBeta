@@ -2,7 +2,7 @@
 #include <iostream>
 
 // ---------------- Work ----------------
-Work::Work(cudaStream_t stream) 
+Work::Work(cudaStream_t stream)
     : stream_(stream), completed_(false), success_(true) {
     cudaEventCreateWithFlags(&event_, cudaEventDisableTiming);
 }
@@ -27,7 +27,7 @@ bool Work::wait() {
 ProcessGroup::ProcessGroup(int rank, int world_size, int device, const ncclUniqueId &id)
     : rank_(rank), world_size_(world_size), device_(device) {
     cudaSetDevice(device_);
-    cudaStreamCreate(&stream_);
+    cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
     ncclCommInitRank(&comm_, world_size_, id, rank_);
 }
 
@@ -36,6 +36,7 @@ ProcessGroup::~ProcessGroup() {
     cudaStreamDestroy(stream_);
 }
 
+// === Collectives ===
 template<typename T>
 std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
@@ -68,7 +69,7 @@ std::shared_ptr<Work> ProcessGroup::broadcast(T* data, size_t count, int root, n
     return work;
 }
 
-// Explicit instantiations for float (add more types if needed)
+// Explicit instantiations
 template std::shared_ptr<Work> ProcessGroup::allReduce<float>(float*, size_t, ncclDataType_t);
 template std::shared_ptr<Work> ProcessGroup::reduceScatter<float>(float*, float*, size_t, ncclDataType_t);
 template std::shared_ptr<Work> ProcessGroup::allGather<float>(float*, float*, size_t, ncclDataType_t);
