@@ -14,6 +14,7 @@ SRCDIR := $(ROOT)
 OBJDIR := $(ROOT)/lib/objects
 BINDIR := $(ROOT)
 TENSOR_PATH := $(ROOT)/Tensor-Implementations
+BRIDGE_PATH := $(ROOT)/bridge  # Path for TensorOpsBridge
 
 # ----------------------------------------------------------
 # Targets
@@ -43,7 +44,8 @@ INCLUDES := \
     -I$(SRCDIR)/process_group \
     -I$(SRCDIR)/memory \
     -I$(SRCDIR)/tensor \
-    -I$(SRCDIR)/ckpt
+    -I$(SRCDIR)/ckpt \
+    -I$(BRIDGE_PATH)  # Added bridge directory to the include path
 
 # ----------------------------------------------------------
 # Compiler & Linker Flags
