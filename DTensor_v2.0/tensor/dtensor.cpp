@@ -16,7 +16,7 @@ DTensor::DTensor(int rank, int world_size, ProcessGroup* pg)
       data_block_(nullptr),
       temp_block_(nullptr),
       size_(0),
-      // ✅ Properly initialize TensorLib tensors
+      //  Properly initialize TensorLib tensors
       tensor_(OwnTensor::Shape{{1}},
               OwnTensor::TensorOptions()
                   .with_device(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank))
