@@ -17,11 +17,15 @@
 #include "process_group.h"
 #include "planner.h"
 #include "ckpt.h"
+#include "bridge/tensor_ops_bridge.h"
 
 using namespace OwnTensor;
 
+// =============================================================
+// Worker Function
+// =============================================================
 void worker(int rank, int world_size, const ncclUniqueId& id,
-            int global_size,
+            int rows, int cols,
             bool show_mesh, bool show_desc, bool save_ckpt, bool load_ckpt) {
 
     cudaSetDevice(rank);
@@ -34,83 +38,41 @@ void worker(int rank, int world_size, const ncclUniqueId& id,
     std::string ckpt_dir = "checkpoints";
     std::filesystem::create_directories(ckpt_dir);
 
-    // ------------------------------------------------------------
-    // Mesh or Layout Display (Meta Inspection)
-    // ------------------------------------------------------------
-    if (show_mesh) {
-        Planner::printLayoutJSON(rank, world_size, global_size);
-        cudaStreamDestroy(stream);
-        return;
-    }
-
-    if (show_desc) {
-        auto layout = Planner::inferLayout(global_size, world_size);
-        if (rank == 0) std::cout << Planner::describePlan(layout);
-        cudaStreamDestroy(stream);
-        return;
-    }
+    int total_elems = rows * cols;
+    std::vector<float> local_data(total_elems);
 
     // ------------------------------------------------------------
-    // Tensor Data Initialization
+    // Checkpoint Load or Random Init
     // ------------------------------------------------------------
-    std::vector<float> local_data(global_size);
-
     if (load_ckpt) {
-        auto [data, meta] = Checkpoint::loadLatest(ckpt_dir, rank);
-        if (!data.empty()) {
-            tensor.setData(data);
-        } else {
-            std::cerr << "[Checkpoint] Rank " << rank
-                      << " had no valid checkpoint, initializing random data.\n";
-            srand(time(nullptr) + rank);
-            for (int i = 0; i < global_size; ++i)
-                local_data[i] = static_cast<float>(rand() % 1000) / 100.0f;
-            tensor.setData(local_data);
-        }
+        std::string path = ckpt_dir + "/tensor_rank" + std::to_string(rank) + ".bin";
+        tensor.loadCheckpoint(path);
+        std::cout << "[Rank " << rank << "] Loaded checkpoint from " << path << std::endl;
     } else {
-        srand(time(nullptr) + rank);
-        for (int i = 0; i < global_size; ++i)
+        srand(time(nullptr) + rank * 77);
+        for (int i = 0; i < total_elems; ++i)
             local_data[i] = static_cast<float>(rand() % 1000) / 100.0f;
 
-        if (rank == 0) {
-            std::cout << "[DEBUG] Rank " << rank
-                      << " first 10 values before upload: ";
-            for (int i = 0; i < std::min(10, global_size); ++i)
-                std::cout << local_data[i] << " ";
-            std::cout << "\n";
-        }
-
         tensor.setData(local_data);
+        tensor = tensor.reshape(rows, cols);
     }
 
     cudaDeviceSynchronize();
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // ------------------------------------------------------------
-    // Tensor Metadata Debug Info (TensorLib Integration Verification)
-    // ------------------------------------------------------------
     if (rank == 0) {
         std::cout << "\n[TensorLib Integration Check]\n";
+        std::cout << "[Rank 0] Tensor metadata: device=CUDA, dtype=float32, shape="
+                  << rows << "x" << cols << "\n";
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // Each rank prints its tensor properties
-    std::cout << "[Rank " << rank << "] Tensor metadata:"
-              << " device=" << (tensor.getData().empty() ? "Unknown" : "CUDA")
-              << ", dtype=float32"
-              << ", elements=" << global_size
-              << std::endl;
-
-    MPI_Barrier(MPI_COMM_WORLD);
-
     // ------------------------------------------------------------
-    // Distributed Computation: AllReduce Test
+    // AllReduce Test on 2D Tensor
     // ------------------------------------------------------------
-    if (rank == 0) std::cout << "\n==== BEFORE ALLREDUCE ====\n";
+    if (rank == 0) std::cout << "\n==== BEFORE ALLREDUCE (2D Tensor) ====\n";
     MPI_Barrier(MPI_COMM_WORLD);
-
-    std::cout << "[Rank " << rank << "] ";
     tensor.print();
 
     tensor.allReduce();
@@ -118,75 +80,104 @@ void worker(int rank, int world_size, const ncclUniqueId& id,
     cudaDeviceSynchronize();
     MPI_Barrier(MPI_COMM_WORLD);
 
-    if (rank == 0) std::cout << "\n==== AFTER ALLREDUCE ====\n";
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    std::cout << "[Rank " << rank << "] ";
+    if (rank == 0) std::cout << "\n==== AFTER ALLREDUCE (2D Tensor) ====\n";
     tensor.print();
 
     // ------------------------------------------------------------
-    // Optional Checkpoint Save
+    // TensorOpsBridge Functional Tests
+    // ------------------------------------------------------------
+    if (rank == 0) std::cout << "\n==== TensorOpsBridge Functional Tests (Post-AllReduce) ====\n";
+
+    DTensor other(rank, world_size, &pg);
+    std::vector<float> local_data_B(total_elems);
+    srand(time(nullptr) + rank * 101);
+    for (int i = 0; i < total_elems; ++i)
+        local_data_B[i] = static_cast<float>(rand() % 1000) / 100.0f;
+    other.setData(local_data_B);
+    other = other.reshape(rows, cols);
+
+    DTensor add_res = tensor.add(other);
+    DTensor sub_res = tensor.sub(other);
+    DTensor mul_res = tensor.mul(other);
+    DTensor div_res = tensor.div(other);
+    DTensor matmul_res = tensor.matmul(other);
+
+    if (rank == 0) {
+        std::cout << "\nA:\n";
+        tensor.print();
+        std::cout << "B:\n";
+        other.print();
+
+        std::cout << "A + B:\n";
+        add_res.print();
+        std::cout << "A - B:\n";
+        sub_res.print();
+        std::cout << "A * B:\n";
+        mul_res.print();
+        std::cout << "A / B:\n";
+        div_res.print();
+        std::cout << "A x B (matmul):\n";
+        matmul_res.print();
+    }
+
+    // ------------------------------------------------------------
+    // Save Checkpoint (optional)
     // ------------------------------------------------------------
     if (save_ckpt) {
-        Checkpoint::save(ckpt_dir, tensor.getData(), rank);
+        std::string path = ckpt_dir + "/tensor_rank" + std::to_string(rank) + ".bin";
+        tensor.saveCheckpoint(path);
     }
 
     cudaStreamDestroy(stream);
 }
 
-// ===============================================================
+// =============================================================
 // Main Entry
-// ===============================================================
+// =============================================================
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     int world_size, rank;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    // Updated header line for TensorLib integration
     if (rank == 0)
         std::cout << "[Init] Using DTensor (TensorLib backend + CUDA + NCCL)\n";
 
     cudaFree(0); // Force CUDA context init
 
+    // Defaults
     bool show_mesh = false;
     bool show_desc = false;
     bool save_ckpt = false;
     bool load_ckpt = false;
-    int global_size = 8; // Default tensor length
+    int rows = 2, cols = 2;
 
     // ------------------------------------------------------------
-    // Parse CLI Arguments
+    // CLI Argument Parsing
     // ------------------------------------------------------------
     for (int i = 1; i < argc; ++i) {
         const char* arg = argv[i];
-        if (std::strcmp(arg, "--mesh") == 0)
+        if (strcmp(arg, "--mesh") == 0)
             show_mesh = true;
-        else if (std::strcmp(arg, "--describe") == 0)
+        else if (strcmp(arg, "--describe") == 0)
             show_desc = true;
-        else if (std::strcmp(arg, "--save") == 0)
+        else if (strcmp(arg, "--save") == 0)
             save_ckpt = true;
-        else if (std::strcmp(arg, "--load") == 0)
+        else if (strcmp(arg, "--load") == 0)
             load_ckpt = true;
-        else if (std::strncmp(arg, "--len=", 6) == 0)
-            global_size = std::atoi(arg + 6);
-        else if (std::strncmp(arg, "--size=", 7) == 0)
-            global_size = std::atoi(arg + 7);
-        else if (std::strncmp(arg, "--", 2) == 0) {
-            int val = std::atoi(arg + 2); // shorthand --1024
-            if (val > 0)
-                global_size = val;
+        else if (strncmp(arg, "--rows=", 7) == 0)
+            rows = atoi(arg + 7);
+        else if (strncmp(arg, "--cols=", 7) == 0)
+            cols = atoi(arg + 7);
+        else if (strncmp(arg, "--len=", 6) == 0) {
+            int len = atoi(arg + 6);
+            rows = 1;
+            cols = len;
         }
     }
 
-    if (global_size <= 0) {
-        if (rank == 0)
-            std::cerr << "[Warning] Invalid tensor size. Using default: 8\n";
-        global_size = 8;
-    }
-
     if (rank == 0)
-        std::cout << "[Config] Tensor length set to " << global_size << "\n";
+        std::cout << "[Config] Tensor shape = " << rows << "x" << cols << "\n";
 
     // ------------------------------------------------------------
     // Initialize NCCL and Worker
@@ -195,11 +186,8 @@ int main(int argc, char** argv) {
     if (rank == 0) ncclGetUniqueId(&id);
     MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-    worker(rank, world_size, id, global_size, show_mesh, show_desc, save_ckpt, load_ckpt);
+    worker(rank, world_size, id, rows, cols, show_mesh, show_desc, save_ckpt, load_ckpt);
 
-    // ------------------------------------------------------------
-    // Finalize and Report Allocator Stats
-    // ------------------------------------------------------------
     MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
         std::cout << "\n=== Allocator Stats ===" << std::endl;
@@ -209,4 +197,3 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
-
