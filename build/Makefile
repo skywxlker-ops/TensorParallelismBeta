@@ -162,24 +162,24 @@ depend:
 .PHONY : depend
 
 #=============================================================================
-# Target rules for targets named dtensor_alloc
+# Target rules for targets named dtensor_cpp
 
 # Build rule for target.
-dtensor_alloc: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 dtensor_alloc
-.PHONY : dtensor_alloc
+dtensor_cpp: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 dtensor_cpp
+.PHONY : dtensor_cpp
 
 # fast build rule for target.
-dtensor_alloc/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/build
-.PHONY : dtensor_alloc/fast
+dtensor_cpp/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/build
+.PHONY : dtensor_cpp/fast
 
 bindings/cachingAllocator.o: bindings/cachingAllocator.cpp.o
 .PHONY : bindings/cachingAllocator.o
 
 # target to build an object file
 bindings/cachingAllocator.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/cachingAllocator.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/cachingAllocator.cpp.o
 .PHONY : bindings/cachingAllocator.cpp.o
 
 bindings/cachingAllocator.i: bindings/cachingAllocator.cpp.i
@@ -187,7 +187,7 @@ bindings/cachingAllocator.i: bindings/cachingAllocator.cpp.i
 
 # target to preprocess a source file
 bindings/cachingAllocator.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/cachingAllocator.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/cachingAllocator.cpp.i
 .PHONY : bindings/cachingAllocator.cpp.i
 
 bindings/cachingAllocator.s: bindings/cachingAllocator.cpp.s
@@ -195,56 +195,56 @@ bindings/cachingAllocator.s: bindings/cachingAllocator.cpp.s
 
 # target to generate assembly for a file
 bindings/cachingAllocator.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/cachingAllocator.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/cachingAllocator.cpp.s
 .PHONY : bindings/cachingAllocator.cpp.s
 
-bindings/dtensor_alloc.o: bindings/dtensor_alloc.cpp.o
-.PHONY : bindings/dtensor_alloc.o
+bindings/dtensor_3d.o: bindings/dtensor_3d.cpp.o
+.PHONY : bindings/dtensor_3d.o
 
 # target to build an object file
-bindings/dtensor_alloc.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/dtensor_alloc.cpp.o
-.PHONY : bindings/dtensor_alloc.cpp.o
+bindings/dtensor_3d.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/dtensor_3d.cpp.o
+.PHONY : bindings/dtensor_3d.cpp.o
 
-bindings/dtensor_alloc.i: bindings/dtensor_alloc.cpp.i
-.PHONY : bindings/dtensor_alloc.i
+bindings/dtensor_3d.i: bindings/dtensor_3d.cpp.i
+.PHONY : bindings/dtensor_3d.i
 
 # target to preprocess a source file
-bindings/dtensor_alloc.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/dtensor_alloc.cpp.i
-.PHONY : bindings/dtensor_alloc.cpp.i
+bindings/dtensor_3d.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/dtensor_3d.cpp.i
+.PHONY : bindings/dtensor_3d.cpp.i
 
-bindings/dtensor_alloc.s: bindings/dtensor_alloc.cpp.s
-.PHONY : bindings/dtensor_alloc.s
+bindings/dtensor_3d.s: bindings/dtensor_3d.cpp.s
+.PHONY : bindings/dtensor_3d.s
 
 # target to generate assembly for a file
-bindings/dtensor_alloc.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/dtensor_alloc.cpp.s
-.PHONY : bindings/dtensor_alloc.cpp.s
+bindings/dtensor_3d.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/dtensor_3d.cpp.s
+.PHONY : bindings/dtensor_3d.cpp.s
 
-bindings/dtensor_pybind_matmul.o: bindings/dtensor_pybind_matmul.cpp.o
-.PHONY : bindings/dtensor_pybind_matmul.o
+bindings/dtensor_pybind_3d.o: bindings/dtensor_pybind_3d.cpp.o
+.PHONY : bindings/dtensor_pybind_3d.o
 
 # target to build an object file
-bindings/dtensor_pybind_matmul.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/dtensor_pybind_matmul.cpp.o
-.PHONY : bindings/dtensor_pybind_matmul.cpp.o
+bindings/dtensor_pybind_3d.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/dtensor_pybind_3d.cpp.o
+.PHONY : bindings/dtensor_pybind_3d.cpp.o
 
-bindings/dtensor_pybind_matmul.i: bindings/dtensor_pybind_matmul.cpp.i
-.PHONY : bindings/dtensor_pybind_matmul.i
+bindings/dtensor_pybind_3d.i: bindings/dtensor_pybind_3d.cpp.i
+.PHONY : bindings/dtensor_pybind_3d.i
 
 # target to preprocess a source file
-bindings/dtensor_pybind_matmul.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/dtensor_pybind_matmul.cpp.i
-.PHONY : bindings/dtensor_pybind_matmul.cpp.i
+bindings/dtensor_pybind_3d.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/dtensor_pybind_3d.cpp.i
+.PHONY : bindings/dtensor_pybind_3d.cpp.i
 
-bindings/dtensor_pybind_matmul.s: bindings/dtensor_pybind_matmul.cpp.s
-.PHONY : bindings/dtensor_pybind_matmul.s
+bindings/dtensor_pybind_3d.s: bindings/dtensor_pybind_3d.cpp.s
+.PHONY : bindings/dtensor_pybind_3d.s
 
 # target to generate assembly for a file
-bindings/dtensor_pybind_matmul.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/bindings/dtensor_pybind_matmul.cpp.s
-.PHONY : bindings/dtensor_pybind_matmul.cpp.s
+bindings/dtensor_pybind_3d.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/bindings/dtensor_pybind_3d.cpp.s
+.PHONY : bindings/dtensor_pybind_3d.cpp.s
 
 # Help Target
 help:
@@ -258,16 +258,16 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
-	@echo "... dtensor_alloc"
+	@echo "... dtensor_cpp"
 	@echo "... bindings/cachingAllocator.o"
 	@echo "... bindings/cachingAllocator.i"
 	@echo "... bindings/cachingAllocator.s"
-	@echo "... bindings/dtensor_alloc.o"
-	@echo "... bindings/dtensor_alloc.i"
-	@echo "... bindings/dtensor_alloc.s"
-	@echo "... bindings/dtensor_pybind_matmul.o"
-	@echo "... bindings/dtensor_pybind_matmul.i"
-	@echo "... bindings/dtensor_pybind_matmul.s"
+	@echo "... bindings/dtensor_3d.o"
+	@echo "... bindings/dtensor_3d.i"
+	@echo "... bindings/dtensor_3d.s"
+	@echo "... bindings/dtensor_pybind_3d.o"
+	@echo "... bindings/dtensor_pybind_3d.i"
+	@echo "... bindings/dtensor_pybind_3d.s"
 .PHONY : help
 
 

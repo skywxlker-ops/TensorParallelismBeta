@@ -63,7 +63,7 @@ CMAKE_BINARY_DIR = /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor
 # Directory level rules for the build root directory
 
 # The main recursive "all" target.
-all: CMakeFiles/dtensor_alloc.dir/all
+all: CMakeFiles/dtensor_cpp.dir/all
 all: _deps/pybind11-build/all
 .PHONY : all
 
@@ -72,7 +72,7 @@ preinstall: _deps/pybind11-build/preinstall
 .PHONY : preinstall
 
 # The main recursive "clean" target.
-clean: CMakeFiles/dtensor_alloc.dir/clean
+clean: CMakeFiles/dtensor_cpp.dir/clean
 clean: _deps/pybind11-build/clean
 .PHONY : clean
 
@@ -92,30 +92,30 @@ _deps/pybind11-build/clean:
 .PHONY : _deps/pybind11-build/clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/dtensor_alloc.dir
+# Target rules for target CMakeFiles/dtensor_cpp.dir
 
 # All Build rule for target.
-CMakeFiles/dtensor_alloc.dir/all:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles --progress-num=1,2,3,4 "Built target dtensor_alloc"
-.PHONY : CMakeFiles/dtensor_alloc.dir/all
+CMakeFiles/dtensor_cpp.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles --progress-num=1,2,3,4 "Built target dtensor_cpp"
+.PHONY : CMakeFiles/dtensor_cpp.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/dtensor_alloc.dir/rule: cmake_check_build_system
+CMakeFiles/dtensor_cpp.dir/rule: cmake_check_build_system
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles 4
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/dtensor_alloc.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/dtensor_cpp.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/dtensor_pywrap/build/CMakeFiles 0
-.PHONY : CMakeFiles/dtensor_alloc.dir/rule
+.PHONY : CMakeFiles/dtensor_cpp.dir/rule
 
 # Convenience name for target.
-dtensor_alloc: CMakeFiles/dtensor_alloc.dir/rule
-.PHONY : dtensor_alloc
+dtensor_cpp: CMakeFiles/dtensor_cpp.dir/rule
+.PHONY : dtensor_cpp
 
 # clean rule for target.
-CMakeFiles/dtensor_alloc.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_alloc.dir/build.make CMakeFiles/dtensor_alloc.dir/clean
-.PHONY : CMakeFiles/dtensor_alloc.dir/clean
+CMakeFiles/dtensor_cpp.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dtensor_cpp.dir/build.make CMakeFiles/dtensor_cpp.dir/clean
+.PHONY : CMakeFiles/dtensor_cpp.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

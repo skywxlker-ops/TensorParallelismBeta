@@ -33,13 +33,13 @@ endif()
 message(STATUS "CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
 
 # ---- Python extension target ----
-pybind11_add_module(dtensor_alloc
-  bindings/dtensor_pybind_matmul.cpp
-  bindings/dtensor_alloc.cpp          # (Work, ProcessGroup, DTensor + allocator helpers)
+pybind11_add_module(dtensor_cpp
+  bindings/dtensor_pybind_3d.cpp
+  bindings/dtensor_3d.cpp          # (Work, ProcessGroup, DTensor + allocator helpers)
   bindings/cachingAllocator.cpp       # (caching allocator impl)
 )
 
-target_include_directories(dtensor_alloc
+target_include_directories(dtensor_cpp
   PRIVATE
     ${NCCL_INCLUDE_DIR}
     ${MPI_CXX_INCLUDE_DIRS}
@@ -47,7 +47,7 @@ target_include_directories(dtensor_alloc
     ${CMAKE_CURRENT_SOURCE_DIR}/bindings
 )
 
-target_link_libraries(dtensor_alloc
+target_link_libraries(dtensor_cpp
   PRIVATE
     CUDA::cudart
     CUDA::cublas
@@ -56,7 +56,7 @@ target_link_libraries(dtensor_alloc
 )
 
 # Name the module exactly how Python imports it: dtensor.dtensor_cpp
-set_target_properties(dtensor_alloc PROPERTIES
+set_target_properties(dtensor_cpp PROPERTIES
   PREFIX ""                                # no "lib" prefix on the .so
   OUTPUT_NAME "dtensor_cpp"
   CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES}
@@ -64,12 +64,12 @@ set_target_properties(dtensor_alloc PROPERTIES
 
 # Embed rpaths so you don't need LD_LIBRARY_PATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
-set_target_properties(dtensor_alloc PROPERTIES
-  BUILD_RPATH "${NCCL_LIB_DIR};${CUDAToolkit_LIBRARY_DIR}"
-  INSTALL_RPATH "$ORIGIN"
+# after pybind11_add_module(dtensor_cpp ...)
+set_target_properties(dtensor_cpp PROPERTIES
+  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/dtensor_pywrap/python/dtensor
 )
 
 # Install next to your package so: import dtensor.dtensor_cpp
-install(TARGETS dtensor_alloc
+install(TARGETS dtensor_cpp
   LIBRARY DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/python/dtensor
 )
