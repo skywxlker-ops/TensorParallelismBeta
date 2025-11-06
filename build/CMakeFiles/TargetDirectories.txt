@@ -1,0 +1,13 @@
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/CMakeFiles/dtensor_cpp.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/CMakeFiles/edit_cache.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/CMakeFiles/rebuild_cache.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/CMakeFiles/list_install_components.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/CMakeFiles/install.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/CMakeFiles/install/local.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/CMakeFiles/install/strip.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/_deps/pybind11-build/CMakeFiles/edit_cache.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/_deps/pybind11-build/CMakeFiles/rebuild_cache.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/_deps/pybind11-build/CMakeFiles/list_install_components.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/_deps/pybind11-build/CMakeFiles/install.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/_deps/pybind11-build/CMakeFiles/install/local.dir
+/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/Tensor Parallelism integrated/build/_deps/pybind11-build/CMakeFiles/install/strip.dir
