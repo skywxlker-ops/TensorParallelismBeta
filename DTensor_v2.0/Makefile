@@ -1,6 +1,5 @@
 # ==========================================================
-# DTensor_v2.0 Build System (Phase 3 - Tensor Integration + GPU)
-# Combines Tensor-Implementations + DTensor + CUDA + MPI + NCCL + OpenMP
+# DTensor_v2.2 Build System (Phase 4 - N-D Tensor Integration + cuBLAS)
 # ==========================================================
 
 CXX := mpicxx
@@ -14,7 +13,7 @@ SRCDIR := $(ROOT)
 OBJDIR := $(ROOT)/lib/objects
 BINDIR := $(ROOT)
 TENSOR_PATH := $(ROOT)/Tensor-Implementations
-BRIDGE_PATH := $(ROOT)/bridge  # Path for TensorOpsBridge
+BRIDGE_PATH := $(ROOT)/bridge
 
 # ----------------------------------------------------------
 # Targets
@@ -39,13 +38,12 @@ INCLUDES := \
     -I$(TENSOR_PATH)/include/dtype \
     -I/usr/lib/x86_64-linux-gnu/openmpi/include \
     -I$(CUDA_PATH)/include \
-    -I$(HOME)/torch-env/lib/python3.10/site-packages/nvidia/cuda_runtime/include \
     -I$(SRCDIR) \
     -I$(SRCDIR)/process_group \
     -I$(SRCDIR)/memory \
     -I$(SRCDIR)/tensor \
     -I$(SRCDIR)/ckpt \
-    -I$(BRIDGE_PATH)  # Added bridge directory to the include path
+    -I$(BRIDGE_PATH)
 
 # ----------------------------------------------------------
 # Compiler & Linker Flags
@@ -57,7 +55,7 @@ LDFLAGS := \
     -L$(CUDA_PATH)/lib64 \
     -L$(TENSOR_PATH)/lib \
     -L$(ROOT)/lib \
-    -lcudart -lnccl -lmpi -lgomp -lpthread -lcurand \
+    -lcudart -lnccl -lcublas -lmpi -lgomp -lpthread -lcurand \
     -Wl,-rpath=$(CUDA_PATH)/lib64:$(TENSOR_PATH)/lib:$(ROOT)/lib
 
 # ----------------------------------------------------------
@@ -132,11 +130,24 @@ run-save: $(TARGET)
 run-load: $(TARGET)
 	mpirun -np 2 ./dtensor_main --load
 
-run-len:
+# Simple 3D tensor test (2×2×2)
+run-3d: $(TARGET)
+	mpirun -np 2 ./dtensor_main --3d
+
+# Custom N-D tensor shape (example: make run-shape SHAPE=2x3x3)
+run-shape: $(TARGET)
+	@if [ -z "$(SHAPE)" ]; then \
+		echo "Usage: make run-shape SHAPE=2x3x3"; \
+	else \
+		mpirun -np 2 ./dtensor_main --shape=$(SHAPE); \
+	fi
+
+# 1D vector (legacy)
+run-len: $(TARGET)
 	@if [ -z "$(LEN)" ]; then \
 		echo "Usage: make run-len LEN=1024"; \
 	else \
-		mpirun -np 2 ./dtensor_main --$${LEN}; \
+		mpirun -np 2 ./dtensor_main --len=$(LEN); \
 	fi
 
 # ----------------------------------------------------------
@@ -147,4 +158,4 @@ clean:
 	rm -rf $(OBJDIR) $(DTENSOR_LIB_SO) $(TARGET)
 	$(MAKE) -C $(TENSOR_PATH) clean || true
 
-.PHONY: all clean prepare run run-save run-load run-len
+.PHONY: all clean prepare run run-save run-load run-len run-3d run-shape
