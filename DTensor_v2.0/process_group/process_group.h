@@ -42,6 +42,11 @@ public:
     cudaStream_t getStream() const { return stream_; }
     ncclComm_t getComm() const { return comm_; }
 
+    // Accessors for PyBind11
+    int getRank() const { return rank_; }
+    int getWorldSize() const { return world_size_; }
+    int getDevice() const { return device_; }
+
 private:
     int rank_, world_size_, device_;
     ncclComm_t comm_;
