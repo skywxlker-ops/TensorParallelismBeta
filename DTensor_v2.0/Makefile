@@ -1,161 +1,94 @@
-# ==========================================================
-# DTensor_v2.2 Build System (Phase 4 - N-D Tensor Integration + cuBLAS)
-# ==========================================================
+# Makefile for building the C++ executable (dtensor_main)
 
-CXX := mpicxx
-NVCC := nvcc
+# --- Compiler ---
+# Use the MPI C++ compiler wrapper for C++ files
+CXX = mpic++
+# Use nvcc for the final link step
+NVCC_LINKER = /usr/local/cuda/bin/nvcc
 
-# ----------------------------------------------------------
-# Directories
-# ----------------------------------------------------------
-ROOT := .
-SRCDIR := $(ROOT)
-OBJDIR := $(ROOT)/lib/objects
-BINDIR := $(ROOT)
-TENSOR_PATH := $(ROOT)/Tensor-Implementations
-BRIDGE_PATH := $(ROOT)/bridge
+# --- Flags ---
+CXXFLAGS = -std=c++17 -O3 -fPIC
+# Flags for nvcc linker
+# We tell nvcc to use mpic++ as its host compiler
+NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++
 
-# ----------------------------------------------------------
-# Targets
-# ----------------------------------------------------------
-TENSOR_LIB_SO := $(TENSOR_PATH)/lib/libtensor.so
-DTENSOR_LIB_SO := $(ROOT)/lib/libdtensor.so
-TARGET := $(BINDIR)/dtensor_main
+# --- Executable Name ---
+TARGET = dtensor_main
 
-# ----------------------------------------------------------
-# CUDA Configuration
-# ----------------------------------------------------------
-CUDA_PATH := /usr/local/cuda
+# --- Paths ---
+CUDA_HOME    := /usr/local/cuda
+TENSOR_LIB_DIR := ./Tensor-Implementations
+TENSOR_LIB_A   := $(TENSOR_LIB_DIR)/lib/libtensor.a
 
-# ----------------------------------------------------------
-# Include Paths
-# ----------------------------------------------------------
-INCLUDES := \
-    -I$(TENSOR_PATH)/include \
-    -I$(TENSOR_PATH)/include/core \
-    -I$(TENSOR_PATH)/include/device \
-    -I$(TENSOR_PATH)/include/ops \
-    -I$(TENSOR_PATH)/include/dtype \
-    -I/usr/lib/x86_64-linux-gnu/openmpi/include \
-    -I$(CUDA_PATH)/include \
-    -I$(SRCDIR) \
-    -I$(SRCDIR)/process_group \
-    -I$(SRCDIR)/memory \
-    -I$(SRCDIR)/tensor \
-    -I$(SRCDIR)/ckpt \
-    -I$(BRIDGE_PATH)
+# --- Include Directories (-I) ---
+INCLUDES = \
+    -I. \
+    -I./tensor \
+    -I./process_group \
+    -I./memory \
+    -I./bridge \
+    -I./ckpt \
+    -I$(TENSOR_LIB_DIR)/include \
+    -I$(CUDA_HOME)/include
 
-# ----------------------------------------------------------
-# Compiler & Linker Flags
-# ----------------------------------------------------------
-CXXFLAGS := -std=c++20 -O3 -fPIC -Wall -Wextra -DWITH_CUDA -fopenmp -Wno-cast-function-type $(INCLUDES)
-NVCCFLAGS := -std=c++20 -O3 -Xcompiler "-fPIC -fopenmp" -DWITH_CUDA $(INCLUDES)
+# --- Library Directories (-L) ---
+LIB_PATHS = \
+    -L$(TENSOR_LIB_DIR)/lib \
+    -L$(CUDA_HOME)/lib64 \
+    -L/usr/lib/x86_64-linux-gnu/openmpi/lib # May vary
 
-LDFLAGS := \
-    -L$(CUDA_PATH)/lib64 \
-    -L$(TENSOR_PATH)/lib \
-    -L$(ROOT)/lib \
-    -lcudart -lnccl -lcublas -lmpi -lgomp -lpthread -lcurand \
-    -Wl,-rpath=$(CUDA_PATH)/lib64:$(TENSOR_PATH)/lib:$(ROOT)/lib
+# --- Libraries to Link (-l) ---
+# We need to tell nvcc to pass the MPI libraries to the host linker (ld)
+# using -Xlinker. libtensor.a must come after the objects.
+LIBS = \
+    -lnccl \
+    -lcudart \
+    -lcublas \
+    -Xlinker -lmpi \
+    -Xlinker -lmpi_cxx
 
-# ----------------------------------------------------------
-# Source Discovery
-# ----------------------------------------------------------
-CPP_SOURCES := $(shell find $(SRCDIR) -name '*.cpp' ! -path "*/Tests/*")
-CU_SOURCES  := $(shell find $(SRCDIR) -name '*.cu' 2>/dev/null)
+# --- Source Files ---
+SRCS = \
+    main.cpp \
+    tensor/dtensor.cpp \
+    process_group/process_group_nccl.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    ckpt/ckpt.cpp
 
-OBJECTS := $(patsubst %.cpp,$(OBJDIR)/%.o,$(CPP_SOURCES)) \
-           $(patsubst %.cu,$(OBJDIR)/%.o,$(CU_SOURCES))
+# --- Object Files ---
+OBJS = $(SRCS:.cpp=.o)
 
-MAIN_SRC := $(shell find $(SRCDIR) -maxdepth 2 -name "main.cpp" 2>/dev/null)
-MAIN_OBJ := $(OBJDIR)/$(MAIN_SRC:.cpp=.o)
+# --- Build Rules ---
+
+# Default target: build the executable
+all: $(TARGET)
 
 # ==========================================================
-# Build Rules
+# ✅ FIXED LINKING RULE
 # ==========================================================
+# Rule to link the executable
+$(TARGET): $(OBJS) $(TENSOR_LIB_A)
+	@echo "[LINKING WITH NVCC] $@"
+	# Use NVCC to link everything
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $(TARGET) $(OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 
-all: prepare $(TENSOR_LIB_SO) $(DTENSOR_LIB_SO) $(TARGET)
+# Rule to compile .cpp files into .o files (using mpic++)
+%.o: %.cpp
+	@echo "[COMPILE] $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-prepare:
-	@mkdir -p $(OBJDIR)
-	@mkdir -p $(dir $(OBJECTS))
-	@mkdir -p $(TENSOR_PATH)/lib
-	@mkdir -p $(ROOT)/lib
-	@echo "==[Prepare]== Directories ready =="
-
-# ----------------------------------------------------------
-# TensorLib (dependency)
-# ----------------------------------------------------------
-$(TENSOR_LIB_SO):
-	@echo "==[TensorLib]== Building TensorLib shared library =="
-	$(MAKE) -C $(TENSOR_PATH)
-
-# ----------------------------------------------------------
-# Object Compilation
-# ----------------------------------------------------------
-$(OBJDIR)/%.o: %.cpp
-	@mkdir -p $(dir $@)
-	@echo "Compiling C++: $<"
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-$(OBJDIR)/%.o: %.cu
-	@mkdir -p $(dir $@)
-	@echo "Compiling CUDA: $<"
-	$(NVCC) $(NVCCFLAGS) -c $< -o $@
-
-# ----------------------------------------------------------
-# DTensor Shared Library
-# ----------------------------------------------------------
-$(DTENSOR_LIB_SO): $(filter-out $(MAIN_OBJ),$(OBJECTS)) $(TENSOR_LIB_SO)
-	@echo "==[DTensor]== Linking shared library =="
-	$(CXX) -shared $(CXXFLAGS) $(filter-out $(MAIN_OBJ),$(OBJECTS)) -ltensor -o $@ $(LDFLAGS)
-
-# ----------------------------------------------------------
-# Executable
-# ----------------------------------------------------------
-$(TARGET): $(DTENSOR_LIB_SO) $(MAIN_OBJ)
-	@echo "==[DTensor]== Linking main executable =="
-	$(CXX) $(CXXFLAGS) $(MAIN_OBJ) -L$(TENSOR_PATH)/lib -ltensor -Llib -ldtensor -o $@ $(LDFLAGS)
-	@echo "\n✅ Build complete: $(TARGET)\n"
-
-# ----------------------------------------------------------
-# Run Options
-# ----------------------------------------------------------
-run: $(TARGET)
-	mpirun -np 2 ./dtensor_main
-
-run-save: $(TARGET)
-	mpirun -np 2 ./dtensor_main --save
-
-run-load: $(TARGET)
-	mpirun -np 2 ./dtensor_main --load
-
-# Simple 3D tensor test (2×2×2)
-run-3d: $(TARGET)
-	mpirun -np 2 ./dtensor_main --3d
-
-# Custom N-D tensor shape (example: make run-shape SHAPE=2x3x3)
-run-shape: $(TARGET)
-	@if [ -z "$(SHAPE)" ]; then \
-		echo "Usage: make run-shape SHAPE=2x3x3"; \
-	else \
-		mpirun -np 2 ./dtensor_main --shape=$(SHAPE); \
+# Ensure the static library exists
+$(TENSOR_LIB_A):
+	@if [ ! -f $(TENSOR_LIB_A) ]; then \
+		echo "Error: $(TENSOR_LIB_A) not found."; \
+		echo "Please build Tensor-Implementations first."; \
+		exit 1; \
 	fi
 
-# 1D vector (legacy)
-run-len: $(TARGET)
-	@if [ -z "$(LEN)" ]; then \
-		echo "Usage: make run-len LEN=1024"; \
-	else \
-		mpirun -np 2 ./dtensor_main --len=$(LEN); \
-	fi
-
-# ----------------------------------------------------------
-# Cleanup
-# ----------------------------------------------------------
+# Clean up object files and the executable
 clean:
-	@echo "==[Clean]== Removing build artifacts =="
-	rm -rf $(OBJDIR) $(DTENSOR_LIB_SO) $(TARGET)
-	$(MAKE) -C $(TENSOR_PATH) clean || true
+	@echo "Cleaning up object files and executable..."
+	rm -f $(OBJS) $(TARGET)
 
-.PHONY: all clean prepare run run-save run-load run-len run-3d run-shape
+.PHONY: all clean

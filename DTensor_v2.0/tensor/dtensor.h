@@ -1,138 +1,3 @@
-// // #pragma once
-// // #include <vector>
-// // #include <memory>
-// // #include <iostream>
-// // #include <string>
-// // #include <cuda_runtime.h>
-// // #include "process_group.h"
-// // #include "cachingAllocator.hpp"
-
-// // // --- Tensor & Ops Integration ---
-// // #include "core/Tensor.h"
-// // #include "ops/TensorOps.h"
-// // #include "device/Device.h"
-// // #include "dtype/Dtype.h"
-
-// // using namespace OwnTensor;
-
-// // // Global allocator declaration
-// // extern CachingAllocator gAllocator;
-
-// // class DTensor {
-// // public:
-// //     DTensor(int rank, int world_size, ProcessGroup* pg);
-// //     ~DTensor();
-
-// //     // Distributed operations
-// //     void allReduce();
-// //     void reduceScatter();
-// //     void allGather();
-// //     void broadcast(int root);
-
-// //     // Data interface
-// //     void setData(const std::vector<float>& data);
-// //     std::vector<float> getData() const;
-
-// //     // Checkpointing
-// //     void saveCheckpoint(const std::string& path) const;
-// //     void loadCheckpoint(const std::string& path);
-
-// //     // Debug utility
-// //     void print() const;
-
-// // private:
-// //     int rank_;
-// //     int world_size_;
-// //     int size_;
-// //     ProcessGroup* pg_;
-
-// //     cudaStream_t stream_; // NCCL stream
-
-// //     Block* data_block_;
-// //     Block* temp_block_;
-
-// //     int shape_[1];
-// //     std::string dtype_ = "float32";
-
-// //     // --- TensorLib integration ---
-// //     OwnTensor::Tensor tensor_;       // main tensor
-// //     OwnTensor::Tensor temp_tensor_;  // temporary tensor (for collective ops)
-// // };
-
-
-// // dtensor.h
-
-// #pragma once
-// #include <vector>
-// #include <memory>
-// #include <iostream>
-// #include <string>
-// #include <cuda_runtime.h>
-// #include "process_group.h"
-// #include "memory/cachingAllocator.hpp"
-
-// // --- Tensor & Ops Integration ---
-// #include "bridge/tensor_ops_bridge.h"
-// #include "device/Device.h"
-// #include "dtype/Dtype.h"
-
-// using namespace OwnTensor;
-
-// // Global allocator declaration
-// extern CachingAllocator gAllocator;
-
-// class DTensor {
-// public:
-//     DTensor(int rank, int world_size, ProcessGroup* pg);
-//     ~DTensor();
-
-//     // === Distributed collectives ===
-//     void allReduce();
-//     void reduceScatter();
-//     void allGather();
-//     void broadcast(int root);
-
-//     // === Data interface ===
-//     void setData(const std::vector<float>& data);
-//     std::vector<float> getData() const;
-
-//     // === Tensor Ops (via bridge) ===
-//     DTensor add(const DTensor& other) const;
-//     DTensor sub(const DTensor& other) const;
-//     DTensor mul(const DTensor& other) const;
-//     DTensor div(const DTensor& other) const;
-//     DTensor matmul(const DTensor& other) const;
-
-//     // === View / Reshape ===
-//     DTensor reshape(int rows, int cols) const;
-
-
-//     // === Checkpointing ===
-//     void saveCheckpoint(const std::string& path) const;
-//     void loadCheckpoint(const std::string& path);
-
-//     // === Debug utilities ===
-//     void print() const;
-
-// private:
-//     int rank_;
-//     int world_size_;
-//     int size_;
-//     ProcessGroup* pg_;
-//     cudaStream_t stream_;
-
-//     int shape_[1];
-//     std::string dtype_ = "float32";
-
-//     Block* data_block_;
-//     Block* temp_block_;
-
-//     // --- TensorLib integration ---
-//     OwnTensor::Tensor tensor_;
-//     OwnTensor::Tensor temp_tensor_;
-// };
-
-
 #pragma once
 #include <vector>
 #include <memory>
@@ -147,6 +12,11 @@
 #include "device/Device.h"
 #include "dtype/Dtype.h"
 
+// --- NEW: Include Layout & Mesh ---
+#include "tensor/mesh.h"
+#include "tensor/layout.h"
+
+
 using namespace OwnTensor;
 
 // Global allocator declaration
@@ -154,29 +24,31 @@ extern CachingAllocator gAllocator;
 
 class DTensor {
 public:
-    DTensor(int rank, int world_size, ProcessGroup* pg);
+    // === MODIFIED: Constructor now takes Mesh and shared_ptr<ProcessGroup> ===
+    DTensor(std::shared_ptr<Mesh> mesh, std::shared_ptr<ProcessGroup> pg);
     ~DTensor();
 
     // === Distributed collectives ===
+    // These operate on the *local* tensor data
     void allReduce();
     void reduceScatter();
     void allGather();
     void broadcast(int root);
 
-    // === Data interface ===
-    void setData(const std::vector<float>& data, const std::vector<int>& shape = {});
-    std::vector<float> getData() const;
+    // === MODIFIED: setData now requires a Layout ===
+    // host_data must be the *local* data for this rank
+    void setData(const std::vector<float>& host_data, const Layout& layout);
+    std::vector<float> getData() const; // Gets local data
 
-    // === Tensor Ops (via bridge) ===
+    // === Tensor Ops (now sharding-aware) ===
     DTensor add(const DTensor& other) const;
     DTensor sub(const DTensor& other) const;
     DTensor mul(const DTensor& other) const;
     DTensor div(const DTensor& other) const;
     DTensor matmul(const DTensor& other) const;
 
-    // === View / Reshape ===
-    DTensor reshape(int rows, int cols) const;
-    DTensor reshape(const std::vector<int>& new_shape) const;
+    // === View / Reshape (now layout-aware) ===
+    DTensor reshape(const std::vector<int>& new_global_shape) const;
 
     // === Checkpointing ===
     void saveCheckpoint(const std::string& path) const;
@@ -184,25 +56,47 @@ public:
 
     // === Debug utilities ===
     void print() const;
+    
+    // === Accessors ===
+    const Layout& get_layout() const { return layout_; }
+    const OwnTensor::Tensor& local_tensor() const { return tensor_; }
+    std::shared_ptr<ProcessGroup> get_pg() const { return pg_; }
+    std::shared_ptr<Mesh> get_mesh() const { return mesh_; }
+    int rank() const { return rank_; }
+
 
 private:
+    // === NEW: Private constructor for internal op results ===
+    DTensor(std::shared_ptr<Mesh> mesh,
+            std::shared_ptr<ProcessGroup> pg,
+            const OwnTensor::Tensor& local_tensor,
+            const Layout& layout);
+
+    // === NEW: Private matmul implementations ===
+    DTensor _column_parallel_matmul(const DTensor& other) const;
+    DTensor _row_parallel_matmul(const DTensor& other) const;
+
+    // --- Core Members ---
     int rank_;
     int world_size_;
-    int size_;
-    ProcessGroup* pg_;
+    std::shared_ptr<Mesh> mesh_;
+    std::shared_ptr<ProcessGroup> pg_;
     cudaStream_t stream_;
 
-    std::vector<int> shape_;
-    std::string dtype_ = "float32";
+    Layout layout_; // Manages sharding, global shape, and local shape
+    
+    // --- Local Data ---
+    OwnTensor::Tensor tensor_;      // This is the LOCAL shard
+    OwnTensor::Tensor temp_tensor_; // Buffer for collectives
 
+    // --- Legacy members (kept from your file for print/ckpt) ---
+    int size_; // local size
+    std::vector<int> shape_; // local shape
+    std::string dtype_ = "float32";
     Block* data_block_;
     Block* temp_block_;
 
-    // --- TensorLib integration ---
-    OwnTensor::Tensor tensor_;
-    OwnTensor::Tensor temp_tensor_;
-
-    // === Internal helpers ===
+    // --- Internal helpers ---
     void printRecursive(const std::vector<float>& data,
                         const std::vector<int>& dims,
                         int dim,
