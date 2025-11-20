@@ -1,22 +1,27 @@
-# Makefile for building the C++ executable (dtensor_main)
+# =============================================================================
+# Makefile for DTensor Framework (Distributed Tensor Parallelism)
+# =============================================================================
 
-# --- Compiler ---
-# Use the MPI C++ compiler wrapper for C++ files
+# --- Compiler Configuration ---
+# Host compiler for C++ files (wraps g++ with MPI link flags)
 CXX = mpic++
-# Use nvcc for the final link step
+
+# Linker: We use nvcc to handle device code linking (libtensor.a contains CUDA kernels)
 NVCC_LINKER = /usr/local/cuda/bin/nvcc
 
-# --- Flags ---
-CXXFLAGS = -std=c++17 -O3 -fPIC
-# Flags for nvcc linker
-# We tell nvcc to use mpic++ as its host compiler
+# --- Build Flags ---
+# C++17 standard, Optimization level 3, Position Independent Code
+CXXFLAGS = -std=c++17 -O3 -fPIC -g
+
+# NVCC Linker Flags
+# -ccbin=mpic++ tells nvcc to use the MPI wrapper as the host linker
 NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++
 
-# --- Executable Name ---
+# --- Target Executable ---
 TARGET = dtensor_main
 
-# --- Paths ---
-CUDA_HOME    := /usr/local/cuda
+# --- Paths (Adjust these if your system paths differ) ---
+CUDA_HOME      := /usr/local/cuda
 TENSOR_LIB_DIR := ./Tensor-Implementations
 TENSOR_LIB_A   := $(TENSOR_LIB_DIR)/lib/libtensor.a
 
@@ -32,14 +37,14 @@ INCLUDES = \
     -I$(CUDA_HOME)/include
 
 # --- Library Directories (-L) ---
+# Note: OpenMPI path might vary (/usr/lib/x86_64-linux-gnu/openmpi/lib, etc.)
 LIB_PATHS = \
     -L$(TENSOR_LIB_DIR)/lib \
     -L$(CUDA_HOME)/lib64 \
-    -L/usr/lib/x86_64-linux-gnu/openmpi/lib # May vary
+    -L/usr/lib/x86_64-linux-gnu/openmpi/lib
 
 # --- Libraries to Link (-l) ---
-# We need to tell nvcc to pass the MPI libraries to the host linker (ld)
-# using -Xlinker. libtensor.a must come after the objects.
+# -Xlinker passes flags directly to the host linker (ld)
 LIBS = \
     -lnccl \
     -lcudart \
@@ -57,38 +62,40 @@ SRCS = \
     ckpt/ckpt.cpp
 
 # --- Object Files ---
+# Replaces .cpp with .o in the SRCS list
 OBJS = $(SRCS:.cpp=.o)
 
-# --- Build Rules ---
+# =============================================================================
+# Build Rules
+# =============================================================================
 
-# Default target: build the executable
+.PHONY: all clean
+
+# Default target
 all: $(TARGET)
 
-# ==========================================================
-# ✅ FIXED LINKING RULE
-# ==========================================================
-# Rule to link the executable
+# 1. Linking Rule
+# links object files + static tensor lib -> executable
 $(TARGET): $(OBJS) $(TENSOR_LIB_A)
-	@echo "[LINKING WITH NVCC] $@"
-	# Use NVCC to link everything
+	@echo "\n[LINKING] Creating executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $(TARGET) $(OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Build complete."
 
-# Rule to compile .cpp files into .o files (using mpic++)
+# 2. Compilation Rule for C++ Source Files
+# Uses mpic++ to compile .cpp -> .o
 %.o: %.cpp
 	@echo "[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# Ensure the static library exists
+# 3. Check for Static Library
 $(TENSOR_LIB_A):
 	@if [ ! -f $(TENSOR_LIB_A) ]; then \
-		echo "Error: $(TENSOR_LIB_A) not found."; \
-		echo "Please build Tensor-Implementations first."; \
+		echo "\n[ERROR] Static library $(TENSOR_LIB_A) not found!"; \
+		echo "        Please compile the 'Tensor-Implementations' submodule first.\n"; \
 		exit 1; \
 	fi
 
-# Clean up object files and the executable
+# 4. Cleanup
 clean:
-	@echo "Cleaning up object files and executable..."
+	@echo "[CLEAN] Removing object files and executable..."
 	rm -f $(OBJS) $(TARGET)
-
-.PHONY: all clean

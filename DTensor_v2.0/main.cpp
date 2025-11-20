@@ -21,159 +21,98 @@
 #include "bridge/tensor_ops_bridge.h"
 #include "memory/cachingAllocator.hpp"
 
-// === Utilities ===
-// Note: planner.h is no longer needed
-// #include "ckpt.h" // Checkpointing logic is commented out for this example
-
 using namespace OwnTensor;
 
 // =============================================================
-// Test Case 1: Column-Parallel Matmul
-// Y_col_shard = A_replicated @ B_col_shard
+// Full Tensor Parallel MLP Test
+// Layer 1 (Column): X_repl @ W1_col_shard -> Y1_col_shard
+// Layer 2 (Row):    Y1_col_shard @ W2_row_shard -> Y2_repl
 // =============================================================
-void test_column_parallel_matmul(int rank, int world_size, 
-                                 std::shared_ptr<Mesh> mesh, 
-                                 std::shared_ptr<ProcessGroup> pg) {
-    
-    if (rank == 0) {
-        std::cout << "\n" << std::string(60, '=') << "\n"
-                  << "TEST: Column-Parallel Matmul (Y_shard = A_repl @ B_col_shard)\n";
-    }
-
-    // --- 1. Define Global Shapes & Layouts ---
-    int M = 4;
-    int K = 8;
-    int N = 8; 
-
-    // A is [M, K] and Replicated
-    std::vector<int> shape_A = {M, K};
-    Layout layout_A(mesh, shape_A, ShardingType::REPLICATED);
-
-    // B is [K, N] and Sharded on dim 1 (Column-Parallel)
-    std::vector<int> shape_B = {K, N};
-    Layout layout_B(mesh, shape_B, ShardingType::SHARDED, 1 /* shard_dim */);
-
-    // --- 2. Create Local Data ---
-    
-    // A: All ranks get the full [M, K] tensor
-    std::vector<int> local_shape_A = layout_A.get_local_shape(rank);
-    int local_size_A = M * K;
-    std::vector<float> data_A(local_size_A);
-    std::iota(data_A.begin(), data_A.end(), 1.0f); // A = [1, 2, 3, ...]
-
-    // B: Each rank gets its local shard, e.g., [K, N/world_size]
-    std::vector<int> local_shape_B = layout_B.get_local_shape(rank);
-    int local_size_B = local_shape_B[0] * local_shape_B[1];
-    std::vector<float> data_B(local_size_B, 1.0f); // B_shard = [1, 1, 1, ...]
-
-    // --- 3. Create and Set DTensors ---
-    DTensor A(mesh, pg);
-    A.setData(data_A, layout_A);
-
-    DTensor B(mesh, pg);
-    B.setData(data_B, layout_B);
-
-    if (rank == 0) {
-        std::cout << "\n--- Input A ---" << std::endl;
-        A.print();
-        std::cout << "\n--- Input B (Rank 0) ---" << std::endl;
-        B.print();
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    if (rank == 1) {
-        std::cout << "\n--- Input B (Rank 1) ---" << std::endl;
-        B.print();
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    // --- 4. Perform Distributed Matmul ---
-    DTensor C = A.matmul(B);
-
-    // --- 5. Print Output ---
-    if (rank == 0) {
-        std::cout << "\n--- Output C (Rank 0) ---" << std::endl;
-        C.print();
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    if (rank == 1) {
-        std::cout << "\n--- Output C (Rank 1) ---" << std::endl;
-        C.print();
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-}
-
-
-// =============================================================
-// Test Case 2: Row-Parallel Matmul
-// Y_replicated = A_row_shard @ B_replicated (performs AllGather)
-// =============================================================
-void test_row_parallel_matmul(int rank, int world_size, 
+void test_tensor_parallel_mlp(int rank, int world_size, 
                               std::shared_ptr<Mesh> mesh, 
                               std::shared_ptr<ProcessGroup> pg) {
     
     if (rank == 0) {
         std::cout << "\n" << std::string(60, '=') << "\n"
-                  << "TEST: Row-Parallel Matmul (Y_repl = A_row_shard @ B_repl)\n";
+                  << "TEST: Full Tensor Parallel MLP (Col Parallel -> Row Parallel)\n";
     }
 
-    // --- 1. Define Global Shapes & Layouts ---
-    int M = 4;
-    int K = 8;
-    int N = 4; 
+    int BATCH = 2;
+    int HIDDEN = 4;
+    int INTERMEDIATE = 8; // 4 * HIDDEN / WorldSize (assuming 2) -> Total 8
 
-    // A is [M, K] and Sharded on dim 0 (Row-Parallel)
-    std::vector<int> shape_A = {M, K};
-    Layout layout_A(mesh, shape_A, ShardingType::SHARDED, 0 /* shard_dim */);
-
-    // B is [K, N] and Replicated
-    std::vector<int> shape_B = {K, N};
-    Layout layout_B(mesh, shape_B, ShardingType::REPLICATED);
-
-    // --- 2. Create Local Data ---
+    // ---------------------------------------------------------
+    // Step 1: Input X (Replicated)
+    // ---------------------------------------------------------
+    std::vector<int> shape_X = {BATCH, HIDDEN};
+    Layout layout_X(mesh, shape_X, ShardingType::REPLICATED);
     
-    // A: Each rank gets its local shard, e.g., [M/world_size, K]
-    std::vector<int> local_shape_A = layout_A.get_local_shape(rank);
-    int local_size_A = local_shape_A[0] * local_shape_A[1];
-    // Fill with rank-specific data
-    std::vector<float> data_A(local_size_A, (float)(rank + 1)); 
-
-    // B: All ranks get the full [K, N] tensor
-    std::vector<int> local_shape_B = layout_B.get_local_shape(rank);
-    int local_size_B = K * N;
-    std::vector<float> data_B(local_size_B, 1.0f); // B = [1, 1, 1, ...]
-
-    // --- 3. Create and Set DTensors ---
-    DTensor A(mesh, pg);
-    A.setData(data_A, layout_A);
-
-    DTensor B(mesh, pg);
-    B.setData(data_B, layout_B);
+    // X = All 1s
+    std::vector<float> data_X(BATCH * HIDDEN, 1.0f); 
+    DTensor X(mesh, pg);
+    X.setData(data_X, layout_X);
 
     if (rank == 0) {
-        std::cout << "\n--- Input A (Rank 0) ---" << std::endl;
-        A.print();
+        std::cout << "\n--- [1] Input X (Replicated) ---" << std::endl;
+        X.print();
     }
+
+    // ---------------------------------------------------------
+    // Step 2: Layer 1 Weights W1 (Column Sharded)
+    // Global: [HIDDEN, 8], Local: [HIDDEN, 4] (if world_size=2)
+    // ---------------------------------------------------------
+    std::vector<int> shape_W1 = {HIDDEN, 8};
+    Layout layout_W1(mesh, shape_W1, ShardingType::SHARDED, 1 /* col dim */);
+
+    std::vector<int> local_shape_W1 = layout_W1.get_local_shape(rank);
+    int size_W1 = local_shape_W1[0] * local_shape_W1[1];
+    
+    // Rank 0 gets 0.5s, Rank 1 gets 1.0s
+    std::vector<float> data_W1(size_W1, (rank + 1) * 0.5f); 
+    DTensor W1(mesh, pg);
+    W1.setData(data_W1, layout_W1);
+
+    // ---------------------------------------------------------
+    // Step 3: Column Parallel MatMul (X @ W1)
+    // ---------------------------------------------------------
+    DTensor Y1 = X.matmul(W1);
+
+    if (rank == 0) std::cout << "\n--- [2] Y1 Output (Col Sharded) ---" << std::endl;
     MPI_Barrier(MPI_COMM_WORLD);
-    if (rank == 1) {
-        std::cout << "\n--- Input A (Rank 1) ---" << std::endl;
-        A.print();
-    }
+    if (rank == 0) Y1.print();
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (rank == 1) Y1.print();
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // --- 4. Perform Distributed Matmul ---
-    DTensor C = A.matmul(B);
+    // ---------------------------------------------------------
+    // Step 4: Layer 2 Weights W2 (Row Sharded)
+    // Global: [8, HIDDEN], Local: [4, HIDDEN] (if world_size=2)
+    // Sharded on Dim 0 (Rows) to accept the Col-Sharded input Y1
+    // ---------------------------------------------------------
+    std::vector<int> shape_W2 = {8, HIDDEN};
+    Layout layout_W2(mesh, shape_W2, ShardingType::SHARDED, 0 /* row dim */);
 
-    // --- 5. Print Output ---
-    // The output C should be REPLICATED and identical on all ranks.
-    if (rank == 0) {
-        std::cout << "\n--- Output C (Rank 0) ---" << std::endl;
-        C.print();
-    }
+    std::vector<int> local_shape_W2 = layout_W2.get_local_shape(rank);
+    int size_W2 = local_shape_W2[0] * local_shape_W2[1];
+    
+    // Rank 0 gets 1.0s, Rank 1 gets 1.0s
+    std::vector<float> data_W2(size_W2, 1.0f); 
+    DTensor W2(mesh, pg);
+    W2.setData(data_W2, layout_W2);
+
+    // ---------------------------------------------------------
+    // Step 5: Row Parallel MatMul (Y1 @ W2)
+    // Splits dot product (K dim) -> Partial Sum -> AllReduce
+    // ---------------------------------------------------------
+    DTensor Y2 = Y1.matmul(W2);
+
+    if (rank == 0) std::cout << "\n--- [3] Y2 Output (Replicated via AllReduce) ---" << std::endl;
     MPI_Barrier(MPI_COMM_WORLD);
-    if (rank == 1) {
-        std::cout << "\n--- Output C (Rank 1) ---" << std::endl;
-        C.print();
-    }
+    
+    // Both ranks should print the exact same result
+    if (rank == 0) Y2.print();
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (rank == 1) Y2.print();
     MPI_Barrier(MPI_COMM_WORLD);
 }
 
@@ -187,37 +126,28 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     if (rank == 0)
-        std::cout << "[Init] Using DTensor (Layout-Aware) C++ Test\n";
+        std::cout << "[Init] DTensor v2.0 Test Driver\n";
 
     cudaFree(0); // Force CUDA context init
 
-    // ------------------------------------------------------------
     // Initialize NCCL
-    // ------------------------------------------------------------
     ncclUniqueId id;
     if (rank == 0) ncclGetUniqueId(&id);
     MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-    // ------------------------------------------------------------
-    // Create NEW Mesh and ProcessGroup
-    // ------------------------------------------------------------
     try {
         std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>(world_size);
-        std::shared_ptr<ProcessGroup> pg = std::make_shared<ProcessGroup>(rank, world_size, rank, id);
+        // Simple round-robin device assignment
+        std::shared_ptr<ProcessGroup> pg = std::make_shared<ProcessGroup>(rank, world_size, rank % 4, id);
 
-        // --- Run Tests ---
-        test_column_parallel_matmul(rank, world_size, mesh, pg);
-        
-        test_row_parallel_matmul(rank, world_size, mesh, pg);
+        // Run the Full TP Test
+        test_tensor_parallel_mlp(rank, world_size, mesh, pg);
 
     } catch (const std::exception& e) {
         std::cerr << "[Rank " << rank << "] ERROR: " << e.what() << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-    // ------------------------------------------------------------
-    // Finalize
-    // ------------------------------------------------------------
     MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
         std::cout << "\n=== Allocator Stats ===" << std::endl;
@@ -228,5 +158,3 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
-
-
