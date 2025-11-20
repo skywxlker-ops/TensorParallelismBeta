@@ -2,7 +2,7 @@
 
 A high-performance C++ framework for tensor parallelism in distributed deep learning. DTensor implements efficient sharding strategies and distributed operations using MPI and NCCL for multi-GPU training.
 
-## 🚀 Features
+## Features
 
 ### Core Capabilities
 
@@ -19,7 +19,7 @@ A high-performance C++ framework for tensor parallelism in distributed deep lear
 - **Layout Management**: Automatic tracking of global/local tensor shapes
 - **Stream-based Execution**: Asynchronous GPU operations with CUDA streams
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 DTensor (Distributed Tensor Layer)
@@ -60,7 +60,7 @@ DTensor (Distributed Tensor Layer)
 - Matrix multiplication
 - Reductions and activations
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 
@@ -90,7 +90,7 @@ make test_mlp_forward
 mpirun -np 2 ./test_mlp_forward
 ```
 
-## 🎯 Usage
+## Usage
 
 ### Basic Example: Tensor Parallel MLP
 
@@ -128,7 +128,7 @@ W2.setData(w2_data, Layout(mesh, {intermediate, hidden}, ShardingType::SHARDED, 
 DTensor Y2 = Y1.matmul(W2);  // AllReduce inside
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Run MLP Forward Pass Test
 
@@ -147,7 +147,7 @@ Layer 2 Output (Replicated):
   Both ranks: [24, 24, 24, 24]  # Identical after AllReduce
 ```
 
-## 📊 Performance
+## Performance
 
 ### MLP Forward Pass (2 layers, batch=2, hidden=4)
 
@@ -166,7 +166,7 @@ Layer 2 Output (Replicated):
 - **With caching**: ~2μs per allocation cycle (cache hit)
 - **Speedup**: ~100x faster memory operations
 
-## 🔧 Configuration
+## Configuration
 
 ### Sharding Strategies
 
@@ -196,7 +196,7 @@ Layout(mesh, {M, N}, ShardingType::SHARDED, dim)
 - Requires AllReduce for final result
 - Preferred for second MLP layer
 
-## 🗺️ Roadmap
+## Roadmap
 
 ### Current Status
 
@@ -215,12 +215,7 @@ Layout(mesh, {M, N}, ShardingType::SHARDED, dim)
 - [ ] Model checkpointing
 - [ ] Python bindings
 
-## 📚 Documentation
-
-- [Caching Allocator Design](docs/caching_allocator_explained.md)
-- [Tensor Ops Bridge](docs/tensor_ops_bridge_explained.md)
-
-## 🤝 Contributing
+## Contributing
 
 This is an active research project. Contributions welcome!
 
@@ -230,11 +225,7 @@ This is an active research project. Contributions welcome!
 - **Autograd Team**: Automatic differentiation (integration pending)
 - **TensorLib Team**: Core tensor operations
 
-## 📄 License
-
-[Your License Here]
-
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Inspired by [Megatron-LM](https://github.com/NVIDIA/Megatron-LM) tensor parallelism
 - Uses NVIDIA NCCL for collective communications
