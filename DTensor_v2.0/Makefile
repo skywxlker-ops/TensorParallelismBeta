@@ -69,10 +69,16 @@ OBJS = $(SRCS:.cpp=.o)
 # Build Rules
 # =============================================================================
 
-.PHONY: all clean
+.PHONY: all clean test test_mlp_forward
 
 # Default target
 all: $(TARGET)
+
+# Test target (builds and suggests how to run)
+test: test_mlp_forward
+	@echo "\n[TEST BUILD COMPLETE]"
+	@echo "Run the test with: mpirun -np 2 ./test_mlp_forward"
+	@echo ""
 
 # 1. Linking Rule
 # links object files + static tensor lib -> executable
@@ -80,6 +86,22 @@ $(TARGET): $(OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $(TARGET) $(OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Build complete."
+
+# Test executable for MLP forward pass
+TEST_MLP_SRCS = \
+	test_mlp_forward.cpp \
+	tensor/dtensor.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TEST_MLP_OBJS = $(TEST_MLP_SRCS:.cpp=.o)
+
+test_mlp_forward: $(TEST_MLP_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $(TEST_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Test build complete."
 
 # 2. Compilation Rule for C++ Source Files
 # Uses mpic++ to compile .cpp -> .o
@@ -97,5 +119,5 @@ $(TENSOR_LIB_A):
 
 # 4. Cleanup
 clean:
-	@echo "[CLEAN] Removing object files and executable..."
-	rm -f $(OBJS) $(TARGET)
+	@echo "[CLEAN] Removing object files and executables..."
+	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
