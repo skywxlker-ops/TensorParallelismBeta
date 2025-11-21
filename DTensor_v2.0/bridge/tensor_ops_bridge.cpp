@@ -1,7 +1,8 @@
 #include "bridge/tensor_ops_bridge.h"
 #include "tensor/dtensor.h" // Include full definitions
 #include "tensor/layout.h"
-#include "tensor/mesh.h"
+#include "tensor/device_mesh.h"
+#include "tensor/placement.h"
 #include "process_group/process_group.h"
 
 #include <iostream>
@@ -131,18 +132,14 @@ Tensor matmul(const Tensor& A, const Tensor& B) {
 DTensor from_data(
     const std::vector<float>& host_data,
     const std::vector<int>& shape,
-    std::shared_ptr<Mesh> mesh,
+    std::shared_ptr<DeviceMesh> device_mesh,
     std::shared_ptr<ProcessGroup> pg) 
 {
     // 1. Create a new DTensor
-    DTensor out(mesh, pg);
+    DTensor out(device_mesh, pg);
 
     // 2. Define a REPLICATED layout for this new tensor
-    Layout replicated_layout(
-        mesh,
-        shape,                 // The global shape is the shape of the data
-        ShardingType::REPLICATED
-    );
+    Layout replicated_layout = Layout::replicated(device_mesh, shape);
 
     // 3. Set the data using the new layout
     out.setData(host_data, replicated_layout);

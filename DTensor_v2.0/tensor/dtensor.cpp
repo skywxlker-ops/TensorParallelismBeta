@@ -16,13 +16,13 @@ CachingAllocator gAllocator;
 // =========================================================
 
 // Main public constructor (Initializes an empty/default tensor)
-DTensor::DTensor(std::shared_ptr<Mesh> mesh, std::shared_ptr<ProcessGroup> pg)
+DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg)
     : rank_(pg->getRank()),
       world_size_(pg->getWorldSize()),
-      mesh_(mesh),
+      device_mesh_(device_mesh),
       pg_(pg),
       stream_(pg->getStream()),
-      layout_(Layout(mesh, {}, ShardingType::REPLICATED)), // Default layout
+      layout_(Layout::replicated(device_mesh, {})), // Default replicated layout
       size_(0),
       data_block_(nullptr),
       temp_block_(nullptr),
@@ -36,13 +36,13 @@ DTensor::DTensor(std::shared_ptr<Mesh> mesh, std::shared_ptr<ProcessGroup> pg)
 }
 
 // Private constructor (Used for internal op results)
-DTensor::DTensor(std::shared_ptr<Mesh> mesh,
+DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh,
                  std::shared_ptr<ProcessGroup> pg,
                  const OwnTensor::Tensor& local_tensor,
                  const Layout& layout)
     : rank_(pg->getRank()),
       world_size_(pg->getWorldSize()),
-      mesh_(mesh),
+      device_mesh_(device_mesh),
       pg_(pg),
       stream_(pg->getStream()),
       layout_(layout),
@@ -77,7 +77,7 @@ DTensor::~DTensor() {
 // =========================================================
 void DTensor::setData(const std::vector<float>& host_data, const Layout& layout) {
     layout_ = layout;
-    mesh_ = layout_.get_mesh(); // Ensure mesh is in sync
+    // Note: device_mesh is already embedded in layout, no need to sync separately
     
     std::vector<int> local_shape = layout_.get_local_shape(rank_);
     shape_ = local_shape; // Update legacy local shape member
@@ -173,7 +173,7 @@ DTensor DTensor::func(const DTensor& other) const { \
     } \
     OwnTensor::Tensor result = TensorOpsBridge::op_name(tensor_, other.tensor_); \
     /* Element-wise ops preserve layout */ \
-    return DTensor(mesh_, pg_, result, layout_); \
+    return DTensor(device_mesh_, pg_, result, layout_); \
 }
 
 DEFINE_TENSOR_OP(add, add)
@@ -189,20 +189,34 @@ DTensor DTensor::matmul(const DTensor& other) const {
     const Layout& a_layout = this->layout_;
     const Layout& b_layout = other.get_layout();
 
+    // For now, we support 1D mesh parallelism
+    // Future: extend to multi-dimensional mesh parallelism
+    if (device_mesh_->ndim() != 1) {
+        throw std::runtime_error("DTensor::matmul: Only 1D mesh currently supported");
+    }
+
+    auto a_placement = a_layout.get_placement(0);  // Placement on mesh dim 0
+    auto b_placement = b_layout.get_placement(0);
+
     // --- CASE 1: Column-Parallel Matmul ---
     // Typically Layer 1 of MLP.
     // Identity: X [M, K] @ W [K, N/P] -> Y [M, N/P]
-    // Condition: A is Replicated, B is Sharded on Dim 1 (Columns)
-    if (a_layout.is_replicated() && b_layout.is_sharded_by_dim(1)) {
+    // Condition: A is Replicated, B is Sharded on tensor dim 1 (Columns)
+    if (a_placement->type() == PlacementType::REPLICATE &&
+        b_placement->type() == PlacementType::SHARD &&
+        static_cast<const Shard*>(b_placement.get())->dim() == 1) {
         return _column_parallel_matmul(other);
     }
     
     // --- CASE 2: Row-Parallel Matmul (Split-K) ---
     // Typically Layer 2 of MLP.
     // Identity: X [M, K/P] @ W [K/P, N] -> Y_partial [M, N] -> AllReduce -> Y [M, N]
-    // Condition: A is Sharded on Dim 1 (Columns of prev layer), 
-    //            B is Sharded on Dim 0 (Rows).
-    if (a_layout.is_sharded_by_dim(1) && b_layout.is_sharded_by_dim(0)) {
+    // Condition: A is Sharded on tensor dim 1 (Columns of prev layer), 
+    //            B is Sharded on tensor dim 0 (Rows).
+    if (a_placement->type() == PlacementType::SHARD &&
+        static_cast<const Shard*>(a_placement.get())->dim() == 1 &&
+        b_placement->type() == PlacementType::SHARD &&
+        static_cast<const Shard*>(b_placement.get())->dim() == 0) {
          return _row_parallel_matmul(other);
     }
 
@@ -226,11 +240,14 @@ DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
         other.get_layout().get_global_shape()[1]
     };
     
-    // 3. Calculate output layout: sharded by column (dim 1)
-    Layout Y_layout(mesh_, Y_global_shape, ShardingType::SHARDED, 1);
+    // 3. Calculate output layout: sharded by column (tensor dim 1) on mesh dim 0
+    std::vector<std::shared_ptr<Placement>> placements = {
+        std::make_shared<Shard>(1)  // Shard on tensor dimension 1
+    };
+    Layout Y_layout(device_mesh_, Y_global_shape, placements);
 
     // 4. Return new DTensor (No comms needed)
-    return DTensor(mesh_, pg_, Y_shard, Y_layout);
+    return DTensor(device_mesh_, pg_, Y_shard, Y_layout);
 }
 
 // Private helper for: Y_replicated = AllReduce(X_shard @ W_row_shard)
@@ -247,10 +264,10 @@ DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
     };
     
     // 3. The final layout will be REPLICATED (after reduction).
-    Layout Y_layout(mesh_, Y_global_shape, ShardingType::REPLICATED);
+    Layout Y_layout = Layout::replicated(device_mesh_, Y_global_shape);
     
     // 4. Create the output DTensor. It holds the partial data initially.
-    DTensor Y_out(mesh_, pg_, Y_partial, Y_layout);
+    DTensor Y_out(device_mesh_, pg_, Y_partial, Y_layout);
     
     // 5. Perform AllReduce to sum the partial results from all ranks.
     //    After this, every rank holds the fully summed, replicated tensor.
@@ -264,26 +281,30 @@ DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
 // Reshape
 // =========================================================
 DTensor DTensor::reshape(const std::vector<int>& new_global_shape) const {
-    // 1. Ask the layout to calculate the new sharding
-    Layout new_layout = layout_.reshape(new_global_shape);
+    // For now, reshaping with sharded tensors is complex
+    // We'll throw an error if trying to reshape sharded tensors
+    if (layout_.has_sharding()) {
+        throw std::runtime_error("DTensor::reshape: Reshaping sharded tensors not yet implemented");
+    }
 
-    // 2. Get the new local shape from the new layout
-    std::vector<int> new_local_shape = new_layout.get_local_shape(rank_);
-    
+    // Get the new local shape
     int new_local_size = 1;
-    for (int d : new_local_shape) new_local_size *= d;
+    for (int d : new_global_shape) new_local_size *= d;
     if (new_local_size != size_) {
-        throw std::runtime_error("DTensor::reshape: local element count mismatch. Reshaping sharded tensors is complex.");
+        throw std::runtime_error("DTensor::reshape: local element count mismatch.");
     }
 
     OwnTensor::Shape shape_obj;
-    shape_obj.dims.assign(new_local_shape.begin(), new_local_shape.end());
+    shape_obj.dims.assign(new_global_shape.begin(), new_global_shape.end());
     
-    // 3. Perform the local reshape
+    // Perform the local reshape
     OwnTensor::Tensor reshaped_tensor = tensor_.reshape(shape_obj);
 
-    // 4. Return the new DTensor
-    return DTensor(mesh_, pg_, reshaped_tensor, new_layout);
+    // Create replicated layout with new shape
+    Layout new_layout = Layout::replicated(device_mesh_, new_global_shape);
+
+    // Return the new DTensor
+    return DTensor(device_mesh_, pg_, reshaped_tensor, new_layout);
 }
 
 
@@ -340,7 +361,7 @@ void DTensor::loadCheckpoint(const std::string& path) {
     // WARNING: This checkpointing method does not save the global layout.
     // We are forced to assume the loaded tensor is REPLICATED,
     // with its global shape being equal to the local shape we just read.
-    Layout loaded_layout(mesh_, loaded_shape, ShardingType::REPLICATED);
+    Layout loaded_layout = Layout::replicated(device_mesh_, loaded_shape);
     
     setData(host_data, loaded_layout);
 

@@ -1,5 +1,0 @@
-Metadata-Version: 2.4
-Name: dtensor
-Version: 2.0.0
-Summary: BluBridge DTensor PyBind11 bindings with CUDA, cuBLAS, and MPI
-Dynamic: summary

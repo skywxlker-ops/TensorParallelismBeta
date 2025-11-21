@@ -49,6 +49,8 @@ LIBS = \
     -lnccl \
     -lcudart \
     -lcublas \
+    -lcurand \
+    -lgomp \
     -Xlinker -lmpi \
     -Xlinker -lmpi_cxx
 
@@ -56,6 +58,7 @@ LIBS = \
 SRCS = \
     main.cpp \
     tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
     process_group/process_group_nccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
@@ -91,6 +94,7 @@ $(TARGET): $(OBJS) $(TENSOR_LIB_A)
 TEST_MLP_SRCS = \
 	test_mlp_forward.cpp \
 	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
 	process_group/process_group_nccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
@@ -121,3 +125,75 @@ $(TENSOR_LIB_A):
 clean:
 	@echo "[CLEAN] Removing object files and executables..."
 	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
+	rm -f tests/*.o tests/test_device_mesh tests/test_matmul
+	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark
+
+# =============================================================================
+# Additional Test and Benchmark Targets
+# =============================================================================
+
+.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark
+
+# Test for DeviceMesh functionality
+TEST_DEVICE_MESH_SRCS = \
+	tests/test_device_mesh.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TEST_DEVICE_MESH_OBJS = $(TEST_DEVICE_MESH_SRCS:.cpp=.o)
+
+test_device_mesh: $(TEST_DEVICE_MESH_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DEVICE_MESH_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./tests/test_device_mesh\n"
+
+# NCCL Collectives Benchmark
+NCCL_BENCHMARK_SRCS = benchmarks/nccl_benchmark.cpp
+NCCL_BENCHMARK_OBJS = $(NCCL_BENCHMARK_SRCS:.cpp=.o)
+
+nccl_benchmark: $(NCCL_BENCHMARK_OBJS)
+	@echo "\n[LINKING] Creating benchmark executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(NCCL_BENCHMARK_OBJS) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Benchmark build complete."
+	@echo "\nRun with: mpirun -np 2 ./benchmarks/nccl_benchmark\n"
+
+# MatMul Benchmark
+MATMUL_BENCHMARK_SRCS = \
+	benchmarks/matmul_benchmark.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+MATMUL_BENCHMARK_OBJS = $(MATMUL_BENCHMARK_SRCS:.cpp=.o)
+
+matmul_benchmark: $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating benchmark executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] MatMul Benchmark build complete."
+	@echo "\nRun with: mpirun -np 2 ./benchmarks/matmul_benchmark\n"
+
+# Test for MatMul (Column-Parallel and Row-Parallel)
+TEST_MATMUL_SRCS = \
+	tests/test_matmul.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TEST_MATMUL_OBJS = $(TEST_MATMUL_SRCS:.cpp=.o)
+
+test_matmul: $(TEST_MATMUL_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_MATMUL_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] MatMul test build complete."
+	@echo "\nRun with: mpirun -np 2 ./tests/test_matmul\n"

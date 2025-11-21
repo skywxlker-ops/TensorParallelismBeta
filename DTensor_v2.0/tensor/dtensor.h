@@ -12,9 +12,10 @@
 #include "device/Device.h"
 #include "dtype/Dtype.h"
 
-// --- NEW: Include Layout & Mesh ---
-#include "tensor/mesh.h"
+// --- NEW: Include Layout & DeviceMesh ---
+#include "tensor/device_mesh.h"
 #include "tensor/layout.h"
+#include "tensor/placement.h"
 
 
 using namespace OwnTensor;
@@ -24,8 +25,8 @@ extern CachingAllocator gAllocator;
 
 class DTensor {
 public:
-    // === MODIFIED: Constructor now takes Mesh and shared_ptr<ProcessGroup> ===
-    DTensor(std::shared_ptr<Mesh> mesh, std::shared_ptr<ProcessGroup> pg);
+    // === MODIFIED: Constructor now takes DeviceMesh and shared_ptr<ProcessGroup> ===
+    DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg);
     ~DTensor();
 
     // === Distributed collectives ===
@@ -61,13 +62,13 @@ public:
     const Layout& get_layout() const { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
     std::shared_ptr<ProcessGroup> get_pg() const { return pg_; }
-    std::shared_ptr<Mesh> get_mesh() const { return mesh_; }
+    std::shared_ptr<DeviceMesh> get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
 
 
 private:
     // === NEW: Private constructor for internal op results ===
-    DTensor(std::shared_ptr<Mesh> mesh,
+    DTensor(std::shared_ptr<DeviceMesh> device_mesh,
             std::shared_ptr<ProcessGroup> pg,
             const OwnTensor::Tensor& local_tensor,
             const Layout& layout);
@@ -79,7 +80,7 @@ private:
     // --- Core Members ---
     int rank_;
     int world_size_;
-    std::shared_ptr<Mesh> mesh_;
+    std::shared_ptr<DeviceMesh> device_mesh_;
     std::shared_ptr<ProcessGroup> pg_;
     cudaStream_t stream_;
 
