@@ -4,7 +4,7 @@
 #include <cassert>
 #include "tensor/dtensor.h"
 #include "process_group/process_group.h"
-#include "tensor/mesh.h"
+#include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 
 // Helper function to compare vectors
@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
     auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
-    auto mesh = std::make_shared<Mesh>(world_size);
+    auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
 
     // Global tensor shape and data
     std::vector<int> global_shape = {4, 8};

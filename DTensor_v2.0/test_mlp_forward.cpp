@@ -11,7 +11,7 @@
 // === DTensor Core ===
 #include "tensor/dtensor.h"
 #include "process_group/process_group.h"
-#include "tensor/mesh.h"
+#include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 
 // === TensorLib (for ops) ===
@@ -50,7 +50,7 @@ void print_section(int rank, const std::string& section) {
 }
 
 void test_mlp_forward(int rank, int world_size, 
-                      std::shared_ptr<Mesh> mesh, 
+                      std::shared_ptr<DeviceMesh> mesh, 
                       std::shared_ptr<ProcessGroup> pg) {
     
     print_separator(rank, "MLP Forward Pass Test (Tensor Parallelism)");
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
     
     try {
         // Create mesh and process group
-        std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>(world_size);
+        std::shared_ptr<DeviceMesh> mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
         std::shared_ptr<ProcessGroup> pg = std::make_shared<ProcessGroup>(
             rank, world_size, rank % 4, id
         );

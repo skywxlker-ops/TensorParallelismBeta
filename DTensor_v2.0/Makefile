@@ -57,6 +57,7 @@ LIBS = \
 # Core sources needed by all executables
 CORE_SRCS = \
     tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
     process_group/process_group_nccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \

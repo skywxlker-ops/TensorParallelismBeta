@@ -3,7 +3,7 @@
 #include <pybind11/memory.h> // For std::shared_ptr
 #include "../tensor/dtensor.h"
 #include "../process_group/process_group.h"
-#include "../tensor/mesh.h" // --- NEW
+#include "../tensor/device_mesh.h" // --- NEW
 #include "../tensor/layout.h" // --- NEW
 #include <nccl.h>
 #include <cuda_runtime.h>
@@ -44,11 +44,11 @@ PYBIND11_MODULE(dtensor, m) {
     m.def("init", &dtensor_init_symbols,
           "Initialize DTensor C++ symbols");
 
-    // === NEW: Expose Mesh ===
-    py::class_<Mesh, std::shared_ptr<Mesh>>(m, "Mesh")
-        .def(py::init<int>(), py::arg("world_size"))
-        .def_property_readonly("world_size", [](const Mesh &m) { return m.world_size; })
-        .def("describe", &Mesh::describe);
+    // === NEW: Expose DeviceMesh ===
+    py::class_<DeviceMesh, std::shared_ptr<DeviceMesh>>(m, "DeviceMesh")
+        .def(py::init<const std::vector<int>&>(), py::arg("mesh_shape"))
+        .def_property_readonly("world_size", &DeviceMesh::world_size)
+        .def("describe", &DeviceMesh::describe);
 
     // === NEW: Expose ShardingType ===
     py::enum_<ShardingType>(m, "ShardingType")
@@ -58,7 +58,7 @@ PYBIND11_MODULE(dtensor, m) {
 
     // === NEW: Expose Layout ===
     py::class_<Layout>(m, "Layout")
-        .def(py::init<std::shared_ptr<Mesh>, const std::vector<int>&, ShardingType, int>(),
+        .def(py::init<std::shared_ptr<DeviceMesh>, const std::vector<int>&, ShardingType, int>(),
              py::arg("mesh"),
              py::arg("global_shape"),
              py::arg("sharding_type"),
@@ -92,7 +92,7 @@ PYBIND11_MODULE(dtensor, m) {
 
     // === MODIFIED: DTensor Binding ===
     py::class_<DTensor>(m, "DTensor")
-        .def(py::init<std::shared_ptr<Mesh>, std::shared_ptr<ProcessGroup>>(),
+        .def(py::init<std::shared_ptr<DeviceMesh>, std::shared_ptr<ProcessGroup>>(),
              py::arg("mesh"),
              py::arg("process_group"))
         

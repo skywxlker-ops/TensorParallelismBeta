@@ -1,7 +1,7 @@
 #include "bridge/tensor_ops_bridge.h"
 #include "tensor/dtensor.h" // Include full definitions
 #include "tensor/layout.h"
-#include "tensor/mesh.h"
+#include "tensor/device_mesh.h"
 #include "process_group/process_group.h"
 
 #include <iostream>
@@ -131,7 +131,7 @@ Tensor matmul(const Tensor& A, const Tensor& B) {
 DTensor from_data(
     const std::vector<float>& host_data,
     const std::vector<int>& shape,
-    std::shared_ptr<Mesh> mesh,
+    std::shared_ptr<DeviceMesh> mesh,
     std::shared_ptr<ProcessGroup> pg) 
 {
     // 1. Create a new DTensor
