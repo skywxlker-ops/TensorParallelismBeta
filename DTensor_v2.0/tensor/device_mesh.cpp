@@ -50,7 +50,13 @@ DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape,
 }
 
 DeviceMesh::~DeviceMesh() {
-    // ProcessGroup destructors will handle cleanup
+    // Free MPI sub-communicators
+    for (auto& comm : mpi_comms_) {
+        if (comm != MPI_COMM_NULL) {
+            MPI_Comm_free(&comm);
+        }
+    }
+    // ProcessGroup destructors will handle NCCL cleanup
 }
 
 // =========================================================
@@ -122,6 +128,7 @@ int DeviceMesh::get_dim_rank(int mesh_dim) const {
 
 void DeviceMesh::initialize_process_groups() {
     process_groups_.resize(ndim());
+    mpi_comms_.resize(ndim(), MPI_COMM_NULL);
     
     for (int mesh_dim = 0; mesh_dim < ndim(); ++mesh_dim) {
         // Get ranks in this dimension's process group
@@ -132,29 +139,79 @@ void DeviceMesh::initialize_process_groups() {
         auto it = std::find(group_ranks.begin(), group_ranks.end(), global_rank_);
         int my_group_rank = std::distance(group_ranks.begin(), it);
         
-        // Create NCCL unique ID (use first rank in group as root)
-        ncclUniqueId nccl_id = create_nccl_id(group_ranks[0]);
+        // Create MPI sub-communicator for this mesh dimension
+        // Color calculation: Convert mesh coordinates (excluding mesh_dim) to a unique integer
+        // Example: [2, 4] mesh, mesh_dim=1, rank 5 has coord [1, 1]
+        //   -> color based on coord[0]=1 (all ranks in same column share this)
+        
+        int color = 0;
+        int multiplier = 1;
+        for (int d = ndim() - 1; d >= 0; --d) {
+            if (d != mesh_dim) {
+                color += my_coordinate_[d] * multiplier;
+                multiplier *= mesh_shape_[d];
+            }
+        }
+        
+        // Key for ordering within the sub-communicator (use our position along mesh_dim)
+        int key = my_coordinate_[mesh_dim];
+        
+
+        
+        // Split MPI_COMM_WORLD to create sub-communicator
+        int mpi_err = MPI_Comm_split(MPI_COMM_WORLD, color, key, &mpi_comms_[mesh_dim]);
+        if (mpi_err != MPI_SUCCESS) {
+            throw std::runtime_error("DeviceMesh: MPI_Comm_split failed for mesh_dim " + 
+                                   std::to_string(mesh_dim));
+        }
+        
+        // Verify the sub-communicator has the correct size
+        int sub_comm_size;
+        MPI_Comm_size(mpi_comms_[mesh_dim], &sub_comm_size);
+        if (sub_comm_size != group_size) {
+            std::cerr << "[Rank " << global_rank_ << "] ERROR: mesh_dim=" << mesh_dim
+                      << " sub_comm_size=" << sub_comm_size 
+                      << " expected=" << group_size << "\n";
+            throw std::runtime_error("DeviceMesh: MPI sub-communicator size mismatch");
+        }
+        
+        // Verify our rank in the sub-communicator
+        int sub_comm_rank;
+        MPI_Comm_rank(mpi_comms_[mesh_dim], &sub_comm_rank);
+        if (sub_comm_rank != my_group_rank) {
+            std::cerr << "[Rank " << global_rank_ << "] ERROR: mesh_dim=" << mesh_dim
+                      << " sub_comm_rank=" << sub_comm_rank 
+                      << " expected=" << my_group_rank << "\n";
+            throw std::runtime_error("DeviceMesh: MPI sub-communicator rank mismatch");
+        }
+        
+        // Create NCCL unique ID using sub-communicator
+        // Root is rank 0 in the sub-communicator (not global rank)
+        ncclUniqueId nccl_id = create_nccl_id(0, mpi_comms_[mesh_dim]);
         
         // Get CUDA device for this rank
         int device = device_ids_[global_rank_];
         
         // Create ProcessGroup for this mesh dimension
-        // Note: ProcessGroup expects (rank_in_group, group_size, device, nccl_id)
         process_groups_[mesh_dim] = std::make_shared<ProcessGroup>(
             my_group_rank, group_size, device, nccl_id
         );
     }
 }
 
-ncclUniqueId DeviceMesh::create_nccl_id(int root_rank) {
+ncclUniqueId DeviceMesh::create_nccl_id(int root_rank, MPI_Comm comm) {
     ncclUniqueId nccl_id;
     
-    if (global_rank_ == root_rank) {
+    // Get our rank within this communicator
+    int my_rank_in_comm;
+    MPI_Comm_rank(comm, &my_rank_in_comm);
+    
+    if (my_rank_in_comm == root_rank) {
         ncclGetUniqueId(&nccl_id);
     }
     
-    // Broadcast the NCCL ID to all ranks
-    MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, root_rank, MPI_COMM_WORLD);
+    // Broadcast the NCCL ID within this sub-communicator only
+    MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, root_rank, comm);
     
     return nccl_id;
 }

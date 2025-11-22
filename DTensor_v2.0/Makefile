@@ -45,14 +45,14 @@ LIB_PATHS = \
 
 # --- Libraries to Link (-l) ---
 # -Xlinker passes flags directly to the host linker (ld)
+# Note: mpic++ automatically links MPI libraries, so we don't need -lmpi or -lmpi_cxx
 LIBS = \
-    -lnccl \
-    -lcudart \
-    -lcublas \
-    -lcurand \
-    -lgomp \
-    -Xlinker -lmpi \
-    -Xlinker -lmpi_cxx
+	-lnccl \
+	-lcudart \
+	-lcublas \
+	-lcurand \
+	-lgomp \
+	-lstdc++
 
 # --- Source Files ---
 SRCS = \
@@ -126,13 +126,13 @@ clean:
 	@echo "[CLEAN] Removing object files and executables..."
 	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
 	rm -f tests/*.o tests/test_device_mesh tests/test_matmul
-	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark
+	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown
 
 # =============================================================================
 # Additional Test and Benchmark Targets
 # =============================================================================
 
-.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark
+.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown
 
 # Test for DeviceMesh functionality
 TEST_DEVICE_MESH_SRCS = \
@@ -179,6 +179,24 @@ matmul_benchmark: $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] MatMul Benchmark build complete."
 	@echo "\nRun with: mpirun -np 2 ./benchmarks/matmul_benchmark\n"
+
+# Row-Parallel Breakdown (Compute vs Communication)
+ROW_BREAKDOWN_SRCS = \
+	benchmarks/row_parallel_breakdown.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+ROW_BREAKDOWN_OBJS = $(ROW_BREAKDOWN_SRCS:.cpp=.o)
+
+row_parallel_breakdown: $(ROW_BREAKDOWN_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating benchmark executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(ROW_BREAKDOWN_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Row-Parallel Breakdown build complete."
+	@echo "\nRun with: mpirun -np 2 ./benchmarks/row_parallel_breakdown\n"
 
 # Test for MatMul (Column-Parallel and Row-Parallel)
 TEST_MATMUL_SRCS = \

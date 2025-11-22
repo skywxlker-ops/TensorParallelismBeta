@@ -70,9 +70,13 @@ private:
     // process_groups_[i] handles communication along mesh dimension i
     std::vector<std::shared_ptr<ProcessGroup>> process_groups_;
     
+    // MPI sub-communicators: one per mesh dimension
+    // mpi_comms_[i] contains ranks that share coordinates in all dims except i
+    std::vector<MPI_Comm> mpi_comms_;
+    
     // Helper to initialize process groups for each mesh dimension
     void initialize_process_groups();
     
-    // Helper to create NCCL unique ID and broadcast it
-    ncclUniqueId create_nccl_id(int root_rank);
+    // Helper to create NCCL unique ID and broadcast it within a sub-communicator
+    ncclUniqueId create_nccl_id(int root_rank, MPI_Comm comm);
 };

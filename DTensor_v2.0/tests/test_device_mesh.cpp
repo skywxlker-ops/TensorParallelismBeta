@@ -96,33 +96,53 @@ void test_1d_mesh(int rank, int world_size) {
 
 // Test for 2D DeviceMesh (ND support verification)
 void test_2d_mesh(int rank, int world_size) {
-    if (world_size < 2) {
-        if (rank == 0) std::cout << "Skipping 2D mesh test (needs >= 2 GPUs)\n";
+    if (world_size < 4) {
+        if (rank == 0) std::cout << "Skipping 2D mesh test (needs >= 4 GPUs for non-degenerate mesh)\n";
         return;
     }
 
-    if (rank == 0) std::cout << "Testing 2D DeviceMesh [1, " << world_size << "]...\n";
+    // Choose appropriate 2D mesh shape based on world_size
+    std::vector<int> mesh_shape;
+    if (world_size == 4) {
+        mesh_shape = {2, 2};  // 2x2 grid
+    } else if (world_size == 8) {
+        mesh_shape = {2, 4};  // 2x4 grid (or could use {4, 2})
+    } else if (world_size == 16) {
+        mesh_shape = {4, 4};  // 4x4 grid
+    } else {
+        // For other sizes, try to make it as square as possible
+        int dim0 = static_cast<int>(sqrt(world_size));
+        while (world_size % dim0 != 0 && dim0 > 1) dim0--;
+        mesh_shape = {dim0, world_size / dim0};
+    }
+
+    if (rank == 0) {
+        std::cout << "Testing 2D DeviceMesh [" << mesh_shape[0] << ", " << mesh_shape[1] << "]...\n";
+    }
     
-    // Create a 2D mesh: 1 row, N columns (e.g., [1, 2] for 2 GPUs)
-    std::vector<int> mesh_shape = {1, world_size};
+    // Create a 2D mesh
     auto device_mesh = std::make_shared<DeviceMesh>(mesh_shape);
     
     // Verify coordinates
-    // Rank r -> [0, r]
     std::vector<int> coords = device_mesh->get_coordinate(rank);
     
     std::cout << "[DeviceMesh 2D] Rank " << rank << "/" << world_size 
               << " | Shape: [" << mesh_shape[0] << ", " << mesh_shape[1] << "]"
               << " | Coordinate: [" << coords[0] << ", " << coords[1] << "]\n";
               
-    if (coords[0] != 0 || coords[1] != rank) {
-        std::cerr << "[Rank " << rank << "]   2D Coordinate mismatch!\n";
+    // Verify coordinate mapping is correct
+    int expected_coord0 = rank / mesh_shape[1];
+    int expected_coord1 = rank % mesh_shape[1];
+    
+    if (coords[0] != expected_coord0 || coords[1] != expected_coord1) {
+        std::cerr << "[Rank " << rank << "]  2D Coordinate mismatch! Expected ["
+                  << expected_coord0 << ", " << expected_coord1 << "]\n";
         exit(1);
     }
     
     // Test Layout on 2D Mesh
     // Shard on Mesh Dim 1 (Columns) -> Tensor Dim 0
-    std::vector<int> global_shape = {10, 20};
+    std::vector<int> global_shape = {mesh_shape[1] * 10, 20};  // Ensure divisible
     std::vector<std::shared_ptr<Placement>> placements = {
         std::make_shared<Replicate>(), // Mesh Dim 0: Replicate
         std::make_shared<Shard>(0)     // Mesh Dim 1: Shard Tensor Dim 0
@@ -131,15 +151,18 @@ void test_2d_mesh(int rank, int world_size) {
     Layout layout(device_mesh, global_shape, placements);
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
-    // Expected: Tensor Dim 0 (10) split by Mesh Dim 1 (2) -> 5
-    // Tensor Dim 1 (20) replicated -> 20
+    // Expected: Tensor Dim 0 is sharded by Mesh Dim 1
+    int expected_dim0 = global_shape[0] / mesh_shape[1];
+    int expected_dim1 = global_shape[1];  // Replicated
+    
     std::cout << "[Layout 2D] Rank " << rank << "/" << world_size
               << " | Global: [" << global_shape[0] << ", " << global_shape[1] << "]"
               << " | Placements: [Replicate, Shard(0)]"
               << " | Local: [" << local_shape[0] << ", " << local_shape[1] << "]\n";
               
-    if (local_shape[0] != 5 || local_shape[1] != 20) {
-        std::cerr << "[Rank " << rank << "]   2D Layout mismatch! Expected [5, 20]\n";
+    if (local_shape[0] != expected_dim0 || local_shape[1] != expected_dim1) {
+        std::cerr << "[Rank " << rank << "]  2D Layout mismatch! Expected ["
+                  << expected_dim0 << ", " << expected_dim1 << "]\n";
         exit(1);
     }
 
@@ -169,9 +192,9 @@ int main(int argc, char** argv) {
         test_1d_mesh(rank, world_size);
         MPI_Barrier(MPI_COMM_WORLD);
         
-        // TODO: 2D mesh test requires careful NCCL setup for degenerate dimensions
-        // test_2d_mesh(rank, world_size);
-        // MPI_Barrier(MPI_COMM_WORLD);
+        // Test 2D mesh (now supported with MPI sub-communicators!)
+        test_2d_mesh(rank, world_size);
+        MPI_Barrier(MPI_COMM_WORLD);
         
         if (rank == 0) {
             std::cout << "\n========================================\n";
