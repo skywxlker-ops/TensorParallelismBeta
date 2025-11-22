@@ -17,8 +17,9 @@ CXXFLAGS = -std=c++17 -O3 -fPIC -g
 # -ccbin=mpic++ tells nvcc to use the MPI wrapper as the host linker
 NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++
 
-# --- Target Executable ---
+# --- Target Executables ---
 TARGET = dtensor_main
+TEST_MLP_TARGET = test_mlp_forward
 
 # --- Paths (Adjust these if your system paths differ) ---
 CUDA_HOME      := /usr/local/cuda
@@ -52,64 +53,65 @@ LIBS = \
     -Xlinker -lmpi \
     -Xlinker -lmpi_cxx
 
-# --- Source Files ---
-SRCS = \
-    main.cpp \
+# --- Source & Object Files ---
+# Core sources needed by all executables
+CORE_SRCS = \
     tensor/dtensor.cpp \
     process_group/process_group_nccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     ckpt/ckpt.cpp
 
-# --- Object Files ---
-# Replaces .cpp with .o in the SRCS list
-OBJS = $(SRCS:.cpp=.o)
+# Main executable sources
+MAIN_SRC = main.cpp
+MAIN_OBJ = $(MAIN_SRC:.cpp=.o)
+
+# MLP test sources
+TEST_MLP_SRC = test_mlp_forward.cpp
+TEST_MLP_OBJ = $(TEST_MLP_SRC:.cpp=.o)
+
+# All object files
+CORE_OBJS = $(CORE_SRCS:.cpp=.o)
+OBJS = $(MAIN_OBJ) $(CORE_OBJS)
 
 # =============================================================================
 # Build Rules
 # =============================================================================
 
-.PHONY: all clean test test_mlp_forward
+.PHONY: all clean test test_mlp run_test_mlp
 
 # Default target
 all: $(TARGET)
 
-# Test target (builds and suggests how to run)
-test: test_mlp_forward
-	@echo "\n[TEST BUILD COMPLETE]"
-	@echo "Run the test with: mpirun -np 2 ./test_mlp_forward"
-	@echo ""
+# Main test target now runs the MLP test
+test: run_test_mlp
 
-# 1. Linking Rule
-# links object files + static tensor lib -> executable
-$(TARGET): $(OBJS) $(TENSOR_LIB_A)
-	@echo "\n[LINKING] Creating executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $(TARGET) $(OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
-	@echo "[SUCCESS] Build complete."
+# 1. Linking Rule for Main Executable
+$(TARGET): $(MAIN_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating main executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Build complete. Run with: mpirun -np 2 ./$(TARGET)"
 
-# Test executable for MLP forward pass
-TEST_MLP_SRCS = \
-	test_mlp_forward.cpp \
-	tensor/dtensor.cpp \
-	process_group/process_group_nccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
+# 2. Linking Rule for MLP Test Executable
+test_mlp: $(TEST_MLP_TARGET)
 
-TEST_MLP_OBJS = $(TEST_MLP_SRCS:.cpp=.o)
-
-test_mlp_forward: $(TEST_MLP_OBJS) $(TENSOR_LIB_A)
+$(TEST_MLP_TARGET): $(TEST_MLP_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $(TEST_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Test build complete."
 
-# 2. Compilation Rule for C++ Source Files
+# 3. Rule to run the MLP test
+run_test_mlp: $(TEST_MLP_TARGET)
+	@echo "\n[RUNNING TEST] mpirun -np 2 ./$(TEST_MLP_TARGET)"
+	mpirun -np 2 --allow-run-as-root ./$(TEST_MLP_TARGET)
+
+# 4. Compilation Rule for C++ Source Files
 # Uses mpic++ to compile .cpp -> .o
 %.o: %.cpp
 	@echo "[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# 3. Check for Static Library
+# 5. Check for Static Library
 $(TENSOR_LIB_A):
 	@if [ ! -f $(TENSOR_LIB_A) ]; then \
 		echo "\n[ERROR] Static library $(TENSOR_LIB_A) not found!"; \
@@ -117,7 +119,7 @@ $(TENSOR_LIB_A):
 		exit 1; \
 	fi
 
-# 4. Cleanup
+# 6. Cleanup
 clean:
 	@echo "[CLEAN] Removing object files and executables..."
-	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
+	rm -f $(MAIN_OBJ) $(CORE_OBJS) $(TEST_MLP_OBJ) $(TARGET) $(TEST_MLP_TARGET)

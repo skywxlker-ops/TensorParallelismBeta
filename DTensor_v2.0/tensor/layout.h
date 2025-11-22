@@ -107,6 +107,14 @@ public:
                 shard_dim_ == other.shard_dim_;
     }
 
+    bool operator==(const Layout& other) const {
+        return is_compatible(other);
+    }
+
+    bool operator!=(const Layout& other) const {
+        return !is_compatible(other);
+    }
+
     // --- Description Utility ---
     std::string describe(int rank) const {
         std::ostringstream oss;

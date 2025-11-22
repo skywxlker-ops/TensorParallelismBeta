@@ -131,12 +131,12 @@ void test_mlp_forward(int rank, int world_size,
         Y1.print();
     }
     MPI_Barrier(MPI_COMM_WORLD);
-    
+
     // =============================================================
     // Layer 2: Row-Parallel MatMul
     // Y1 [BATCH, INTERMEDIATE] @ W2 [INTERMEDIATE, HIDDEN] -> Y2 [BATCH, HIDDEN]
     // Y1 is column-sharded, W2 is row-sharded
-    // Result requires AllReduce to get final replicated output
+    // This is the standard Row-Parallel pattern requiring AllReduce
     // =============================================================
     
     print_section(rank, "LAYER 2: Row-Parallel MatMul");
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
     
     if (rank == 0) {
         std::cout << "\n╔════════════════════════════════════════════════════════════╗\n";
-        std::cout << "║  DTensor v2.0 - MLP Forward Pass Test                     ║\n";
+        std::cout << "║  DTensor v2.0 - MLP Forward Pass Test                      ║\n";
         std::cout << "╚════════════════════════════════════════════════════════════╝\n";
         std::cout << "\nInitializing with " << world_size << " ranks...\n";
     }
@@ -255,7 +255,7 @@ int main(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
         std::cout << "\n╔════════════════════════════════════════════════════════════╗\n";
-        std::cout << "║  ✓ TEST PASSED - All operations completed successfully    ║\n";
+        std::cout << "║  ✓ TEST PASSED - All operations completed successfully     ║\n";
         std::cout << "╚════════════════════════════════════════════════════════════╝\n\n";
     }
     

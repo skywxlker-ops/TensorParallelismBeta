@@ -49,6 +49,7 @@ public:
 
     // === View / Reshape (now layout-aware) ===
     DTensor reshape(const std::vector<int>& new_global_shape) const;
+    DTensor redistribute(const Layout& new_layout) const;
 
     // === Checkpointing ===
     void saveCheckpoint(const std::string& path) const;
@@ -93,8 +94,6 @@ private:
     int size_; // local size
     std::vector<int> shape_; // local shape
     std::string dtype_ = "float32";
-    Block* data_block_;
-    Block* temp_block_;
 
     // --- Internal helpers ---
     void printRecursive(const std::vector<float>& data,

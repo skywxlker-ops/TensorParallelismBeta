@@ -29,4 +29,4 @@ git commit -m "$COMMIT_MSG" || echo "Nothing to commit."
 # Push to GitHub
 git push origin main
 
-echo "✅ Update pushed to GitHub successfully!"
+echo "Update pushed to GitHub successfully!"

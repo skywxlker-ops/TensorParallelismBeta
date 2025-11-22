@@ -24,8 +24,6 @@ DTensor::DTensor(std::shared_ptr<Mesh> mesh, std::shared_ptr<ProcessGroup> pg)
       stream_(pg->getStream()),
       layout_(Layout(mesh, {}, ShardingType::REPLICATED)), // Default layout
       size_(0),
-      data_block_(nullptr),
-      temp_block_(nullptr),
       shape_({0}),
       tensor_(OwnTensor::Shape{{1}}, // Default empty tensor wrapper
               OwnTensor::TensorOptions()
@@ -55,21 +53,11 @@ DTensor::DTensor(std::shared_ptr<Mesh> mesh,
     shape_ = layout_.get_local_shape(rank_); // shape_ is the local shape
     size_ = 1;
     for (int d : shape_) size_ *= d;
-
-    // Allocate blocks for potential data movement/access
-    // (Note: tensor_ already holds the data pointer from TensorLib, 
-    //  but we keep data_block_ for manual memory management if needed later)
-    data_block_ = gAllocator.allocateMemory(size_ * sizeof(float), stream_);
-    
-    // Temp block for Collectives (e.g., AllGather needs to hold global data)
-    temp_block_ = gAllocator.allocateMemory(layout.global_numel() * sizeof(float), stream_);
 }
 
 DTensor::~DTensor() {
     // Ensure stream is done before freeing memory
-    cudaStreamSynchronize(stream_); 
-    if (data_block_) gAllocator.freeMemory(data_block_);
-    if (temp_block_) gAllocator.freeMemory(temp_block_);
+    cudaStreamSynchronize(stream_);
 }
 
 // =========================================================
@@ -106,12 +94,6 @@ void DTensor::setData(const std::vector<float>& host_data, const Layout& layout)
 
     // Re-allocate temp tensor buffer for new shape
     temp_tensor_ = OwnTensor::Tensor(shape_obj, opts);
-
-    // Re-allocate managed blocks
-    if (data_block_) gAllocator.freeMemory(data_block_);
-    if (temp_block_) gAllocator.freeMemory(temp_block_);
-    data_block_ = gAllocator.allocateMemory(size_ * sizeof(float), stream_);
-    temp_block_ = gAllocator.allocateMemory(layout.global_numel() * sizeof(float), stream_);
 }
 
 std::vector<float> DTensor::getData() const {
@@ -257,6 +239,112 @@ DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
     Y_out.allReduce(); 
     
     return Y_out;
+}
+
+
+// =========================================================
+// Redistribute
+// =========================================================
+DTensor DTensor::redistribute(const Layout& new_layout) const {
+    // Case 1: Current layout is sharded, new layout is replicated
+    if (!layout_.is_replicated() && new_layout.is_replicated()) {
+        auto local_shape = layout_.get_local_shape(rank_);
+        size_t local_numel = tensor_.numel();
+        
+        OwnTensor::Shape global_shape_obj;
+        global_shape_obj.dims.assign(new_layout.get_global_shape().begin(), new_layout.get_global_shape().end());
+        OwnTensor::Tensor gathered_tensor(global_shape_obj, OwnTensor::TensorOptions()
+                                                                    .with_device(tensor_.device())
+                                                                    .with_dtype(tensor_.dtype()));
+
+        if (layout_.get_shard_dim() == 0) {
+            // Sharded on rows: data is already in the correct global order
+            pg_->allGather<float>(
+                gathered_tensor.data<float>(),
+                const_cast<float*>(this->tensor_.data<float>()),
+                local_numel,
+                ncclFloat
+            )->wait();
+        } else if (layout_.get_shard_dim() == 1) {
+            // Sharded on columns: requires reordering after gather
+            float* tmp_buffer;
+            cudaMalloc(&tmp_buffer, local_numel * world_size_ * sizeof(float));
+
+            pg_->allGather<float>(
+                tmp_buffer,
+                const_cast<float*>(this->tensor_.data<float>()),
+                local_numel,
+                ncclFloat
+            )->wait();
+
+            for (int i = 0; i < world_size_; ++i) {
+                cudaMemcpy2DAsync(
+                    gathered_tensor.data<float>() + i * local_shape[1],
+                    new_layout.get_global_shape()[1] * sizeof(float),
+                    tmp_buffer + i * local_numel,
+                    local_shape[1] * sizeof(float),
+                    local_shape[1] * sizeof(float),
+                    local_shape[0],
+                    cudaMemcpyDeviceToDevice,
+                    stream_
+                );
+            }
+            cudaFree(tmp_buffer);
+        }
+        return DTensor(mesh_, pg_, gathered_tensor, new_layout);
+    }
+
+    // Case 2: Current layout is replicated, new layout is sharded
+    if (layout_.is_replicated() && !new_layout.is_replicated()) {
+        auto new_local_shape_vec = new_layout.get_local_shape(rank_);
+        OwnTensor::Shape new_local_shape_obj;
+        new_local_shape_obj.dims.assign(new_local_shape_vec.begin(), new_local_shape_vec.end());
+        
+        OwnTensor::Tensor sliced_tensor(new_local_shape_obj, OwnTensor::TensorOptions()
+                                                                .with_device(tensor_.device())
+                                                                .with_dtype(tensor_.dtype()));
+
+        if (new_layout.get_shard_dim() == 0) {
+            // Sharding on rows: slice is a contiguous block
+            size_t slice_size = sliced_tensor.numel();
+            size_t offset = rank_ * slice_size;
+            cudaMemcpyAsync(
+                sliced_tensor.data<float>(),
+                this->tensor_.data<float>() + offset,
+                slice_size * sizeof(float),
+                cudaMemcpyDeviceToDevice,
+                stream_
+            );
+        } else if (new_layout.get_shard_dim() == 1) {
+            // Sharding on columns: slice is not contiguous, requires 2D copy
+            size_t src_pitch = layout_.get_global_shape()[1] * sizeof(float);
+            size_t dst_pitch = new_local_shape_vec[1] * sizeof(float);
+            size_t copy_width_bytes = new_local_shape_vec[1] * sizeof(float);
+
+            cudaMemcpy2DAsync(
+                sliced_tensor.data<float>(),
+                dst_pitch,
+                this->tensor_.data<float>() + (rank_ * new_local_shape_vec[1]),
+                src_pitch,
+                copy_width_bytes,
+                new_local_shape_vec[0],
+                cudaMemcpyDeviceToDevice,
+                stream_
+            );
+        }
+        return DTensor(mesh_, pg_, sliced_tensor, new_layout);
+    }
+
+    // Case 3: Sharded to Sharded
+    if (layout_ != new_layout) {
+        DTensor replicated_tensor = this->redistribute(
+            Layout(mesh_, layout_.get_global_shape(), ShardingType::REPLICATED)
+        );
+        return replicated_tensor.redistribute(new_layout);
+    }
+
+    // If layouts are the same, just return a copy
+    return *this;
 }
 
 
