@@ -16,7 +16,7 @@ CachingAllocator gAllocator;
 // =========================================================
 
 // Main public constructor (Initializes an empty/default tensor)
-DTensor::DTensor(std::shared_ptr<Mesh> mesh, std::shared_ptr<ProcessGroup> pg)
+DTensor::DTensor(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg)
     : rank_(pg->getRank()),
       world_size_(pg->getWorldSize()),
       mesh_(mesh),
@@ -34,7 +34,7 @@ DTensor::DTensor(std::shared_ptr<Mesh> mesh, std::shared_ptr<ProcessGroup> pg)
 }
 
 // Private constructor (Used for internal op results)
-DTensor::DTensor(std::shared_ptr<Mesh> mesh,
+DTensor::DTensor(std::shared_ptr<DeviceMesh> mesh,
                  std::shared_ptr<ProcessGroup> pg,
                  const OwnTensor::Tensor& local_tensor,
                  const Layout& layout)

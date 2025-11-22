@@ -6,7 +6,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <memory>
-#include "tensor/mesh.h"
+#include "tensor/device_mesh.h"
 
 // Defines the sharding strategy for a DTensor
 enum class ShardingType {
@@ -20,7 +20,7 @@ public:
     Layout() : mesh_(nullptr), sharding_type_(ShardingType::REPLICATED), shard_dim_(-1) {}
 
     // Constructor for a new layout
-    Layout(std::shared_ptr<Mesh> mesh, const std::vector<int>& global_shape, ShardingType type, int shard_dim = -1)
+    Layout(std::shared_ptr<DeviceMesh> mesh, const std::vector<int>& global_shape, ShardingType type, int shard_dim = -1)
         : mesh_(mesh), global_shape_(global_shape), sharding_type_(type), shard_dim_(shard_dim) {
         
         if (sharding_type_ == ShardingType::SHARDED && (shard_dim < 0 || (size_t)shard_dim >= global_shape.size())) {
@@ -54,7 +54,7 @@ public:
         return global_shape_;
     }
 
-    std::shared_ptr<Mesh> get_mesh() const {
+    std::shared_ptr<DeviceMesh> get_mesh() const {
         return mesh_;
     }
 
@@ -66,7 +66,7 @@ public:
             return global_shape_;
         }
 
-        int world_size = mesh_->world_size;
+        int world_size = mesh_->world_size();
         std::vector<int> local_shape = global_shape_;
         
         // This is the logic from your planner.h
@@ -123,7 +123,7 @@ public:
             return oss.str();
         }
 
-        oss << "[Layout] Rank " << rank << "/" << mesh_->world_size << " | ";
+        oss << "[Layout] Rank " << rank << "/" << mesh_->world_size() << " | ";
         oss << "Global Shape: [";
         for (size_t i = 0; i < global_shape_.size(); ++i) {
             oss << global_shape_[i] << (i == global_shape_.size() - 1 ? "" : ", ");
@@ -147,7 +147,7 @@ public:
 
 
 private:
-    std::shared_ptr<Mesh> mesh_;
+    std::shared_ptr<DeviceMesh> mesh_;
     std::vector<int> global_shape_;
     ShardingType sharding_type_;
     int shard_dim_; // Dimension along which tensor is sharded (-1 if REPLICATED)

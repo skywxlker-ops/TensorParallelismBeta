@@ -7,7 +7,7 @@
 // Forward declarations to avoid circular include with dtensor.h
 class DTensor;
 class ProcessGroup;
-struct Mesh;
+class DeviceMesh;
 
 namespace TensorOpsBridge {
 
@@ -33,7 +33,7 @@ OwnTensor::Tensor div(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
 DTensor from_data(
     const std::vector<float>& host_data,
     const std::vector<int>& shape,
-    std::shared_ptr<Mesh> mesh,
+    std::shared_ptr<DeviceMesh> mesh,
     std::shared_ptr<ProcessGroup> pg);
 
 }  // namespace TensorOpsBridge
