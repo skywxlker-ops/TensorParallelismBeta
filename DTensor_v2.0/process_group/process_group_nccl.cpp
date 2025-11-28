@@ -1,35 +1,40 @@
 #include "process_group.h"
+#include "error_handler.h"
 #include <iostream>
 #include <type_traits>
+
+// Convenient macro aliases
+#define CUDA_CHECK(call) CUDA_CHECK_THROW(call)
+#define NCCL_CHECK(call) NCCL_CHECK_THROW(call)
 
 // ---------------- Work ----------------
 Work::Work(cudaStream_t stream)
     : stream_(stream), completed_(false), success_(true) {
-    cudaEventCreateWithFlags(&event_, cudaEventDisableTiming);
+    CUDA_CHECK(cudaEventCreateWithFlags(&event_, cudaEventDisableTiming));
 }
 
 Work::~Work() {
-    cudaEventDestroy(event_);
+    CUDA_CHECK(cudaEventDestroy(event_));
 }
 
 void Work::markCompleted(bool success) {
     success_ = success;
     completed_ = true;
-    cudaEventRecord(event_, stream_);
+    CUDA_CHECK(cudaEventRecord(event_, stream_));
 }
 
 bool Work::wait() {
     if (!completed_) return false;
-    cudaEventSynchronize(event_);
+    CUDA_CHECK(cudaEventSynchronize(event_));
     return success_;
 }
 
 // ---------------- ProcessGroup ----------------
 ProcessGroup::ProcessGroup(int rank, int world_size, int device, const ncclUniqueId &id)
     : rank_(rank), world_size_(world_size), device_(device) {
-    cudaSetDevice(device_);
-    cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
-    ncclCommInitRank(&comm_, world_size_, id, rank_);
+    CUDA_CHECK(cudaSetDevice(device_));
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+    NCCL_WITH_RETRY(ncclCommInitRank(&comm_, world_size_, id, rank_), 3);
 }
 
 ProcessGroup::~ProcessGroup() {
@@ -44,7 +49,7 @@ ProcessGroup::~ProcessGroup() {
 template <typename T>
 std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
-    ncclAllReduce(data, data, count, dtype, ncclSum, comm_, stream_);
+    NCCL_WITH_RETRY(ncclAllReduce(data, data, count, dtype, ncclSum, comm_, stream_), 3);
     work->markCompleted(true);
     return work;
 }
@@ -52,7 +57,7 @@ std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataTyp
 template <typename T>
 std::shared_ptr<Work> ProcessGroup::reduceScatter(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
-    ncclReduceScatter(send_buf, recv_buf, count_per_rank, dtype, ncclSum, comm_, stream_);
+    NCCL_WITH_RETRY(ncclReduceScatter(send_buf, recv_buf, count_per_rank, dtype, ncclSum, comm_, stream_), 3);
     work->markCompleted(true);
     return work;
 }
@@ -60,7 +65,7 @@ std::shared_ptr<Work> ProcessGroup::reduceScatter(T* recv_buf, T* send_buf, size
 template <typename T>
 std::shared_ptr<Work> ProcessGroup::allGather(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
-    ncclAllGather(send_buf, recv_buf, count_per_rank, dtype, comm_, stream_);
+    NCCL_WITH_RETRY(ncclAllGather(send_buf, recv_buf, count_per_rank, dtype, comm_, stream_), 3);
     work->markCompleted(true);
     return work;
 }
@@ -68,7 +73,7 @@ std::shared_ptr<Work> ProcessGroup::allGather(T* recv_buf, T* send_buf, size_t c
 template <typename T>
 std::shared_ptr<Work> ProcessGroup::broadcast(T* data, size_t count, int root, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
-    ncclBroadcast(data, data, count, dtype, root, comm_, stream_);
+    NCCL_WITH_RETRY(ncclBroadcast(data, data, count, dtype, root, comm_, stream_), 3);
     work->markCompleted(true);
     return work;
 }
