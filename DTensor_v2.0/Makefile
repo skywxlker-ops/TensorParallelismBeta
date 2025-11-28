@@ -54,65 +54,97 @@ LIBS = \
     -Xlinker -lmpi_cxx
 
 # --- Source & Object Files ---
-# Core sources needed by all executables
+# Core Source files (Core Distributed Tensor)
 CORE_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/process_group_nccl.cpp \
+    process_group/stream_pool.cpp \
+    process_group/error_handler.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     ckpt/ckpt.cpp
 
+# Build directory
+BUILD_DIR = build
+
 # Main executable sources
 MAIN_SRC = main.cpp
-MAIN_OBJ = $(MAIN_SRC:.cpp=.o)
 
-# MLP test sources
-TEST_MLP_SRC = test_mlp_forward.cpp
-TEST_MLP_OBJ = $(TEST_MLP_SRC:.cpp=.o)
+# Object files (in build directory)
+CORE_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(CORE_SRCS))
+MAIN_OBJ = $(BUILD_DIR)/$(MAIN_SRC:.cpp=.o)
 
 # All object files
-CORE_OBJS = $(CORE_SRCS:.cpp=.o)
 OBJS = $(MAIN_OBJ) $(CORE_OBJS)
+
+# Target executable path
+TARGET = $(BUILD_DIR)/dtensor_main
 
 # =============================================================================
 # Build Rules
 # =============================================================================
 
-.PHONY: all clean test test_mlp run_test_mlp
+.PHONY: all clean test help
+# === Utility Targets ===
 
-# Default target
+.PHONY: all clean run help test
+
 all: $(TARGET)
 
-# Main test target now runs the MLP test
-test: run_test_mlp
+clean:
+	@echo "[CLEAN] Removing build artifacts..."
+	rm -rf $(BUILD_DIR)
+	@echo "[CLEAN] Build directory cleaned"
 
-# 1. Linking Rule for Main Executable
-$(TARGET): $(MAIN_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+run: $(TARGET)
+	mpirun -np 2 --allow-run-as-root ./$(TARGET)
+
+help:
+	@echo "DTensor v2.0 Makefile"
+	@echo "Targets:"
+	@echo "  all    - Build dtensor_main (default)"
+	@echo "  clean  - Remove build artifacts"
+	@echo "  run    - Run with MPI (2 ranks)"
+	@echo "  test         - Run all tests (delegates to tests/Makefile)"
+	@echo "  clean        - Remove object files and executables"
+	@echo "  help         - Show this help message"
+	@echo ""
+	@echo "For test-specific targets, use:"
+
+# Main test target delegates to tests directory
+test:
+	@echo "\n=========================================="
+	@echo "  Running DTensor Test Suite"
+	@echo "=========================================="
+	cd tests && $(MAKE) run_all
+
+
+# === Build Rules ===
+
+# Create build directory structure
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)/{tensor,process_group,memory,bridge,ckpt}
+
+# Main target
+$(TARGET): $(BUILD_DIR) $(MAIN_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating main executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $(MAIN_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Build complete. Run with: mpirun -np 2 ./$(TARGET)"
 
-# 2. Linking Rule for MLP Test Executable
-test_mlp: $(TEST_MLP_TARGET)
-
-$(TEST_MLP_TARGET): $(TEST_MLP_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
-	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
-	@echo "[SUCCESS] Test build complete."
-
-# 3. Rule to run the MLP test
-run_test_mlp: $(TEST_MLP_TARGET)
-	@echo "\n[RUNNING TEST] mpirun -np 2 ./$(TEST_MLP_TARGET)"
-	mpirun -np 2 --allow-run-as-root ./$(TEST_MLP_TARGET)
-
-# 4. Compilation Rule for C++ Source Files
-# Uses mpic++ to compile .cpp -> .o
-%.o: %.cpp
+# Compile main.cpp
+$(MAIN_OBJ): $(MAIN_SRC) | $(BUILD_DIR)
 	@echo "[COMPILE] $<"
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# 5. Check for Static Library
+# Pattern rule for object files
+$(BUILD_DIR)/%.o: %.cpp | $(BUILD_DIR)
+	@echo "[COMPILE] $<"
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Check for Static Library
 $(TENSOR_LIB_A):
 	@if [ ! -f $(TENSOR_LIB_A) ]; then \
 		echo "\n[ERROR] Static library $(TENSOR_LIB_A) not found!"; \
@@ -120,7 +152,9 @@ $(TENSOR_LIB_A):
 		exit 1; \
 	fi
 
-# 6. Cleanup
+# 4. Cleanup
 clean:
 	@echo "[CLEAN] Removing object files and executables..."
-	rm -f $(MAIN_OBJ) $(CORE_OBJS) $(TEST_MLP_OBJ) $(TARGET) $(TEST_MLP_TARGET)
+	rm -f $(MAIN_OBJ) $(CORE_OBJS) $(TARGET)
+	cd tests && $(MAKE) clean
+	@echo "[CLEAN] Complete"
