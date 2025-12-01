@@ -1,31 +1,22 @@
-# =============================================================================
-# Makefile for DTensor Framework (Distributed Tensor Parallelism)
-# =============================================================================
 
-# --- Compiler Configuration ---
-# Host compiler for C++ files (wraps g++ with MPI link flags)
 CXX = mpic++
 
-# Linker: We use nvcc to handle device code linking (libtensor.a contains CUDA kernels)
+
 NVCC_LINKER = /usr/local/cuda/bin/nvcc
 
-# --- Build Flags ---
-# C++17 standard, Optimization level 3, Position Independent Code
-CXXFLAGS = -std=c++17 -O3 -fPIC -g
+CXXFLAGS = -std=c++17 -O3 -fPIC -g -DWITH_CUDA
 
-# NVCC Linker Flags
-# -ccbin=mpic++ tells nvcc to use the MPI wrapper as the host linker
+
 NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++
 
-# --- Target Executable ---
 TARGET = dtensor_main
 
-# --- Paths (Adjust these if your system paths differ) ---
+
 CUDA_HOME      := /usr/local/cuda
 TENSOR_LIB_DIR := ./Tensor-Implementations
 TENSOR_LIB_A   := $(TENSOR_LIB_DIR)/lib/libtensor.a
 
-# --- Include Directories (-I) ---
+
 INCLUDES = \
     -I. \
     -I./tensor \
@@ -36,16 +27,13 @@ INCLUDES = \
     -I$(TENSOR_LIB_DIR)/include \
     -I$(CUDA_HOME)/include
 
-# --- Library Directories (-L) ---
-# Note: OpenMPI path might vary (/usr/lib/x86_64-linux-gnu/openmpi/lib, etc.)
+
 LIB_PATHS = \
     -L$(TENSOR_LIB_DIR)/lib \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib
 
-# --- Libraries to Link (-l) ---
-# -Xlinker passes flags directly to the host linker (ld)
-# Note: mpic++ automatically links MPI libraries, so we don't need -lmpi or -lmpi_cxx
+
 LIBS = \
 	-lnccl \
 	-lcudart \
@@ -54,7 +42,7 @@ LIBS = \
 	-lgomp \
 	-lstdc++
 
-# --- Source Files ---
+
 SRCS = \
     main.cpp \
     tensor/dtensor.cpp \
@@ -64,33 +52,28 @@ SRCS = \
     bridge/tensor_ops_bridge.cpp \
     ckpt/ckpt.cpp
 
-# --- Object Files ---
-# Replaces .cpp with .o in the SRCS list
 OBJS = $(SRCS:.cpp=.o)
 
-# =============================================================================
-# Build Rules
-# =============================================================================
+
 
 .PHONY: all clean test test_mlp_forward
 
-# Default target
+
 all: $(TARGET)
 
-# Test target (builds and suggests how to run)
+
 test: test_mlp_forward
 	@echo "\n[TEST BUILD COMPLETE]"
 	@echo "Run the test with: mpirun -np 2 ./test_mlp_forward"
 	@echo ""
 
-# 1. Linking Rule
-# links object files + static tensor lib -> executable
+
 $(TARGET): $(OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $(TARGET) $(OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Build complete."
 
-# Test executable for MLP forward pass
+
 TEST_MLP_SRCS = \
 	test_mlp_forward.cpp \
 	tensor/dtensor.cpp \
@@ -107,13 +90,19 @@ test_mlp_forward: $(TEST_MLP_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $(TEST_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Test build complete."
 
-# 2. Compilation Rule for C++ Source Files
-# Uses mpic++ to compile .cpp -> .o
+
 %.o: %.cpp
 	@echo "[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# 3. Check for Static Library
+benchmarks/%.o: benchmarks/%.cpp
+	@echo "[COMPILE] $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+tests/%.o: tests/%.cpp
+	@echo "[COMPILE] $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
 $(TENSOR_LIB_A):
 	@if [ ! -f $(TENSOR_LIB_A) ]; then \
 		echo "\n[ERROR] Static library $(TENSOR_LIB_A) not found!"; \
@@ -121,20 +110,18 @@ $(TENSOR_LIB_A):
 		exit 1; \
 	fi
 
-# 4. Cleanup
+
 clean:
 	@echo "[CLEAN] Removing object files and executables..."
 	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
 	rm -f tests/*.o tests/test_device_mesh tests/test_matmul
-	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown
+	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom
+	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
 
-# =============================================================================
-# Additional Test and Benchmark Targets
-# =============================================================================
 
-.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown
 
-# Test for DeviceMesh functionality
+.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom
+
 TEST_DEVICE_MESH_SRCS = \
 	tests/test_device_mesh.cpp \
 	tensor/dtensor.cpp \
@@ -150,19 +137,17 @@ test_device_mesh: $(TEST_DEVICE_MESH_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DEVICE_MESH_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Test build complete."
-	@echo "\nRun with: mpirun -np 2 ./tests/test_device_mesh\n"
+	@echo "\nRun : mpirun -np 2 ./tests/test_device_mesh\n"
 
-# NCCL Collectives Benchmark
-NCCL_BENCHMARK_SRCS = benchmarks/nccl_benchmark.cpp
+NCCL_BENCHMARK_SRCS = benchmarks/nccl_benchmark_1.cpp
 NCCL_BENCHMARK_OBJS = $(NCCL_BENCHMARK_SRCS:.cpp=.o)
 
 nccl_benchmark: $(NCCL_BENCHMARK_OBJS)
 	@echo "\n[LINKING] Creating benchmark executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(NCCL_BENCHMARK_OBJS) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Benchmark build complete."
-	@echo "\nRun with: mpirun -np 2 ./benchmarks/nccl_benchmark\n"
+	@echo "\nRun : mpirun -np 2 ./benchmarks/nccl_benchmark\n"
 
-# MatMul Benchmark
 MATMUL_BENCHMARK_SRCS = \
 	benchmarks/matmul_benchmark.cpp \
 	tensor/dtensor.cpp \
@@ -178,9 +163,9 @@ matmul_benchmark: $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating benchmark executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] MatMul Benchmark build complete."
-	@echo "\nRun with: mpirun -np 2 ./benchmarks/matmul_benchmark\n"
+	@echo "\nRun : mpirun -np 2 ./benchmarks/matmul_benchmark\n"
 
-# Row-Parallel Breakdown (Compute vs Communication)
+
 ROW_BREAKDOWN_SRCS = \
 	benchmarks/row_parallel_breakdown.cpp \
 	tensor/dtensor.cpp \
@@ -196,9 +181,9 @@ row_parallel_breakdown: $(ROW_BREAKDOWN_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating benchmark executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(ROW_BREAKDOWN_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Row-Parallel Breakdown build complete."
-	@echo "\nRun with: mpirun -np 2 ./benchmarks/row_parallel_breakdown\n"
+	@echo "\nRun : mpirun -np 2 ./benchmarks/row_parallel_breakdown\n"
 
-# Test for MatMul (Column-Parallel and Row-Parallel)
+
 TEST_MATMUL_SRCS = \
 	tests/test_matmul.cpp \
 	tensor/dtensor.cpp \
@@ -214,4 +199,21 @@ test_matmul: $(TEST_MATMUL_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_MATMUL_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] MatMul test build complete."
-	@echo "\nRun with: mpirun -np 2 ./tests/test_matmul\n"
+	@echo "\nRun : mpirun -np 2 ./tests/test_matmul\n"
+
+ROW_BREAKDOWN_CUSTOM_SRCS = \
+	benchmarks/row_parallel_breakdown.cpp \
+	tensor/dtensor_own.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge_own.cpp \
+	ckpt/ckpt.cpp
+
+ROW_BREAKDOWN_CUSTOM_OBJS = $(ROW_BREAKDOWN_CUSTOM_SRCS:.cpp=.o)
+
+row_parallel_breakdown_custom: $(ROW_BREAKDOWN_CUSTOM_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating custom benchmark executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(ROW_BREAKDOWN_CUSTOM_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Custom Row-Parallel Breakdown build complete."
+	@echo "\nRun : mpirun -np 2 ./benchmarks/row_parallel_breakdown_custom\n"

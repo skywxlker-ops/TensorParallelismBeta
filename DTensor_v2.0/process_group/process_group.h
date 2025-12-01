@@ -31,18 +31,21 @@ public:
     std::shared_ptr<Work> allReduce(T* data, size_t count, ncclDataType_t dtype);
 
     template<typename T>
-    std::shared_ptr<Work> reduceScatter(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype);
+    std::shared_ptr<Work> reduceScatter(T* data, size_t count_per_shard, ncclDataType_t dtype);
 
     template<typename T>
-    std::shared_ptr<Work> allGather(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype);
+    std::shared_ptr<Work> allGather(T* data, size_t count_per_rank, ncclDataType_t dtype);
 
     template<typename T>
     std::shared_ptr<Work> broadcast(T* data, size_t count, int root, ncclDataType_t dtype);
 
+    template<typename T>
+    std::shared_ptr<Work> scatter(T* data, size_t count_per_shard, int root, ncclDataType_t dtype);
+
     cudaStream_t getStream() const { return stream_; }
     ncclComm_t getComm() const { return comm_; }
 
-    // Accessors for PyBind11
+    
     int getRank() const { return rank_; }
     int getWorldSize() const { return world_size_; }
     int getDevice() const { return device_; }
@@ -53,7 +56,7 @@ private:
     cudaStream_t stream_;
 };
 
-// === NCCL Type helper ===
+// NCCL Type helper 
 inline ncclDataType_t getNcclType(const std::string& dtype) {
     if (dtype == "float32") return ncclFloat;
     if (dtype == "float64") return ncclDouble;

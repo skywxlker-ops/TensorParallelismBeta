@@ -11,7 +11,7 @@
 #include <mpi.h>
 #include <cuda_runtime.h>
 
-// Helper to generate random data
+
 std::vector<float> randomData(size_t size) {
     std::vector<float> data(size);
     for (size_t i = 0; i < size; ++i) {
@@ -26,13 +26,13 @@ public:
         MPI_Comm_rank(MPI_COMM_WORLD, &rank_);
         MPI_Comm_size(MPI_COMM_WORLD, &world_size_);
         
-        // Set CUDA device
+        
         cudaSetDevice(rank_);
         
-        // Create DeviceMesh
+        
         device_mesh_ = std::make_shared<DeviceMesh>(std::vector<int>{world_size_});
         
-        // Create ProcessGroup
+        
         ncclUniqueId nccl_id;
         if (rank_ == 0) ncclGetUniqueId(&nccl_id);
         MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, 0, MPI_COMM_WORLD);
@@ -41,9 +41,9 @@ public:
     
     void run() {
         if (rank_ == 0) {
-            std::cout << "============================================================\n";
+
             std::cout << "  Tensor Parallel MatMul Benchmark (" << world_size_ << " GPUs)\n";
-            std::cout << "============================================================\n\n";
+
         }
         
         // Matrix sizes (Square M=N=K)
@@ -64,11 +64,11 @@ private:
     const int NUM_ITERATIONS = 20;
     const int WARMUP_ITERATIONS = 5;
 
-    // ---------------------------------------------------------
+
     // Column Parallel: X(Rep) @ W(Shard Col) -> Y(Shard Col)
-    // ---------------------------------------------------------
+
     void benchmarkColumnParallel(const std::vector<int>& sizes) {
-        if (rank_ == 0) std::cout << "--- Column-Parallel MatMul (No Comm) ---\n";
+        if (rank_ == 0) std::cout << "Column-Parallel MatMul \n";
         
         for (int N : sizes) {
             int M = N, K = N; // Square matrix
@@ -125,11 +125,10 @@ private:
         if (rank_ == 0) std::cout << "\n";
     }
 
-    // ---------------------------------------------------------
     // Row Parallel: X(Shard Col) @ W(Shard Row) -> Y(Rep)
-    // ---------------------------------------------------------
+
     void benchmarkRowParallel(const std::vector<int>& sizes) {
-        if (rank_ == 0) std::cout << "--- Row-Parallel MatMul (With AllReduce) ---\n";
+        if (rank_ == 0) std::cout << " Row-Parallel MatMul (With AllReduce) \n";
         
         for (int N : sizes) {
             int M = N, K = N; // Square matrix
@@ -146,14 +145,14 @@ private:
             }
 
             try {
-                // Setup X (Sharded on Dim 1 - Columns)
+                // X (Sharded on Dim 1 (Columns))
                 DTensor X(device_mesh_, pg_);
                 std::vector<std::shared_ptr<Placement>> X_placements = { std::make_shared<Shard>(1) };
                 Layout X_layout(device_mesh_, {M, K}, X_placements);
                 int K_local = K / world_size_;
                 X.setData(randomData(M * K_local), X_layout);
 
-                // Setup W (Sharded on Dim 0 - Rows)
+                //  W ( Sharded on Dim 0 (Rows) )
                 DTensor W(device_mesh_, pg_);
                 std::vector<std::shared_ptr<Placement>> W_placements = { std::make_shared<Shard>(0) };
                 Layout W_layout(device_mesh_, {K, N}, W_placements);

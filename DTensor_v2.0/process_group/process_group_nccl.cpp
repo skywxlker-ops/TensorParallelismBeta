@@ -38,11 +38,10 @@ ProcessGroup::~ProcessGroup() {
     cudaStreamDestroy(stream_);
 }
 
-// ------------------------------------------------
-// Template function definitions
-// ------------------------------------------------
+
+
 template <typename T>
-std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataType_t dtype) {
+std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataType_t dtype, comm comm_) {
     auto work = std::make_shared<Work>(stream_);
     ncclAllReduce(data, data, count, dtype, ncclSum, comm_, stream_);
     work->markCompleted(true);
@@ -50,17 +49,17 @@ std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataTyp
 }
 
 template <typename T>
-std::shared_ptr<Work> ProcessGroup::reduceScatter(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype) {
+std::shared_ptr<Work> ProcessGroup::reduceScatter(T* data, size_t count_per_shard, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
-    ncclReduceScatter(send_buf, recv_buf, count_per_rank, dtype, ncclSum, comm_, stream_);
+    ncclReduceScatter(data, data + rank_ * count_per_shard, count_per_shard, dtype, ncclSum, comm_, stream_);
     work->markCompleted(true);
     return work;
 }
 
 template <typename T>
-std::shared_ptr<Work> ProcessGroup::allGather(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype) {
+std::shared_ptr<Work> ProcessGroup::allGather(T* data, size_t count_per_rank, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
-    ncclAllGather(send_buf, recv_buf, count_per_rank, dtype, comm_, stream_);
+    ncclAllGather(data, data + rank_ * count_per_rank , count_per_rank, dtype, comm_, stream_);
     work->markCompleted(true);
     return work;
 }
@@ -73,23 +72,37 @@ std::shared_ptr<Work> ProcessGroup::broadcast(T* data, size_t count, int root, n
     return work;
 }
 
-// -------------------------------------------------------------
-// ✅ Force Template Instantiations + Explicit Exports
-// -------------------------------------------------------------
+
+template <typename T>
+std::shared_ptr<Work> ProcessGroup::scatter(T* data, size_t count_per_shard, int root, ncclDataType_t dtype) {
+    auto work = std::make_shared<Work>(stream_);
+    ncclScatter(data, data + rank_ * count_per_shard, count_per_shard, dtype, root, comm_, stream_);
+    work->markCompleted(true);
+    return work;
+}
+
 #define INSTANTIATE_AND_EXPORT(T, NCTYPE) \
     template std::shared_ptr<Work> ProcessGroup::allReduce<T>(T*, size_t, ncclDataType_t); \
-    template std::shared_ptr<Work> ProcessGroup::reduceScatter<T>(T*, T*, size_t, ncclDataType_t); \
-    template std::shared_ptr<Work> ProcessGroup::allGather<T>(T*, T*, size_t, ncclDataType_t); \
+    template std::shared_ptr<Work> ProcessGroup::reduceScatter<T>(T*, size_t, ncclDataType_t); \
+    template std::shared_ptr<Work> ProcessGroup::allGather<T>(T*, size_t, ncclDataType_t); \
     template std::shared_ptr<Work> ProcessGroup::broadcast<T>(T*, size_t, int, ncclDataType_t); \
+    template std::shared_ptr<Work> ProcessGroup::scatter<T>(T*, size_t, int, ncclDataType_t); \
     extern "C" __attribute__((visibility("default"))) void _force_link_##NCTYPE() { \
         volatile auto f1 = &ProcessGroup::allReduce<T>; \
         volatile auto f2 = &ProcessGroup::reduceScatter<T>; \
         volatile auto f3 = &ProcessGroup::allGather<T>; \
         volatile auto f4 = &ProcessGroup::broadcast<T>; \
-        (void)f1; (void)f2; (void)f3; (void)f4; \
+        volatile auto f5 = &ProcessGroup::scatter<T>; \
+        (void)f1; (void)f2; (void)f3; (void)f4; (void)f5;\
     }
 
 INSTANTIATE_AND_EXPORT(float, float)
 INSTANTIATE_AND_EXPORT(double, double)
 INSTANTIATE_AND_EXPORT(int, int32)
 INSTANTIATE_AND_EXPORT(long long, int64)
+
+
+
+
+
+

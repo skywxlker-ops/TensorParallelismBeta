@@ -10,7 +10,7 @@
 #include <mpi.h>
 #include <cuda_runtime.h>
 
-// Helper to generate random data
+
 std::vector<float> randomData(size_t size) {
     std::vector<float> data(size);
     for (size_t i = 0; i < size; ++i) {
@@ -37,14 +37,14 @@ public:
     
     void run() {
         if (rank_ == 0) {
-            std::cout << "============================================================\n";
+     
             std::cout << "  Row-Parallel MatMul: Compute vs Communication Breakdown\n";
-            std::cout << "============================================================\n\n";
+        
             std::cout << "Size    | Column (ms) | Row (ms) | Overhead (ms) | Comm % |\n";
             std::cout << "--------|-------------|----------|---------------|--------|\n";
         }
         
-        std::vector<int> sizes = {128, 256, 512, 1024, 2048, 4096, 8192};
+        std::vector<int> sizes = {128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576};
         
         for (int N : sizes) {
             benchmarkBoth(N);
@@ -75,7 +75,7 @@ private:
         }
 
         try {
-            // ====== Column-Parallel (Pure Compute) ======
+          
             DTensor X_col(device_mesh_, pg_);
             Layout X_col_layout = Layout::replicated(device_mesh_, {M, K});
             X_col.setData(randomData(M * K), X_col_layout);
@@ -86,13 +86,12 @@ private:
             int N_local = N / world_size_;
             W_col.setData(randomData(K * N_local), W_col_layout);
 
-            // Warmup
+   
             for(int i=0; i<WARMUP_ITERATIONS; ++i) {
                 auto Y_col = X_col.matmul(W_col);
             }
             cudaDeviceSynchronize();
-
-            // Benchmark Column-Parallel
+l
             auto col_start = std::chrono::high_resolution_clock::now();
             for(int i=0; i<NUM_ITERATIONS; ++i) {
                 auto Y_col = X_col.matmul(W_col);
@@ -101,7 +100,7 @@ private:
             auto col_end = std::chrono::high_resolution_clock::now();
             double col_ms = std::chrono::duration<double, std::milli>(col_end - col_start).count() / NUM_ITERATIONS;
 
-            // ====== Row-Parallel (Compute + AllReduce) ======
+            // Row-Parallel (Compute + AllReduce) 
             DTensor X_row(device_mesh_, pg_);
             std::vector<std::shared_ptr<Placement>> X_row_placements = { std::make_shared<Shard>(1) };
             Layout X_row_layout(device_mesh_, {M, K}, X_row_placements);
@@ -113,13 +112,13 @@ private:
             Layout W_row_layout(device_mesh_, {K, N}, W_row_placements);
             W_row.setData(randomData(K_local * N), W_row_layout);
 
-            // Warmup
+
             for(int i=0; i<WARMUP_ITERATIONS; ++i) {
                 auto Y_row = X_row.matmul(W_row);
             }
             cudaDeviceSynchronize();
 
-            // Benchmark Row-Parallel
+        
             auto row_start = std::chrono::high_resolution_clock::now();
             for(int i=0; i<NUM_ITERATIONS; ++i) {
                 auto Y_row = X_row.matmul(W_row);
@@ -128,7 +127,6 @@ private:
             auto row_end = std::chrono::high_resolution_clock::now();
             double row_ms = std::chrono::duration<double, std::milli>(row_end - row_start).count() / NUM_ITERATIONS;
 
-            // Calculate overhead (communication time)
             double overhead_ms = row_ms - col_ms;
             double comm_percent = (overhead_ms / row_ms) * 100.0;
 
