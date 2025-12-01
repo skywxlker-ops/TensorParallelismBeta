@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "process_group.h"
+#include "process_group/process_group.h"
 #include "memory/cachingAllocator.hpp"
 
 // --- Tensor & Ops Integration ---
@@ -38,6 +38,13 @@ public:
     // === MODIFIED: setData now requires a Layout ===
     // host_data must be the *local* data for this rank
     void setData(const std::vector<float>& host_data, const Layout& layout);
+    
+    // === GPU-Native Initialization ===
+    // Load full tensor on root GPU, broadcast and scatter to other GPUs
+    // host_data on root should contain the *full global* tensor
+    // Non-root ranks can pass empty vector
+    void setDataFromRoot(const std::vector<float>& host_data, const Layout& layout, int root = 0);
+    
     std::vector<float> getData() const; // Gets local data
 
     // === Tensor Ops (now sharding-aware) ===
@@ -76,6 +83,9 @@ private:
     // === NEW: Private matmul implementations ===
     DTensor _column_parallel_matmul(const DTensor& other) const;
     DTensor _row_parallel_matmul(const DTensor& other) const;
+    
+    // === NEW: Private helper for GPU-native initialization ===
+    void _extract_local_shard(const OwnTensor::Tensor& full_tensor, const Layout& layout);
 
     // --- Core Members ---
     int rank_;
