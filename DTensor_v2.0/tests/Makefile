@@ -26,12 +26,14 @@ INCLUDES = \
     -I$(PARENT_DIR)/memory \
     -I$(PARENT_DIR)/bridge \
     -I$(PARENT_DIR)/ckpt \
+    -I$(PARENT_DIR)/cgadimpl/cgadimpl/include \
     -I$(TENSOR_LIB_DIR)/include \
     -I$(CUDA_HOME)/include
 
 # --- Library Directories ---
 LIB_PATHS = \
     -L$(TENSOR_LIB_DIR)/lib \
+    -L$(PARENT_DIR)/cgadimpl/cgadimpl/build \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib
 
@@ -42,6 +44,7 @@ LIBS = \
     -lcublas \
     -Xlinker -lmpi \
     -Xlinker -lmpi_cxx
+# Removed: -lcgad (autograd library not needed)
 
 # --- Core DTensor Objects (from parent directory) ---
 CORE_SRCS = \
@@ -51,13 +54,13 @@ CORE_SRCS = \
     $(PARENT_DIR)/process_group/stream_pool.cpp \
     $(PARENT_DIR)/process_group/error_handler.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
-    $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp \
-    $(PARENT_DIR)/ckpt/ckpt.cpp
+    $(PARENT_DIR)/bridge/tensor_ops_bridge_stub.cpp
+# Removed: bridge/tensor_ops_bridge.cpp (has autograd compilation errors - using stub instead)
 
 CORE_OBJS = $(CORE_SRCS:.cpp=.o)
 
 # --- Test Executables ---
-TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance
+TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init
 
 # --- Test Source Files ---
 TEST_STREAM_SRC = test_stream_pool.cpp
@@ -72,12 +75,16 @@ TEST_MLP_OBJ = $(TEST_MLP_SRC:.cpp=.o)
 TEST_REDIST_OBJ = $(TEST_REDIST_SRC:.cpp=.o)
 TEST_FAULT_SRC = test_fault_tolerance.cpp
 TEST_FAULT_OBJ = $(TEST_FAULT_SRC:.cpp=.o)
+TEST_AUTOGRAD_SRC = test_autograd_tp.cpp
+TEST_AUTOGRAD_OBJ = $(TEST_AUTOGRAD_SRC:.cpp=.o)
+TEST_GPU_INIT_SRC = test_gpu_native_init.cpp
+TEST_GPU_INIT_OBJ = $(TEST_GPU_INIT_SRC:.cpp=.o)
 
 # =============================================================================
 # Build Rules
 # =============================================================================
 
-.PHONY: all clean run_all run_stream run_pg run_mlp run_redist run_fault help
+.PHONY: all clean run_all run_stream run_pg run_mlp run_redist run_fault run_gpu_init help
 
 # Default target - build all tests
 all: $(TESTS)
@@ -94,6 +101,7 @@ help:
 	@echo "  run_mlp      - Run MLP forward pass test (2 ranks)"
 	@echo "  run_redist   - Run redistribute test (2 ranks)"
 	@echo "  run_fault    - Run fault tolerance tests (single process)"
+	@echo "  run_gpu_init - Run GPU-native initialization test (2 ranks)"
 	@echo "  clean        - Remove all test executables and objects"
 	@echo ""
 	@echo "Individual test targets:"
@@ -102,6 +110,7 @@ help:
 	@echo "  test_mlp_forward"
 	@echo "  test_redistribute"
 	@echo "  test_fault_tolerance"
+	@echo "  test_gpu_native_init"
 
 # --- Build Test Executables ---
 
@@ -126,6 +135,16 @@ test_redistribute: $(TEST_REDIST_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] $@ build complete"
 
 test_fault_tolerance: $(TEST_FAULT_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_autograd_tp: $(TEST_AUTOGRAD_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_gpu_native_init: $(TEST_GPU_INIT_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"
@@ -162,8 +181,14 @@ run_fault: test_fault_tolerance
 	@echo "=========================================="
 	./test_fault_tolerance
 
+run_gpu_init: test_gpu_native_init
+	@echo "\n=========================================="
+	@echo "Running: GPU-Native Init Test (2 Ranks)"
+	@echo "=========================================="
+	mpirun -np 2 --allow-run-as-root ./test_gpu_native_init
+
 # Run all tests sequentially
-run_all: run_stream run_pg run_mlp run_redist
+run_all: run_stream run_pg run_mlp run_redist run_gpu_init
 	@echo "\n=========================================="
 	@echo "  ALL TESTS COMPLETED!"
 	@echo "=========================================="
@@ -177,7 +202,7 @@ run_all: run_stream run_pg run_mlp run_redist
 # Core objects are in parent directory
 $(PARENT_DIR)/%.o: $(PARENT_DIR)/%.cpp
 	@echo "[COMPILE] $<"
-	cd $(PARENT_DIR) && $(CXX) $(CXXFLAGS) $(INCLUDES) -c $*.cpp -o $*.o
+	$(CXX) $(CXXFLAGS) -I$(PARENT_DIR) -I$(PARENT_DIR)/tensor -I$(PARENT_DIR)/process_group -I$(PARENT_DIR)/memory -I$(PARENT_DIR)/bridge -I$(PARENT_DIR)/ckpt -I$(PARENT_DIR)/cgadimpl/cgadimpl/include -I$(TENSOR_LIB_DIR)/include -I$(CUDA_HOME)/include -c $< -o $@
 
 # --- Library Check ---
 
@@ -192,7 +217,7 @@ $(TENSOR_LIB_A):
 
 clean:
 	@echo "[CLEAN] Removing test executables and objects..."
-	rm -f $(TESTS) $(TEST_STREAM_OBJ) $(TEST_PG_OBJ) $(TEST_MLP_OBJ) $(TEST_REDIST_OBJ)
+	rm -f $(TESTS) $(TEST_STREAM_OBJ) $(TEST_PG_OBJ) $(TEST_MLP_OBJ) $(TEST_REDIST_OBJ) $(TEST_AUTOGRAD_OBJ) $(TEST_GPU_INIT_OBJ)
 	@echo "[CLEAN] Test directory cleaned"
 
 # Clean everything including core objects

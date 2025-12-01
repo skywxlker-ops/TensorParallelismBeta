@@ -8,7 +8,7 @@ CachingAllocator::CachingAllocator()
 
 CachingAllocator::~CachingAllocator() {
     try {
-        emptyCache(Device::CUDA);
+        emptyCache(OwnTensor::Device::CUDA);
     } catch (...) {
         // destructor must not throw
     }
@@ -129,8 +129,8 @@ void CachingAllocator::mergeAdjacent(Block* block, StreamInternal& internal) {
     }
 }
 
-void CachingAllocator::emptyCache(Device device) {
-    if (device == Device::CPU) return;
+void CachingAllocator::emptyCache(OwnTensor::Device device) {
+    if (device == OwnTensor::Device::CPU) return;
 
     std::lock_guard<std::mutex> lk(mutex_);
     for (auto& entry : stream_to_cache_) {

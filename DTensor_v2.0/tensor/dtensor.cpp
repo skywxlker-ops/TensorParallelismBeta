@@ -106,6 +106,151 @@ std::vector<float> DTensor::getData() const {
 }
 
 // =========================================================
+// GPU-Native Data Initialization
+// =========================================================
+void DTensor::setDataFromRoot(const std::vector<float>& host_data, 
+                                const Layout& layout, int root) {
+    layout_ = layout;
+    mesh_ = layout_.get_mesh();
+    
+    std::vector<int> global_shape = layout.get_global_shape();
+    std::vector<int> local_shape = layout.get_local_shape(rank_);
+    
+    size_t global_size = 1;
+    for (int d : global_shape) global_size *= d;
+    
+    size_t local_size = 1;
+    for (int d : local_shape) local_size *= d;
+    
+    // Validate input on root rank
+    if (rank_ == root && host_data.size() != global_size) {
+        std::ostringstream oss;
+        oss << "DTensor::setDataFromRoot: Root rank " << root 
+            << " host_data size (" << host_data.size() 
+            << ") does not match global tensor size (" << global_size << ").";
+        throw std::runtime_error(oss.str());
+    }
+    
+    // Case 1: Replicated layout - Broadcast full tensor directly
+    if (layout.is_replicated()) {
+        OwnTensor::Shape shape_obj;
+        shape_obj.dims.assign(global_shape.begin(), global_shape.end());
+        
+        OwnTensor::TensorOptions opts;
+        opts = opts.with_device(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_))
+                   .with_dtype(OwnTensor::Dtype::Float32);
+        
+        tensor_ = OwnTensor::Tensor(shape_obj, opts);
+        
+        // Root loads data to GPU
+        if (rank_ == root) {
+            tensor_.set_data(host_data);  // CPU → GPU on root
+        }
+        
+        // Broadcast to all ranks
+        pg_->broadcast<float>(tensor_.data<float>(), global_size, root, ncclFloat)->wait();
+        
+        shape_ = global_shape;
+        size_ = global_size;
+        temp_tensor_ = OwnTensor::Tensor(shape_obj, opts);
+        return;
+    }
+    
+    // Case 2: Sharded layout - Broadcast full tensor, then extract local shard
+    OwnTensor::Shape global_shape_obj;
+    global_shape_obj.dims.assign(global_shape.begin(), global_shape.end());
+    
+    OwnTensor::TensorOptions opts;
+    opts = opts.with_device(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_))
+               .with_dtype(OwnTensor::Dtype::Float32);
+    
+    // All ranks allocate temporary buffer for full tensor
+    OwnTensor::Tensor temp_full(global_shape_obj, opts);
+    
+    // Root loads data to GPU
+    if (rank_ == root) {
+        temp_full.set_data(host_data);  // CPU → GPU on root
+    }
+    
+    // Broadcast full tensor to all ranks
+    pg_->broadcast<float>(temp_full.data<float>(), global_size, root, ncclFloat)->wait();
+    
+    // Extract local shard from broadcasted tensor
+    _extract_local_shard(temp_full, layout);
+    
+    // Update metadata
+    shape_ = local_shape;
+    size_ = local_size;
+    
+    // Allocate temp tensor buffer for collectives
+    OwnTensor::Shape local_shape_obj;
+    local_shape_obj.dims.assign(local_shape.begin(), local_shape.end());
+    temp_tensor_ = OwnTensor::Tensor(local_shape_obj, opts);
+}
+
+// =========================================================
+// Helper: Extract Local Shard from Full Tensor
+// =========================================================
+void DTensor::_extract_local_shard(const OwnTensor::Tensor& full_tensor, 
+                                    const Layout& layout) {
+    std::vector<int> local_shape = layout.get_local_shape(rank_);
+    std::vector<int> global_shape = layout.get_global_shape();
+    
+    OwnTensor::Shape shape_obj;
+    shape_obj.dims.assign(local_shape.begin(), local_shape.end());
+    
+    OwnTensor::TensorOptions opts;
+    opts = opts.with_device(full_tensor.device())
+               .with_dtype(full_tensor.dtype());
+    
+    tensor_ = OwnTensor::Tensor(shape_obj, opts);
+    
+    size_t local_size = tensor_.numel();
+    
+    if (layout.get_shard_dim() == 0) {
+        // Row sharding: contiguous copy
+        // Calculate offset based on rank
+        size_t offset = 0;
+        for (int r = 0; r < rank_; ++r) {
+            std::vector<int> rank_shape = layout.get_local_shape(r);
+            size_t rank_local_size = 1;
+            for (int d : rank_shape) rank_local_size *= d;
+            offset += rank_local_size;
+        }
+        
+        cudaMemcpyAsync(tensor_.data<float>(), 
+                       full_tensor.data<float>() + offset,
+                       local_size * sizeof(float),
+                       cudaMemcpyDeviceToDevice, stream_);
+                       
+    } else if (layout.get_shard_dim() == 1) {
+        // Column sharding: 2D copy (non-contiguous)
+        size_t src_pitch = global_shape[1] * sizeof(float);
+        size_t dst_pitch = local_shape[1] * sizeof(float);
+        size_t width_bytes = local_shape[1] * sizeof(float);
+        size_t height = local_shape[0];
+        
+        // Calculate column offset for this rank
+        size_t col_offset = 0;
+        for (int r = 0; r < rank_; ++r) {
+            std::vector<int> rank_shape = layout.get_local_shape(r);
+            col_offset += rank_shape[1];
+        }
+        
+        cudaMemcpy2DAsync(tensor_.data<float>(), 
+                         dst_pitch,
+                         full_tensor.data<float>() + col_offset,
+                         src_pitch, 
+                         width_bytes,
+                         height,
+                         cudaMemcpyDeviceToDevice, 
+                         stream_);
+    }
+    
+    cudaStreamSynchronize(stream_);
+}
+
+// =========================================================
 // Collectives
 // =========================================================
 void DTensor::allReduce() {
@@ -153,7 +298,7 @@ DTensor DTensor::func(const DTensor& other) const { \
     if (!layout_.is_compatible(other.get_layout())) { \
         throw std::runtime_error("Incompatible layouts for operation " #op_name); \
     } \
-    OwnTensor::Tensor result = TensorOpsBridge::op_name(tensor_, other.tensor_); \
+    OwnTensor::Tensor result = Bridge::op_name(tensor_, other.tensor_); \
     /* Element-wise ops preserve layout */ \
     return DTensor(mesh_, pg_, result, layout_); \
 }
@@ -200,7 +345,7 @@ DTensor DTensor::matmul(const DTensor& other) const {
 DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
     // 1. Perform local matmul
     //    A = [M, K], B = [K, N_shard] -> Y_shard = [M, N_shard]
-    OwnTensor::Tensor Y_shard = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
+    OwnTensor::Tensor Y_shard = Bridge::matmul(this->tensor_, other.local_tensor());
 
     // 2. Calculate output global shape: [M, N_global]
     std::vector<int> Y_global_shape = {
@@ -220,7 +365,7 @@ DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
     // 1. Perform local matmul
     //    A = [M, K_shard], B = [K_shard, N] -> Y_partial = [M, N]
     //    This produces a Partial Sum result on each rank.
-    OwnTensor::Tensor Y_partial = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
+    OwnTensor::Tensor Y_partial = Bridge::matmul(this->tensor_, other.local_tensor());
 
     // 2. The *global* output shape is [M, N]
     std::vector<int> Y_global_shape = {

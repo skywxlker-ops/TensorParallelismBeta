@@ -653,3 +653,4 @@ The number of values in the shape array = number of parallelism dimensions
 The product of values = number of GPUs
 
 Hope that clears it up! 🎯
+
