@@ -40,6 +40,12 @@ void print_test(int rank, const std::string& name) {
     MPI_Barrier(MPI_COMM_WORLD);
 }
 
+size_t get_gpu_memory_used() {
+    size_t free, total;
+    CUDA_CHECK(cudaMemGetInfo(&free, &total));
+    return total - free;
+}
+
 bool compare_vectors(const std::vector<float>& a, const std::vector<float>& b, int rank, float tolerance = 1e-5) {
     if (a.size() != b.size()) {
         std::cerr << "[Rank " << rank << "] Size mismatch: " << a.size() << " vs " << b.size() << std::endl;
@@ -160,6 +166,37 @@ void test_col_sharded_init(int rank, int world_size,
     MPI_Barrier(MPI_COMM_WORLD);
 }
 
+void test_memory_benchmark(int rank, int world_size,
+                            std::shared_ptr<DeviceMesh> mesh,
+                            std::shared_ptr<ProcessGroup> pg) {
+    if (rank == 0) std::cout << "\n[Memory Benchmark]" << std::endl;
+    
+    // Use larger tensor for visible memory difference
+    std::vector<int> global_shape = {1024, 1024};  // 1M floats = 4MB
+    Layout layout_row_sharded(mesh, global_shape, ShardingType::SHARDED, 0);
+    
+    size_t before = get_gpu_memory_used();
+    
+    std::vector<float> full_data;
+    if (rank == 0) {
+        full_data.resize(1024 * 1024);
+        for (size_t i = 0; i < full_data.size(); ++i) {
+            full_data[i] = static_cast<float>(i % 100);
+        }
+    }
+    
+    DTensor tensor(mesh, pg);
+    tensor.setDataFromRoot(full_data, layout_row_sharded, 0);
+    
+    size_t after = get_gpu_memory_used();
+    size_t used = after - before;
+    
+    std::cout << "  rank " << rank << ": used " 
+              << (used / (1024.0 * 1024.0)) << " MB" << std::endl;
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+}
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 
@@ -196,6 +233,7 @@ int main(int argc, char** argv) {
     test_replicated_init(rank, world_size, mesh, pg);
     test_row_sharded_init(rank, world_size, mesh, pg);
     test_col_sharded_init(rank, world_size, mesh, pg);
+    test_memory_benchmark(rank, world_size, mesh, pg);
 
     if (rank == 0) {
         std::cout << "\nDone.\n";

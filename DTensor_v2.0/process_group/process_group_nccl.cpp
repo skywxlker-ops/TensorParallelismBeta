@@ -78,6 +78,64 @@ std::shared_ptr<Work> ProcessGroup::broadcast(T* data, size_t count, int root, n
     return work;
 }
 
+// ------------------------------------------------
+// Point-to-Point: Send
+// ------------------------------------------------
+template <typename T>
+std::shared_ptr<Work> ProcessGroup::send(T* data, size_t count, int dest, ncclDataType_t dtype) {
+    auto work = std::make_shared<Work>(stream_);
+    NCCL_CHECK(ncclGroupStart());
+    NCCL_CHECK(ncclSend(data, count, dtype, dest, comm_, stream_));
+    NCCL_CHECK(ncclGroupEnd());
+    work->markCompleted(true);
+    return work;
+}
+
+// ------------------------------------------------
+// Point-to-Point: Recv
+// ------------------------------------------------
+template <typename T>
+std::shared_ptr<Work> ProcessGroup::recv(T* data, size_t count, int src, ncclDataType_t dtype) {
+    auto work = std::make_shared<Work>(stream_);
+    NCCL_CHECK(ncclGroupStart());
+    NCCL_CHECK(ncclRecv(data, count, dtype, src, comm_, stream_));
+    NCCL_CHECK(ncclGroupEnd());
+    work->markCompleted(true);
+    return work;
+}
+
+// ------------------------------------------------
+// Scatter: Root sends different chunks to each rank
+// ------------------------------------------------
+template <typename T>
+std::shared_ptr<Work> ProcessGroup::scatter(T* send_buf, T* recv_buf, size_t recv_count, int root, ncclDataType_t dtype) {
+    auto work = std::make_shared<Work>(stream_);
+    
+    NCCL_CHECK(ncclGroupStart());
+    
+    if (rank_ == root) {
+        // Root sends to each rank
+        for (int dest = 0; dest < world_size_; ++dest) {
+            T* chunk = send_buf + (dest * recv_count);
+            if (dest == root) {
+                // Self-copy for root
+                CUDA_CHECK(cudaMemcpyAsync(recv_buf, chunk, 
+                                          recv_count * sizeof(T),
+                                          cudaMemcpyDeviceToDevice, stream_));
+            } else {
+                NCCL_CHECK(ncclSend(chunk, recv_count, dtype, dest, comm_, stream_));
+            }
+        }
+    } else {
+        // Non-root receives
+        NCCL_CHECK(ncclRecv(recv_buf, recv_count, dtype, root, comm_, stream_));
+    }
+    
+    NCCL_CHECK(ncclGroupEnd());
+    work->markCompleted(true);
+    return work;
+}
+
 // -------------------------------------------------------------
 // ✅ Force Template Instantiations + Explicit Exports
 // -------------------------------------------------------------
@@ -86,12 +144,18 @@ std::shared_ptr<Work> ProcessGroup::broadcast(T* data, size_t count, int root, n
     template std::shared_ptr<Work> ProcessGroup::reduceScatter<T>(T*, T*, size_t, ncclDataType_t); \
     template std::shared_ptr<Work> ProcessGroup::allGather<T>(T*, T*, size_t, ncclDataType_t); \
     template std::shared_ptr<Work> ProcessGroup::broadcast<T>(T*, size_t, int, ncclDataType_t); \
+    template std::shared_ptr<Work> ProcessGroup::send<T>(T*, size_t, int, ncclDataType_t); \
+    template std::shared_ptr<Work> ProcessGroup::recv<T>(T*, size_t, int, ncclDataType_t); \
+    template std::shared_ptr<Work> ProcessGroup::scatter<T>(T*, T*, size_t, int, ncclDataType_t); \
     extern "C" __attribute__((visibility("default"))) void _force_link_##NCTYPE() { \
         volatile auto f1 = &ProcessGroup::allReduce<T>; \
         volatile auto f2 = &ProcessGroup::reduceScatter<T>; \
         volatile auto f3 = &ProcessGroup::allGather<T>; \
         volatile auto f4 = &ProcessGroup::broadcast<T>; \
-        (void)f1; (void)f2; (void)f3; (void)f4; \
+        volatile auto f5 = &ProcessGroup::send<T>; \
+        volatile auto f6 = &ProcessGroup::recv<T>; \
+        volatile auto f7 = &ProcessGroup::scatter<T>; \
+        (void)f1; (void)f2; (void)f3; (void)f4; (void)f5; (void)f6; (void)f7; \
     }
 
 INSTANTIATE_AND_EXPORT(float, float)

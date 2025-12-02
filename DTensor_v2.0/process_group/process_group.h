@@ -39,6 +39,17 @@ public:
     template<typename T>
     std::shared_ptr<Work> broadcast(T* data, size_t count, int root, ncclDataType_t dtype);
 
+    // Point-to-point operations
+    template<typename T>
+    std::shared_ptr<Work> send(T* data, size_t count, int dest, ncclDataType_t dtype);
+
+    template<typename T>
+    std::shared_ptr<Work> recv(T* data, size_t count, int src, ncclDataType_t dtype);
+
+    // Scatter operation (root sends different chunks to each rank)
+    template<typename T>
+    std::shared_ptr<Work> scatter(T* send_buf, T* recv_buf, size_t recv_count, int root, ncclDataType_t dtype);
+
     cudaStream_t getStream() const { return stream_; }
     ncclComm_t getComm() const { return comm_; }
 

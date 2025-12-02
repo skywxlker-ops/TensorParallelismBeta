@@ -60,7 +60,7 @@ CORE_SRCS = \
 CORE_OBJS = $(CORE_SRCS:.cpp=.o)
 
 # --- Test Executables ---
-TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init
+TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter
 
 # --- Test Source Files ---
 TEST_STREAM_SRC = test_stream_pool.cpp
@@ -79,6 +79,8 @@ TEST_AUTOGRAD_SRC = test_autograd_tp.cpp
 TEST_AUTOGRAD_OBJ = $(TEST_AUTOGRAD_SRC:.cpp=.o)
 TEST_GPU_INIT_SRC = test_gpu_native_init.cpp
 TEST_GPU_INIT_OBJ = $(TEST_GPU_INIT_SRC:.cpp=.o)
+TEST_P2P_SRC = test_p2p_scatter.cpp
+TEST_P2P_OBJ = $(TEST_P2P_SRC:.cpp=.o)
 
 # =============================================================================
 # Build Rules
@@ -145,6 +147,11 @@ test_autograd_tp: $(TEST_AUTOGRAD_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] $@ build complete"
 
 test_gpu_native_init: $(TEST_GPU_INIT_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_p2p_scatter: $(TEST_P2P_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"
