@@ -156,35 +156,58 @@ void DTensor::setDataFromRoot(const std::vector<float>& host_data,
         return;
     }
     
-    // Case 2: Sharded layout - Broadcast full tensor, then extract local shard
-    OwnTensor::Shape global_shape_obj;
-    global_shape_obj.dims.assign(global_shape.begin(), global_shape.end());
-    
+    // Case 2: Sharded layout - Use scatter for memory efficiency
     OwnTensor::TensorOptions opts;
     opts = opts.with_device(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_))
                .with_dtype(OwnTensor::Dtype::Float32);
     
-    // All ranks allocate temporary buffer for full tensor
-    OwnTensor::Tensor temp_full(global_shape_obj, opts);
+    // Allocate local shard only (no temp full tensor!)
+    OwnTensor::Shape local_shape_obj;
+    local_shape_obj.dims.assign(local_shape.begin(), local_shape.end());
+    tensor_ = OwnTensor::Tensor(local_shape_obj, opts);
     
-    // Root loads data to GPU
-    if (rank_ == root) {
-        temp_full.set_data(host_data);  // CPU → GPU on root
+    if (layout.get_shard_dim() == 0) {
+        // Row-sharded: Use scatter directly (contiguous chunks)
+        OwnTensor::Tensor* temp_full_ptr = nullptr;
+        if (rank_ == root) {
+            // Root loads full tensor
+            OwnTensor::Shape global_shape_obj;
+            global_shape_obj.dims.assign(global_shape.begin(), global_shape.end());
+            temp_full_ptr = new OwnTensor::Tensor(global_shape_obj, opts);
+            temp_full_ptr->set_data(host_data);  // CPU → GPU on root
+        }
+        
+        // Scatter: root sends different chunks to each rank
+        pg_->scatter<float>(
+            temp_full_ptr ? temp_full_ptr->data<float>() : nullptr,  // send_buf (root only)
+            tensor_.data<float>(),                                     // recv_buf (all ranks)
+            local_size,                                                // recv_count
+            root,
+            ncclFloat
+        )->wait();
+        
+        if (temp_full_ptr) delete temp_full_ptr;
+        
+    } else if (layout.get_shard_dim() == 1) {
+        // Column-sharded: Need broadcast then 2D extract (non-contiguous)
+        // TODO: Could optimize with custom packing, but broadcast+slice works for now
+        OwnTensor::Shape global_shape_obj;
+        global_shape_obj.dims.assign(global_shape.begin(), global_shape.end());
+        OwnTensor::Tensor temp_full(global_shape_obj, opts);
+        
+        if (rank_ == root) {
+            temp_full.set_data(host_data);
+        }
+        
+        pg_->broadcast<float>(temp_full.data<float>(), global_size, root, ncclFloat)->wait();
+        _extract_local_shard(temp_full, layout);
     }
-    
-    // Broadcast full tensor to all ranks
-    pg_->broadcast<float>(temp_full.data<float>(), global_size, root, ncclFloat)->wait();
-    
-    // Extract local shard from broadcasted tensor
-    _extract_local_shard(temp_full, layout);
     
     // Update metadata
     shape_ = local_shape;
     size_ = local_size;
     
     // Allocate temp tensor buffer for collectives
-    OwnTensor::Shape local_shape_obj;
-    local_shape_obj.dims.assign(local_shape.begin(), local_shape.end());
     temp_tensor_ = OwnTensor::Tensor(local_shape_obj, opts);
 }
 
