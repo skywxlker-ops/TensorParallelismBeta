@@ -2,9 +2,7 @@
 #include <algorithm>
 #include <cassert>
 
-// =========================================================
-// Constructor
-// =========================================================
+
 DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape, 
                        const std::vector<int>& device_ids)
     : mesh_shape_(mesh_shape) {
@@ -12,12 +10,11 @@ DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape,
     if (mesh_shape_.empty()) {
         throw std::runtime_error("DeviceMesh: mesh_shape cannot be empty");
     }
-    
-    // Calculate total number of devices
+
     total_devices_ = std::accumulate(mesh_shape_.begin(), mesh_shape_.end(), 
                                      1, std::multiplies<int>());
     
-    // Get global rank from MPI
+
     MPI_Comm_rank(MPI_COMM_WORLD, &global_rank_);
     
     int world_size;
@@ -29,10 +26,9 @@ DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape,
                                 ") must match MPI world size (" + 
                                 std::to_string(world_size) + ")");
     }
-    
-    // Setup device IDs
+
     if (device_ids.empty()) {
-        // Default: device_ids = [0, 1, 2, ..., N-1]
+        
         device_ids_.resize(total_devices_);
         std::iota(device_ids_.begin(), device_ids_.end(), 0);
     } else {
@@ -42,25 +38,33 @@ DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape,
         device_ids_ = device_ids;
     }
     
-    // Compute this rank's coordinate in the mesh
+
     my_coordinate_ = get_coordinate(global_rank_);
     
-    // Initialize process groups for each mesh dimension
+
     initialize_process_groups();
 }
 
 DeviceMesh::~DeviceMesh() {
-    // ProcessGroup destructors will handle cleanup
+    // Check if MPI is still active before freeing communicators
+    int finalized = 0;
+    MPI_Finalized(&finalized);
+    
+    if (!finalized) {
+        for (auto& comm : mpi_comms_) {
+            if (comm != MPI_COMM_NULL) {
+                MPI_Comm_free(&comm);
+            }
+        }
+    }
 }
 
-// =========================================================
-// Coordinate Mapping
-// =========================================================
+
 std::vector<int> DeviceMesh::get_coordinate(int rank) const {
     std::vector<int> coord(ndim());
     int remaining = rank;
     
-    // Row-major ordering: rightmost dimension varies fastest
+    // Row-major ordering (x,y) y changes faster
     for (int dim = ndim() - 1; dim >= 0; --dim) {
         coord[dim] = remaining % mesh_shape_[dim];
         remaining /= mesh_shape_[dim];
@@ -89,20 +93,14 @@ int DeviceMesh::get_rank(const std::vector<int>& coordinate) const {
     return rank;
 }
 
-// =========================================================
-// Process Group Management
-// =========================================================
+
 std::vector<int> DeviceMesh::get_group_ranks(int mesh_dim) const {
     if (mesh_dim < 0 || mesh_dim >= ndim()) {
         throw std::runtime_error("DeviceMesh: invalid mesh_dim");
     }
     
     std::vector<int> ranks;
-    
-    // All ranks that differ only in mesh_dim coordinate
-    // Example: 2D mesh [2, 2], rank 0 at [0, 0], mesh_dim=0
-    // -> group ranks are [0, 2] (coords [0,0] and [1,0])
-    
+
     std::vector<int> base_coord = my_coordinate_;
     
     for (int i = 0; i < mesh_shape_[mesh_dim]; ++i) {
@@ -122,39 +120,76 @@ int DeviceMesh::get_dim_rank(int mesh_dim) const {
 
 void DeviceMesh::initialize_process_groups() {
     process_groups_.resize(ndim());
+    mpi_comms_.resize(ndim(), MPI_COMM_NULL);
     
     for (int mesh_dim = 0; mesh_dim < ndim(); ++mesh_dim) {
-        // Get ranks in this dimension's process group
+  
         std::vector<int> group_ranks = get_group_ranks(mesh_dim);
         int group_size = group_ranks.size();
-        
-        // Find my position in this group
+ 
         auto it = std::find(group_ranks.begin(), group_ranks.end(), global_rank_);
         int my_group_rank = std::distance(group_ranks.begin(), it);
         
-        // Create NCCL unique ID (use first rank in group as root)
-        ncclUniqueId nccl_id = create_nccl_id(group_ranks[0]);
+        int color = 0;
+        int multiplier = 1;
+        for (int d = ndim() - 1; d >= 0; --d) {
+            if (d != mesh_dim) { 
+                color += my_coordinate_[d] * multiplier;
+                multiplier *= mesh_shape_[d];
+            }
+        }
+
+        int key = my_coordinate_[mesh_dim];
+
+       
+        int mpi_err = MPI_Comm_split(MPI_COMM_WORLD, color, key, &mpi_comms_[mesh_dim]);
+        if (mpi_err != MPI_SUCCESS) {
+            throw std::runtime_error("DeviceMesh: MPI_Comm_split failed for mesh_dim " + 
+                                   std::to_string(mesh_dim));
+        }
         
-        // Get CUDA device for this rank
+      
+        int sub_comm_size;
+        MPI_Comm_size(mpi_comms_[mesh_dim], &sub_comm_size);
+        if (sub_comm_size != group_size) {
+            std::cerr << "[Rank " << global_rank_ << "] ERROR: mesh_dim=" << mesh_dim
+                      << " sub_comm_size=" << sub_comm_size 
+                      << " expected=" << group_size << "\n";
+            throw std::runtime_error("DeviceMesh: MPI sub-communicator size mismatch");
+        }
+        
+        int sub_comm_rank;
+        MPI_Comm_rank(mpi_comms_[mesh_dim], &sub_comm_rank);
+        if (sub_comm_rank != my_group_rank) {
+            std::cerr << "[Rank " << global_rank_ << "] ERROR: mesh_dim=" << mesh_dim
+                      << " sub_comm_rank=" << sub_comm_rank 
+                      << " expected=" << my_group_rank << "\n";
+            throw std::runtime_error("DeviceMesh: MPI sub-communicator rank mismatch");
+        }
+        
+  
+        ncclUniqueId nccl_id = create_nccl_id(0, mpi_comms_[mesh_dim]);
+        
+
         int device = device_ids_[global_rank_];
-        
-        // Create ProcessGroup for this mesh dimension
-        // Note: ProcessGroup expects (rank_in_group, group_size, device, nccl_id)
+
         process_groups_[mesh_dim] = std::make_shared<ProcessGroup>(
             my_group_rank, group_size, device, nccl_id
         );
     }
 }
 
-ncclUniqueId DeviceMesh::create_nccl_id(int root_rank) {
+ncclUniqueId DeviceMesh::create_nccl_id(int root_rank, MPI_Comm comm) {
     ncclUniqueId nccl_id;
+
+    int my_rank_in_comm;
+    MPI_Comm_rank(comm, &my_rank_in_comm);
     
-    if (global_rank_ == root_rank) {
+    if (my_rank_in_comm == root_rank) {
         ncclGetUniqueId(&nccl_id);
     }
-    
-    // Broadcast the NCCL ID to all ranks
-    MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, root_rank, MPI_COMM_WORLD);
+
+    MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, root_rank, comm);
     
     return nccl_id;
 }
@@ -166,23 +201,19 @@ std::shared_ptr<ProcessGroup> DeviceMesh::get_process_group(int mesh_dim) {
     return process_groups_[mesh_dim];
 }
 
-// =========================================================
-// Accessors
-// =========================================================
+
 int DeviceMesh::size() const {
     return total_devices_;
 }
 
-// =========================================================
-// Debug
-// =========================================================
+
 void DeviceMesh::describe() const {
     std::ostringstream oss;
     oss << "[DeviceMesh] Rank " << global_rank_ << "/" << total_devices_ << " | Shape: [";
     for (size_t i = 0; i < mesh_shape_.size(); ++i) {
         oss << mesh_shape_[i];
         if (i < mesh_shape_.size() - 1) oss << ", ";
-    }
+    }   
     oss << "] | Coordinate: [";
     for (size_t i = 0; i < my_coordinate_.size(); ++i) {
         oss << my_coordinate_[i];
@@ -192,3 +223,5 @@ void DeviceMesh::describe() const {
     
     std::cout << oss.str() << std::endl;
 }
+
+
