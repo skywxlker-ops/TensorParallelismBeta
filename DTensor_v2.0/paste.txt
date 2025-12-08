@@ -52,4 +52,3 @@ checkpointing
  // Example: 2D mesh [2, 2], rank 0 at [0, 0], mesh_dim=0
  // -> group ranks are [0, 2] (coords [0,0] and [1,0])
 
-

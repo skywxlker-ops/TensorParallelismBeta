@@ -40,6 +40,11 @@ Tensor mul(const Tensor& A, const Tensor& B) {
     return A * B;
 }
 
+Tensor mul(const Tensor& A, float scalar) {
+    // Scalar multiplication - multiply all elements by scalar
+    return A * scalar;
+}
+
 Tensor div(const Tensor& A, const Tensor& B) {
     if (A.shape().dims != B.shape().dims)
         throw std::runtime_error("div: shape mismatch between tensors");

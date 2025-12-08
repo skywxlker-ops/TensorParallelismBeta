@@ -47,6 +47,36 @@ public:
 
     DTensor reshape(const std::vector<int>& new_global_shape) const;
 
+    // Layout transformations (in-place)
+    /**
+     * Replicate tensor to all devices using Broadcast (in-place).
+     * Broadcasts tensor from root GPU to all other GPUs.
+     * Modifies this tensor to have replicated layout.
+     * @param root Root rank that has the data to broadcast (default: 0)
+     */
+    void replicate(int root = 0);
+    
+    /**
+     * Shard tensor across devices (in-place).
+     * Distributes tensor along specified dimension to all GPUs.
+     * Can be called on any tensor (not just replicated ones).
+     * @param dim Dimension along which to shard
+     * @param root Root rank for initial data distribution (default: 0)
+     */
+    void shard(int dim, int root = 0);
+
+    /**
+     * Synchronize tensor values across all GPUs using AllReduce with SUM (in-place).
+     * Sums tensor values across all devices.
+     * Used for aggregating partial results (e.g., row-parallel matmul).
+     */
+    void sync();
+
+    /**
+     * Scale tensor values by a factor (in-place).
+     * Multiplies all elements by the given scalar.
+     */
+    void scale(float factor);
     void saveCheckpoint(const std::string& path) const;
     void loadCheckpoint(const std::string& path);
 

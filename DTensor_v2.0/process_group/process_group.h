@@ -21,6 +21,7 @@ private:
     bool success_;
 };
 
+
 // ---------------- ProcessGroup ----------------
 class ProcessGroup {
 public:
@@ -28,7 +29,8 @@ public:
     ~ProcessGroup();
 
     template<typename T>
-    std::shared_ptr<Work> allReduce(T* data, size_t count, ncclDataType_t dtype);
+    std::shared_ptr<Work> allReduce(T* data, size_t count, ncclDataType_t dtype, ncclRedOp_t op = ncclSum);
+
 
     template<typename T>
     std::shared_ptr<Work> reduceScatter(T* data, size_t count_per_shard, ncclDataType_t dtype);

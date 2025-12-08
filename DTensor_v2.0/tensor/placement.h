@@ -7,6 +7,7 @@ enum class PlacementType {
     SHARD,      
     REPLICATE,  
     PARTIAL     
+};
 
 
 class Placement {

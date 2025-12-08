@@ -46,14 +46,19 @@ DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape,
 }
 
 DeviceMesh::~DeviceMesh() {
-
-    for (auto& comm : mpi_comms_) {
-        if (comm != MPI_COMM_NULL) {
-            MPI_Comm_free(&comm);
+    // Check if MPI is still active before freeing communicators
+    int finalized = 0;
+    MPI_Finalized(&finalized);
+    
+    if (!finalized) {
+        for (auto& comm : mpi_comms_) {
+            if (comm != MPI_COMM_NULL) {
+                MPI_Comm_free(&comm);
+            }
         }
     }
-   
 }
+
 
 std::vector<int> DeviceMesh::get_coordinate(int rank) const {
     std::vector<int> coord(ndim());
@@ -208,7 +213,7 @@ void DeviceMesh::describe() const {
     for (size_t i = 0; i < mesh_shape_.size(); ++i) {
         oss << mesh_shape_[i];
         if (i < mesh_shape_.size() - 1) oss << ", ";
-    }
+    }   
     oss << "] | Coordinate: [";
     for (size_t i = 0; i < my_coordinate_.size(); ++i) {
         oss << my_coordinate_[i];
@@ -218,3 +223,5 @@ void DeviceMesh::describe() const {
     
     std::cout << oss.str() << std::endl;
 }
+
+

@@ -32,3 +32,5 @@ ncclUniqueId create_nccl_id(int root_rank, MPI_Comm comm) {
     
     return nccl_id;
 }
+
+

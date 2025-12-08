@@ -18,6 +18,7 @@ OwnTensor::Tensor matmul(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B)
 OwnTensor::Tensor add(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
 OwnTensor::Tensor sub(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
 OwnTensor::Tensor mul(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
+OwnTensor::Tensor mul(const OwnTensor::Tensor& A, float scalar);  // Scalar multiplication
 OwnTensor::Tensor div(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
 
 DTensor from_data(

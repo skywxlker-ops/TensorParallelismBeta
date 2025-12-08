@@ -41,12 +41,13 @@ ProcessGroup::~ProcessGroup() {
 
 
 template <typename T>
-std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataType_t dtype, comm comm_) {
+std::shared_ptr<Work> ProcessGroup::allReduce(T* data, size_t count, ncclDataType_t dtype, ncclRedOp_t op) {
     auto work = std::make_shared<Work>(stream_);
-    ncclAllReduce(data, data, count, dtype, ncclSum, comm_, stream_);
+    ncclAllReduce(data, data, count, dtype, op, comm_, stream_);
     work->markCompleted(true);
     return work;
 }
+
 
 template <typename T>
 std::shared_ptr<Work> ProcessGroup::reduceScatter(T* data, size_t count_per_shard, ncclDataType_t dtype) {
@@ -81,8 +82,9 @@ std::shared_ptr<Work> ProcessGroup::scatter(T* data, size_t count_per_shard, int
     return work;
 }
 
+
 #define INSTANTIATE_AND_EXPORT(T, NCTYPE) \
-    template std::shared_ptr<Work> ProcessGroup::allReduce<T>(T*, size_t, ncclDataType_t); \
+    template std::shared_ptr<Work> ProcessGroup::allReduce<T>(T*, size_t, ncclDataType_t, ncclRedOp_t); \
     template std::shared_ptr<Work> ProcessGroup::reduceScatter<T>(T*, size_t, ncclDataType_t); \
     template std::shared_ptr<Work> ProcessGroup::allGather<T>(T*, size_t, ncclDataType_t); \
     template std::shared_ptr<Work> ProcessGroup::broadcast<T>(T*, size_t, int, ncclDataType_t); \

@@ -120,7 +120,7 @@ clean:
 
 
 
-.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom
+.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom gradient_sync_example
 
 TEST_DEVICE_MESH_SRCS = \
 	tests/test_device_mesh.cpp \
@@ -217,3 +217,42 @@ row_parallel_breakdown_custom: $(ROW_BREAKDOWN_CUSTOM_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(ROW_BREAKDOWN_CUSTOM_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Custom Row-Parallel Breakdown build complete."
 	@echo "\nRun : mpirun -np 2 ./benchmarks/row_parallel_breakdown_custom\n"
+
+GRADIENT_SYNC_SRCS = \
+	examples/gradient_sync_example.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+GRADIENT_SYNC_OBJS = $(GRADIENT_SYNC_SRCS:.cpp=.o)
+
+examples/%.o: examples/%.cpp
+	@echo "[COMPILE] $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+gradient_sync_example: $(GRADIENT_SYNC_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(GRADIENT_SYNC_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Gradient Sync Example build complete."
+	@echo "\nRun with 4 GPUs: mpirun -np 4 ./examples/gradient_sync_example\n"
+
+# Tensor Parallel MLP Example
+TP_MLP_SRCS = \
+	examples/tensor_parallel_mlp.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TP_MLP_OBJS = $(TP_MLP_SRCS:.cpp=.o)
+
+tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
+	@echo "\nRun with 2 GPUs: mpirun -np 2 ./examples/tensor_parallel_mlp\n"
