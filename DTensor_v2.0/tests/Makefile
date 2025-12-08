@@ -49,18 +49,18 @@ LIBS = \
 # --- Core DTensor Objects (from parent directory) ---
 CORE_SRCS = \
     $(PARENT_DIR)/tensor/dtensor.cpp \
+    $(PARENT_DIR)/tensor/dtensor_native.cpp \
     $(PARENT_DIR)/tensor/device_mesh.cpp \
     $(PARENT_DIR)/process_group/process_group_nccl.cpp \
-    $(PARENT_DIR)/process_group/stream_pool.cpp \
-    $(PARENT_DIR)/process_group/error_handler.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
-    $(PARENT_DIR)/bridge/tensor_ops_bridge_stub.cpp
-# Removed: bridge/tensor_ops_bridge.cpp (has autograd compilation errors - using stub instead)
+    $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp \
+    $(PARENT_DIR)/ckpt/ckpt.cpp
+# Removed: stream_pool.cpp, error_handler.cpp, tensor_ops_bridge_stub.cpp (not in cloned version)
 
 CORE_OBJS = $(CORE_SRCS:.cpp=.o)
 
 # --- Test Executables ---
-TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter
+TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark
 
 # --- Test Source Files ---
 TEST_STREAM_SRC = test_stream_pool.cpp
@@ -81,6 +81,12 @@ TEST_GPU_INIT_SRC = test_gpu_native_init.cpp
 TEST_GPU_INIT_OBJ = $(TEST_GPU_INIT_SRC:.cpp=.o)
 TEST_P2P_SRC = test_p2p_scatter.cpp
 TEST_P2P_OBJ = $(TEST_P2P_SRC:.cpp=.o)
+TEST_BENCHMARK_SRC = test_benchmark_init.cpp
+TEST_BENCHMARK_OBJ = $(TEST_BENCHMARK_SRC:.cpp=.o)
+TEST_PIPELINED_SRC = test_pipelined_init.cpp
+TEST_PIPELINED_OBJ = $(TEST_PIPELINED_SRC:.cpp=.o)
+TEST_ARCH_SRC = test_architecture_benchmark.cpp
+TEST_ARCH_OBJ = $(TEST_ARCH_SRC:.cpp=.o)
 
 # =============================================================================
 # Build Rules
@@ -152,6 +158,21 @@ test_gpu_native_init: $(TEST_GPU_INIT_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] $@ build complete"
 
 test_p2p_scatter: $(TEST_P2P_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_benchmark_init: $(TEST_BENCHMARK_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_pipelined_init: $(TEST_PIPELINED_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_architecture_benchmark: $(TEST_ARCH_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"

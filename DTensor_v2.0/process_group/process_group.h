@@ -21,6 +21,7 @@ private:
     bool success_;
 };
 
+
 // ---------------- ProcessGroup ----------------
 class ProcessGroup {
 public:
@@ -28,32 +29,24 @@ public:
     ~ProcessGroup();
 
     template<typename T>
-    std::shared_ptr<Work> allReduce(T* data, size_t count, ncclDataType_t dtype);
+    std::shared_ptr<Work> allReduce(const T* input, T* output, size_t count, ncclDataType_t dtype, ncclRedOp_t op = ncclSum);
 
     template<typename T>
-    std::shared_ptr<Work> reduceScatter(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype);
+    std::shared_ptr<Work> reduceScatter(const T* input, T* output, size_t count_per_shard, ncclDataType_t dtype);
 
     template<typename T>
-    std::shared_ptr<Work> allGather(T* recv_buf, T* send_buf, size_t count_per_rank, ncclDataType_t dtype);
+    std::shared_ptr<Work> allGather(const T* input, T* output, size_t count_per_rank, ncclDataType_t dtype);
 
     template<typename T>
-    std::shared_ptr<Work> broadcast(T* data, size_t count, int root, ncclDataType_t dtype);
-
-    // Point-to-point operations
-    template<typename T>
-    std::shared_ptr<Work> send(T* data, size_t count, int dest, ncclDataType_t dtype);
+    std::shared_ptr<Work> broadcast(const T* input, T* output, size_t count, int root, ncclDataType_t dtype);
 
     template<typename T>
-    std::shared_ptr<Work> recv(T* data, size_t count, int src, ncclDataType_t dtype);
-
-    // Scatter operation (root sends different chunks to each rank)
-    template<typename T>
-    std::shared_ptr<Work> scatter(T* send_buf, T* recv_buf, size_t recv_count, int root, ncclDataType_t dtype);
+    std::shared_ptr<Work> scatter(const T* input, T* output, size_t count_per_shard, int root, ncclDataType_t dtype);
 
     cudaStream_t getStream() const { return stream_; }
     ncclComm_t getComm() const { return comm_; }
 
-    // Accessors for PyBind11
+    
     int getRank() const { return rank_; }
     int getWorldSize() const { return world_size_; }
     int getDevice() const { return device_; }
@@ -64,7 +57,7 @@ private:
     cudaStream_t stream_;
 };
 
-// === NCCL Type helper ===
+// NCCL Type helper 
 inline ncclDataType_t getNcclType(const std::string& dtype) {
     if (dtype == "float32") return ncclFloat;
     if (dtype == "float64") return ncclDouble;
