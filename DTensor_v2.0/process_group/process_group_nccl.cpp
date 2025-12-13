@@ -33,7 +33,7 @@ ProcessGroup::ProcessGroup(int rank, int world_size, int device, const ncclUniqu
 }
 
 ProcessGroup::~ProcessGroup() {
-    std::cerr << "[ProcessGroup] Destroyed" << std::endl;
+    // std::cerr << "[ProcessGroup] Destroyed" << std::endl;
     ncclCommDestroy(comm_);
     cudaStreamDestroy(stream_);
 }

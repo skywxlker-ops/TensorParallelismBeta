@@ -60,7 +60,7 @@ CORE_SRCS = \
 CORE_OBJS = $(CORE_SRCS:.cpp=.o)
 
 # --- Test Executables ---
-TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark
+TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
 
 # --- Test Source Files ---
 TEST_STREAM_SRC = test_stream_pool.cpp
@@ -87,6 +87,12 @@ TEST_PIPELINED_SRC = test_pipelined_init.cpp
 TEST_PIPELINED_OBJ = $(TEST_PIPELINED_SRC:.cpp=.o)
 TEST_ARCH_SRC = test_architecture_benchmark.cpp
 TEST_ARCH_OBJ = $(TEST_ARCH_SRC:.cpp=.o)
+TEST_LAYOUTS_SRC = test_benchmark_layouts.cpp
+TEST_LAYOUTS_OBJ = $(TEST_LAYOUTS_SRC:.cpp=.o)
+TEST_ATTN_SRC = test_attention_parallel.cpp
+TEST_ATTN_OBJ = $(TEST_ATTN_SRC:.cpp=.o)
+TEST_MLP_BENCH_SRC = test_mlp_benchmark.cpp
+TEST_MLP_BENCH_OBJ = $(TEST_MLP_BENCH_SRC:.cpp=.o)
 
 # =============================================================================
 # Build Rules
@@ -177,6 +183,21 @@ test_architecture_benchmark: $(TEST_ARCH_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"
 
+test_benchmark_layouts: $(TEST_LAYOUTS_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_attention_parallel: $(TEST_ATTN_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_mlp_benchmark: $(TEST_MLP_BENCH_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
 # --- Run Test Rules ---
 
 run_stream: test_stream_pool
@@ -214,6 +235,18 @@ run_gpu_init: test_gpu_native_init
 	@echo "Running: GPU-Native Init Test (2 Ranks)"
 	@echo "=========================================="
 	mpirun -np 2 --allow-run-as-root ./test_gpu_native_init
+
+run_mlp_bench_single: test_mlp_benchmark
+	@echo "\n=========================================="
+	@echo "Running: MLP Benchmark (Single GPU)"
+	@echo "=========================================="
+	./test_mlp_benchmark
+
+run_mlp_bench_tp: test_mlp_benchmark
+	@echo "\n=========================================="
+	@echo "Running: MLP Benchmark (2-GPU TP)"
+	@echo "=========================================="
+	mpirun -np 2 --allow-run-as-root ./test_mlp_benchmark
 
 # Run all tests sequentially
 run_all: run_stream run_pg run_mlp run_redist run_gpu_init
