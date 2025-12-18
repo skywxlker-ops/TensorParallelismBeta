@@ -28,14 +28,21 @@ bool Work::wait() {
 ProcessGroup::ProcessGroup(int rank, int world_size, int device, const ncclUniqueId &id)
     : rank_(rank), world_size_(world_size), device_(device) {
     cudaSetDevice(device_);
-    cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+    
+    // Initialize stream pool with 4 streams (compute, comm, data, general)
+    stream_pool_ = std::make_shared<StreamPool>(device_, 4);
+    
+    // Use communication stream for NCCL operations
+    stream_ = stream_pool_->getCommStream();
+    
     ncclCommInitRank(&comm_, world_size_, id, rank_);
 }
 
 ProcessGroup::~ProcessGroup() {
     // std::cerr << "[ProcessGroup] Destroyed" << std::endl;
     ncclCommDestroy(comm_);
-    cudaStreamDestroy(stream_);
+    // StreamPool destructor handles stream cleanup
+    stream_pool_.reset();
 }
 
 
@@ -108,3 +115,20 @@ INSTANTIATE_AND_EXPORT(long long, int64)
 
 
 
+
+// NCCL Grouped Operations Support
+void ProcessGroup::startGroup() {
+    if (in_group_) {
+        throw std::runtime_error("[ProcessGroup] Already in NCCL group - cannot nest groups");
+    }
+    ncclGroupStart();
+    in_group_ = true;
+}
+
+void ProcessGroup::endGroup() {
+    if (!in_group_) {
+        throw std::runtime_error("[ProcessGroup] Not in NCCL group - cannot call endGroup");
+    }
+    ncclGroupEnd();
+    in_group_ = false;
+}

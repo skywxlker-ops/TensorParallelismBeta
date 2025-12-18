@@ -51,6 +51,7 @@ CORE_SRCS = \
     $(PARENT_DIR)/tensor/dtensor.cpp \
     $(PARENT_DIR)/tensor/dtensor_native.cpp \
     $(PARENT_DIR)/tensor/device_mesh.cpp \
+    $(PARENT_DIR)/tensor/activation_kernels.cu \
     $(PARENT_DIR)/process_group/process_group_nccl.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
     $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp \
@@ -58,6 +59,8 @@ CORE_SRCS = \
 # Removed: stream_pool.cpp, error_handler.cpp, tensor_ops_bridge_stub.cpp (not in cloned version)
 
 CORE_OBJS = $(CORE_SRCS:.cpp=.o)
+CORE_OBJS := $(CORE_OBJS:.cu=.o)
+
 
 # --- Test Executables ---
 TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
@@ -264,6 +267,11 @@ run_all: run_stream run_pg run_mlp run_redist run_gpu_init
 $(PARENT_DIR)/%.o: $(PARENT_DIR)/%.cpp
 	@echo "[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) -I$(PARENT_DIR) -I$(PARENT_DIR)/tensor -I$(PARENT_DIR)/process_group -I$(PARENT_DIR)/memory -I$(PARENT_DIR)/bridge -I$(PARENT_DIR)/ckpt -I$(PARENT_DIR)/cgadimpl/cgadimpl/include -I$(TENSOR_LIB_DIR)/include -I$(CUDA_HOME)/include -c $< -o $@
+
+# CUDA compilation rule for .cu files in parent directory
+$(PARENT_DIR)/%.o: $(PARENT_DIR)/%.cu
+	@echo "[NVCC COMPILE] $<"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -c $< -o $@ -I$(PARENT_DIR) -I$(PARENT_DIR)/tensor -I$(PARENT_DIR)/process_group -I$(PARENT_DIR)/memory -I$(PARENT_DIR)/bridge -I$(PARENT_DIR)/ckpt -I$(TENSOR_LIB_DIR)/include -I$(CUDA_HOME)/include
 
 # --- Library Check ---
 
