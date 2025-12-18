@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../Tensor-Implementations/include/TensorLib.h"
+#include "./Tensor-Implementations/include/TensorLib.h"
 #include <memory>
 #include <vector>
 
@@ -11,7 +11,7 @@ class DeviceMesh;
 
 namespace TensorOpsBridge {
 
-using namespace OwnTensor;
+
 
 
 OwnTensor::Tensor matmul(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);

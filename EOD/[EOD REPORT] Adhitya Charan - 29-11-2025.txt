@@ -1,0 +1,128 @@
+[EOD REPORT] Adhitya Charan - 29-11-2025
+
+
+
+To
+	Praveen Kumar S. Kripa Shankar Person
+	Cc
+	Manoj Kumar SinghNavin Kumar Kiruthik Kanna Anuj Kumar 
+	Bcc
+	Person
+	Subject
+	[EOD REPORT] Adhitya Charan - 29-11-2025
+	Subject : NCCL Topology Graphs and Communication Pattern Optimization
+
+NCCL Topology Graphs and Hardware-Aware Communication
+
+
+Today I did a deep dive into the NCCL topology graph implementation from NVIDIA's source code to understand how production-grade distributed training frameworks optimize collective communication patterns based on the underlying hardware topology. The insights from this will be directly applicable to our DTensor implementation as we scale to multi-node configurations.
+
+
+  
+
+Topology Graph Construction
+
+NCCL builds a complete topology graph representing the entire hardware hierarchy. This includes not just GPUs, but also network interface cards, CPUs, PCIe switches, NVLink connections, and all the interconnects between them. The topology construction happens through several functions. The ncclTopoGetSystem function queries the system and builds the initial graph structure by discovering all the hardware components and their connections. Then ncclTopoSortSystem organizes this graph in a way that makes path computation efficient. Finally ncclTopoComputePaths calculates the optimal communication paths between different ranks based on bandwidth, latency and the type of interconnects available.
+
+
+What makes this particularly powerful is that once the topology is built, NCCL can make intelligent decisions about how to route communication traffic. For instance, if two GPUs are connected via NVLink, NCCL will prefer that path over going through PCIe. Similarly, if multiple NICs are available, it can select the one with the best bandwidth and lowest latency to the target GPU.
+
+
+  
+
+Communication Patterns
+
+NCCL supports multiple topology patterns, and the choice of pattern depends on what collective operation is being performed and what hardware is available. The most common pattern is the Ring pattern which is used extensively for AllReduce operations. In a ring, each rank communicates with exactly two neighbors, forming a circular communication pattern. This works well because the bandwidth utilization is consistent across all links.
+
+
+Then there's the Tree pattern which is used for operations like Broadcast and Reduce. In a tree topology, there's a hierarchical structure where one rank acts as the root and fans out to multiple children. This is efficient when you need to distribute data from one source to many destinations or aggregate data from many sources to one destination.
+
+
+Beyond these basic patterns, NCCL implements more sophisticated topologies. The Balanced Tree pattern is interesting because it tries to balance the load on NICs when doing network communication. It spreads the tree parent and one child on the first GPU, while putting the second child on a different GPU. This way the NIC traffic is distributed across multiple GPUs rather than bottlenecking on a single GPU.
+
+
+There's also a Split Tree pattern which takes a different approach - it puts the tree parent on one GPU and all the tree children on another GPU. This can be beneficial in certain hardware configurations where you want to separate the sending and receiving sides of the communication.
+
+
+For systems equipped with NVIDIA NVLink Switch, there's a special NVLS pattern that works in conjunction with SHARP (Scalable Hierarchical Aggregation and Reduction Protocol). This is particularly powerful for multi-node configurations because it can do in-network aggregation, meaning some of the reduction operations happen in the network switches themselves rather than on the GPUs.
+
+
+There's also the CollNet Direct pattern which is optimized for network-based collective operations. Each of these patterns is selected automatically based on what gives the best performance for the given hardware configuration and the size of the data being communicated.
+
+
+  
+
+Topology Graph Structure and Metadata
+
+The topology graph structure itself is quite comprehensive. Each graph has a pattern ID that identifies whether it's using ring, tree, collnet, nvls or some other topology. It stores channel configuration which specifies the minimum and maximum number of channels that can be used for parallel communication.
+
+
+The bandwidth metrics are separated into intra-node bandwidth (communication within a single node) and inter-node bandwidth (communication across different nodes). This distinction is important because intra-node communication is typically much faster due to NVLink or PCIe, while inter-node communication goes over the network fabric which has higher latency.
+
+
+The graph also keeps track of latency information for inter-node communication and maintains detailed information about what type of network paths are being used. For each channel, it stores rank mappings that tell each rank who its communication partners are for that particular channel.
+
+
+  
+
+Peer-to-Peer and Network Optimization
+
+NCCL does extensive checking to determine what communication capabilities are available. The ncclTopoCheckP2p function determines if direct peer-to-peer GPU communication is possible between two ranks. This is crucial because P2P communication via NVLink or PCIe is much faster than going through CPU memory.
+
+
+For network communication, ncclTopoCheckGdr checks if GPUDirect RDMA is supported. GPUDirect RDMA allows network adapters to directly access GPU memory without going through the CPU, which significantly reduces latency and CPU overhead. The ncclTopoCheckNet function validates that there's proper network connectivity between ranks.
+
+
+The network device selection is also optimized. When there are multiple NICs available, ncclTopoGetNetDev automatically selects the best network device for a given communication pattern. It considers factors like which NIC is closest to the GPU (in terms of PCIe topology), what bandwidth is available, and what other communication is already happening on each NIC to avoid contention.
+
+
+  
+
+CPU Affinity and Architecture Support
+
+CPU affinity and NUMA placement is another aspect that NCCL handles carefully. The ncclTopoGetCpuAffinity function sets CPU thread affinity to ensure processes run on CPUs that are closest to their assigned GPUs in the NUMA topology. This is important because accessing local memory is much faster than accessing remote NUMA nodes.
+
+
+NCCL is also architecture-aware and supports multiple CPU architectures including x86, ARM and POWER. Even within x86, different CPU vendors like Intel, AMD and Zhaoxin have different optimization paths. For instance, Intel CPUs might have specific optimizations for different microarchitectures like Broadwell, Skylake, Sapphire Rapids or Emerald Rapids. This level of detail shows how important hardware-specific optimizations are for achieving peak performance.
+
+
+  
+
+Communication Topology and Multi-Channel Support
+
+For the actual communication topology, NCCL maintains a structure called ncclTopoRanks which defines precisely how each rank communicates with others. For ring patterns, it maintains arrays like ringRecv, ringSend, ringPrev and ringNext for each channel. These arrays tell each rank who it receives from, who it sends to, who comes before it in the ring, and who comes after it.
+
+
+For tree patterns, there are treeToParent, treeToChild0 and treeToChild1 arrays that define the tree structure. Each rank knows its parent and its children, allowing the tree-based collective operations to execute correctly. For NVLink Switch configurations, there's an nvlsHeads array that tracks which ranks are the switch heads - these are the ranks that interface directly with the NVLink Switch hardware.
+
+
+One of the most powerful features is NCCL's ability to use multiple channels for parallel communication. It can go up to MAXCHANNELS (which can be 32 or more) simultaneous channels. Each channel can have a completely different topology, different network paths, and different available bandwidth. The channel assignment is done intelligently to minimize contention and maximize overall throughput. For instance, if you have two independent networks, NCCL can assign different channels to different networks so they can operate in parallel without interfering with each other.
+
+
+  
+
+Algorithm Auto-Tuning
+
+There's also sophisticated auto-tuning built into NCCL. The ncclTopoTuneModel function selects the optimal algorithm and protocol based on the topology. It considers factors like the compute capability of the GPUs, the amount of data being communicated, and the number of pipeline operations that can overlap with communication.
+
+
+The ncclTopoGetAlgoTime function can estimate the execution time for different algorithms. This allows NCCL to make informed decisions about whether to use ring algorithm or tree algorithm, whether to use simple protocol or LL (low-latency) protocol, and how many channels to use. All of these decisions are made automatically based on the hardware topology and the characteristics of the communication operation.
+
+
+  
+
+Relevance and Next Steps
+
+Understanding how NCCL's topology graphs work is quite valuable for our DTensor implementation. It shows exactly how production-grade frameworks handle heterogeneous hardware and automatically select the best communication strategy. This kind of topology-aware optimization will be critical when we scale our DTensor system to multiple nodes.
+
+
+Right now our ProcessGroup implementation uses a fixed communication strategy, but we could benefit from implementing topology discovery and pattern selection similar to what NCCL does. This would allow our collective operations like allReduce and allGather to automatically adapt to different hardware configurations - whether it's a single node with NVLink, multiple nodes with InfiniBand, or heterogeneous clusters with different GPU generations.
+
+
+I am planning to look into how we can implement similar topology awareness in our DTensor ProcessGroup implementation tomorrow. The first step would be to add topology discovery to identify the interconnect types and bandwidth characteristics, and then use that information to select appropriate communication patterns for our collective operations.
+
+
+Adhitya Charan
+
+
+Regards

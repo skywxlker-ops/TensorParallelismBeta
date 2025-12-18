@@ -4,13 +4,13 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "process_group.h"
+#include "process_group/process_group.h"
 #include "memory/cachingAllocator.hpp"
 
 
 #include "bridge/tensor_ops_bridge.h"
-#include "device/Device.h"
-#include "dtype/Dtype.h"
+#include "Tensor-Implementations/include/device/Device.h"
+#include "Tensor-Implementations/include/dtype/Dtype.h"
 
 
 #include "tensor/device_mesh.h"
@@ -26,7 +26,7 @@ extern CachingAllocator gAllocator;
 class DTensor {
 public:
 
-    DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg);
+    DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg, Layout layout);
     ~DTensor();
 
 
@@ -36,7 +36,7 @@ public:
     void broadcast(int root);
 
 
-    void setData(const std::vector<float>& host_data, const Layout& layout);
+    void setData(const std::vector<float>& host_data);
     std::vector<float> getData() const; 
 
     DTensor add(const DTensor& other) const;
@@ -47,36 +47,21 @@ public:
 
     DTensor reshape(const std::vector<int>& new_global_shape) const;
 
-    // Layout transformations (in-place)
-    /**
-     * Replicate tensor to all devices using Broadcast (in-place).
-     * Broadcasts tensor from root GPU to all other GPUs.
-     * Modifies this tensor to have replicated layout.
-     * @param root Root rank that has the data to broadcast (default: 0)
-     */
+
     void replicate(int root = 0);
     
-    /**
-     * Shard tensor across devices (in-place).
-     * Distributes tensor along specified dimension to all GPUs.
-     * Can be called on any tensor (not just replicated ones).
-     * @param dim Dimension along which to shard
-     * @param root Root rank for initial data distribution (default: 0)
-     */
-    void shard(int dim, int root = 0);
 
-    /**
-     * Synchronize tensor values across all GPUs using AllReduce with SUM (in-place).
-     * Sums tensor values across all devices.
-     * Used for aggregating partial results (e.g., row-parallel matmul).
-     */
+    void shard(int dim, int root = 0, DTensor &parent_tensor);
+
     void sync();
 
-    /**
-     * Scale tensor values by a factor (in-place).
-     * Multiplies all elements by the given scalar.
-     */
-    void scale(float factor);
+    void DTensor::assemble(int dim, int root, DTensor &sharded_tensor); 
+
+    void permute_striped(int dim = 0);
+
+    void DTensor::qkvsplit( DTensor &q, DTensor &k,DTensor &v);
+    void unpermute_striped(int dim = 0);
+
     void saveCheckpoint(const std::string& path) const;
     void loadCheckpoint(const std::string& path);
 

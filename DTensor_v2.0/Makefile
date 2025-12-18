@@ -9,12 +9,12 @@ CXXFLAGS = -std=c++17 -O3 -fPIC -g -DWITH_CUDA
 
 NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++
 
-TARGET = dtensor_main
+TARGET = main
 
 
 CUDA_HOME      := /usr/local/cuda
 TENSOR_LIB_DIR := ./Tensor-Implementations
-TENSOR_LIB_A   := $(TENSOR_LIB_DIR)/lib/libtensor.a
+TENSOR_LIB_A   := /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr parallelism /TensorParallelismBeta/Tensor-Implementations/lib/libtensor.a
 
 
 INCLUDES = \
@@ -29,7 +29,7 @@ INCLUDES = \
 
 
 LIB_PATHS = \
-    -L$(TENSOR_LIB_DIR)/lib \
+    -L$/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr parallelism /TensorParallelismBeta/Tensor-Implementations/lib \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib
 
@@ -244,6 +244,7 @@ TP_MLP_SRCS = \
 	examples/tensor_parallel_mlp.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
+	tensor/layout copy.h\
 	process_group/process_group_nccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
@@ -256,3 +257,21 @@ tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
 	@echo "\nRun with 2 GPUs: mpirun -np 2 ./examples/tensor_parallel_mlp\n"
+
+# Striped Attention Example
+STRIPED_ATTN_SRCS = \
+	examples/striped_attention_example.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+STRIPED_ATTN_OBJS = $(STRIPED_ATTN_SRCS:.cpp=.o)
+
+striped_attention_example: $(STRIPED_ATTN_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(STRIPED_ATTN_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Striped Attention Example build complete."
+	@echo "\nRun with 4 GPUs: mpirun -np 4 ./examples/striped_attention_example\n"

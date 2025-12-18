@@ -4,7 +4,7 @@
 #include "tensor/device_mesh.h"
 #include "tensor/placement.h"
 #include "process_group/process_group.h"
-
+#include "include/TensorLib.h"
 #include <iostream>
 #include <stdexcept>
 #include <cublas_v2.h>
@@ -13,39 +13,41 @@
 
 #pragma GCC visibility push(default)
 
+// using namespace OwnTensor;
+
 namespace TensorOpsBridge {
 
-using namespace OwnTensor;
 
-static std::vector<int64_t> toDims(const Shape& s) {
+static std::vector<int64_t> toDims(const OwnTensor::Shape& s) {
     return s.dims;
 }
 
 
-Tensor add(const Tensor& A, const Tensor& B) {
+OwnTensor::Tensor add(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B) {
     if (A.shape().dims != B.shape().dims)
         throw std::runtime_error("add: shape mismatch between tensors");
     return A + B;
 }
 
-Tensor sub(const Tensor& A, const Tensor& B) {
+OwnTensor::Tensor sub(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B) {
     if (A.shape().dims != B.shape().dims)
         throw std::runtime_error("sub: shape mismatch between tensors");
-    return A - B;
+    OwnTensor::Tensor C = A - B;
+    return C;
 }
 
-Tensor mul(const Tensor& A, const Tensor& B) {
+OwnTensor::Tensor mul(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B) {
     if (A.shape().dims != B.shape().dims)
         throw std::runtime_error("mul: shape mismatch between tensors");
     return A * B;
 }
 
-Tensor mul(const Tensor& A, float scalar) {
+OwnTensor::Tensor mul(const OwnTensor::Tensor& A, float scalar) {
     // Scalar multiplication - multiply all elements by scalar
     return A * scalar;
 }
 
-Tensor div(const Tensor& A, const Tensor& B) {
+OwnTensor::Tensor div(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B) {
     if (A.shape().dims != B.shape().dims)
         throw std::runtime_error("div: shape mismatch between tensors");
     return A / B;
@@ -53,7 +55,7 @@ Tensor div(const Tensor& A, const Tensor& B) {
 
 
 
-Tensor matmul(const Tensor& A, const Tensor& B) {
+OwnTensor::Tensor matmul(const OwnTensor::Tensor& A, const  OwnTensor::Tensor& B) {
     const auto& a_dims = A.shape().dims;
     const auto& b_dims = B.shape().dims;
 
@@ -62,8 +64,8 @@ Tensor matmul(const Tensor& A, const Tensor& B) {
 
  
     if (a_dims.size() == 2 && b_dims.size() == 2) {
-        if (A.device().device == OwnTensor::Device::CUDA &&
-            B.device().device == OwnTensor::Device::CUDA) {
+        if (A.device().device == OwnTensor::Tensor::Device::CUDA &&
+            B.device().device == OwnTensor::Tensor::Device::CUDA) {
             
             // A : [M, K], B : [K, N]
             int M = a_dims[0];
@@ -74,10 +76,10 @@ Tensor matmul(const Tensor& A, const Tensor& B) {
                  throw std::runtime_error("matmul: shape mismatch (K dimensions)");
             }
 
-            Tensor C(Shape{{M, N}},
-                     TensorOptions()
+            OwnTensor::Tensor C(OwnTensor::Shape{{M, N}},
+                     OwnTensor::TensorOptions()
                          .with_device(A.device())
-                         .with_dtype(A.dtype()));
+                            .with_dtype(A.dtype()));
 
             cublasHandle_t handle;
             cublasCreate(&handle);
@@ -114,7 +116,7 @@ Tensor matmul(const Tensor& A, const Tensor& B) {
     }
 
     
-    return OwnTensor::matmul(A, B);
+    return OwnTensor::Tensor::matmul(A, B);
 }
 
 

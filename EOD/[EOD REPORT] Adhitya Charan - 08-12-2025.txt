@@ -1,0 +1,121 @@
+[EOD REPORT] Adhitya Charan - 08-12-2025
+
+
+To
+	Praveen Kumar S. Kripa Shankar Person
+	Cc
+	Manoj Kumar SinghNavin Kumar Kiruthik Kanna Anuj Kumar 
+	Bcc
+	Person
+	Subject
+	[EOD REPORT] Adhitya Charan - 08-12-2025
+	Subject : Striped Attention Implementation and DTensor Shard Primitives
+
+
+
+Striped Attention Token Permutation
+
+
+Today I implemented permute_striped() and unpermute_striped() functions for the DTensor library. These are needed for Striped Attention which is a way to balance workload when doing attention computation across multiple GPUs.
+
+The problem with normal sequence parallelism is that if you split a sequence of 16 tokens across 4 GPUs, GPU 0 gets tokens [0,1,2,3] and GPU 3 gets tokens [12,13,14,15]. With causal masking, token 0 only attends to itself while token 15 attends to everything before it. So GPU 3 ends up doing way more work than GPU 0.
+
+
+  
+
+How the Permutation Works
+
+
+Striped Attention fixes this by shuffling the tokens before splitting them. Instead of giving each GPU a contiguous chunk, we spread tokens across GPUs like dealing cards. The permutation follows the einops pattern "b (n d) -> b (d n)" where d is number of devices and n is the chunk size.
+
+With 16 tokens on 4 GPUs, it works like this. We first view the 16 tokens as a 2D grid of 4 rows and 4 columns:
+
+Row 0: [0, 1, 2, 3]
+Row 1: [4, 5, 6, 7]
+Row 2: [8, 9, 10, 11]
+Row 3: [12, 13, 14, 15]
+
+Then we transpose this grid and read it column by column:
+
+Col 0: [0, 4, 8, 12]
+Col 1: [1, 5, 9, 13]
+Col 2: [2, 6, 10, 14]
+Col 3: [3, 7, 11, 15]
+
+Now when we split across 4 GPUs, GPU 0 gets [0,4,8,12] which has tokens from the start, middle and end of the original sequence. Every GPU now has a mix of early and late tokens so the attention workload is balanced.
+
+
+  
+
+The Index Formula
+
+
+For the actual implementation, I needed a formula to map input positions to output positions. For permuting, if you want to know where the element at output position i came from, you compute source = (i % n) * d + (i / n). For unpermuting, the inverse is source = (i % d) * n + (i / d).
+
+I also made sure it works for tensors with more than one dimension. If you have a tensor of shape [batch, seq, hidden] and want to permute along seq (dim 1), the permutation should only affect that dimension. I handle this by computing the product of dimensions before and after the target dimension, then looping through all combinations.
+
+
+  
+
+Using the shard() Function Explicitly
+
+
+I also updated the tensor_parallel_mlp example. Before, it was creating W1 and W2 by having each GPU make only its local portion of the data and then setting a sharded layout. This works but it doesn't show how the shard() primitive actually works.
+
+Now the example creates the full weight tensor on GPU 0 and then calls W1.shard(1, 0). This actually uses NCCL scatter to distribute the columns from GPU 0 to all other GPUs. The difference is that the old way assumed pre-sharded data while the new way actually does the distribution.
+
+
+  
+
+Layout vs Primitive
+
+
+Something that became clearer today is the difference between setting a Layout and using a primitive. When you call setData() with a sharded Layout, you're telling the system "I already have the data split up correctly, here's my local piece." The system trusts you and doesn't do any communication.
+
+When you call shard(), you're saying "I have the full data on this GPU, please distribute it." The function actually sends data to other GPUs. The Layout is just metadata that tracks the current state. The primitive does the actual work.
+
+The matmul function reads the Layout to decide whether to use column-parallel or row-parallel. So you need the Layout to be correct for the operations to work, but how the data got there (manual split vs shard primitive) doesn't matter.
+
+
+  
+
+Ring Attention Planning
+
+
+I started thinking about Ring Attention which I'll work on next. The idea is that instead of gathering all K and V on every GPU (which uses a lot of memory), you rotate K and V around in a ring. Each GPU computes attention with whatever K,V it currently has, then passes K,V to the next GPU and receives from the previous GPU.
+
+This needs send and receive functions that aren't in ProcessGroup yet. NCCL has ncclSend and ncclRecv that can do this. The actual attention at each step is just matmul, and you accumulate the partial results as K,V rotate around.
+
+
+  
+
+The Striped Attention Example
+
+
+I wrote striped_attention_example.cpp to test the permutation functions and added a Makefile target to build it. The example runs two tests.
+
+The first test creates a 1D sequence with values [0,1,2,...,15] and calls permute_striped(0) on it. It prints the permuted sequence which should be [0,4,8,12,1,5,9,13,2,6,10,14,3,7,11,15]. Then it shows which tokens would go to which GPU - GPU 0 gets [0,4,8,12], GPU 1 gets [1,5,9,13], and so on. After that it calls unpermute_striped(0) and checks that we get back the original sequence.
+
+The second test uses a 2D tensor of shape [16, 4] to simulate a sequence with hidden dimension. The values are encoded as token_id * 10 + hidden_idx, so for example row 5 has values [50, 51, 52, 53]. This way when I permute along dimension 0 and print the result, I can easily see which original tokens ended up where by just looking at the tens digit. The hidden dimension stays intact during permutation since we're only permuting the sequence dimension.
+
+Both tests verify that unpermute(permute(x)) gives back the original tensor. This round-trip check is important because if the permute and unpermute formulas don't match correctly, the outputs after attention would be in the wrong order.
+
+
+  
+
+Implementation Details
+
+
+The permute_striped() and unpermute_striped() functions are implemented in dtensor.cpp. They first validate that the sequence length is divisible by world_size, otherwise the striped pattern wouldn't work evenly. Then they copy data from GPU to host, do the permutation on CPU using the index formulas, and copy back.
+
+For multi-dimensional support, I compute outer_size (product of dims before the target) and inner_size (product of dims after the target). The permutation loop goes through all (outer, seq, inner) combinations, applies the sequence index mapping, and copies the element. This way a [batch, seq, hidden] tensor permuted on dim 1 will correctly permute each batch independently while keeping hidden values together.
+
+The functions are in-place, they modify the tensor directly. I added method declarations to dtensor.h with documentation explaining the pattern and an example of what happens to 16 tokens on 4 GPUs.
+
+
+  
+
+Adhitya Charan
+
+
+Regards

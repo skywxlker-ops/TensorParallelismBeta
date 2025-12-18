@@ -1,14 +1,4 @@
-/**
- * Example: Tensor Parallel MLP using shard(), replicate(), and sync()
- * 
- * This demonstrates how the distribution primitives work together
- * in a typical tensor parallel forward pass.
- * 
- * MLP: Y = GELU(X @ W1) @ W2
- * 
- * Column-Parallel for W1: X [M, K] @ W1 [K, N/P] -> H [M, N/P]
- * Row-Parallel for W2:    H [M, N/P] @ W2 [N/P, K] -> Y [M, K] (needs AllReduce)
- */
+
 
 #include "tensor/dtensor.h"
 #include <iostream>
@@ -22,8 +12,7 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     
-    // Setup
-    auto device_mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
+    DeviceMesh device_mesh ({2},{0,1});
     
     ncclUniqueId nccl_id;
     if (rank == 0) ncclGetUniqueId(&nccl_id);
@@ -31,83 +20,106 @@ int main(int argc, char** argv) {
     
     auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
     
-    // Dimensions
-    const int M = 4;      // batch size
-    const int K = 8;      // input features
-    const int N = 16;     // hidden dim (will be sharded: N/P per GPU)
+    const int B = 8;      // batch size
+    const int C = 768;      // input features
+    const int T = 1024;      // token length
+    const int F = 768*4;     // hidden dim (will be sharded: F / P per GPU)
+
+    Layout x_layout(device_mesh, {B, T, C });
+    Layout wqkv_layout(device_mesh, {B, C, 3 * C }, 2);
+
+    DTensor X(device_mesh, pg, x_layout);
+    std::vector<float> x_data(B * T * C );
+
+
+    DTensor WQKV(device_mesh, pg, wqkv_layout);
+    std::vector<float> wqkv_data(B * C * (C * 3));
+
+
     
-    // ============================================================
-    // STEP 1: Create input X on ROOT GPU, then REPLICATE to all
-    // ============================================================
-    DTensor X(device_mesh, pg);
-    std::vector<float> x_data(M * K);
-    
-    // Only root GPU has the actual data initially
+
     if (rank == 0) {
-        for (int i = 0; i < M * K; i++) x_data[i] = 0.1f * (i + 1);
-    } else {
-        // Other GPUs have placeholder data (will be overwritten by replicate)
-        for (int i = 0; i < M * K; i++) x_data[i] = 0.0f;
-    }
+        for (int i = 0; i < B * T * C ; i++) x_data[i] = 0.1f * (i + 1);
+        for (int i = 0; i < B * C * C ; i++) wkqc_data[i] = 0.67f * (i + 1);
+
+        X.setData(x_data);
+        WQKV.setData(x_data);
+    } 
     
-    Layout x_layout = Layout::replicated(device_mesh, {M, K});
-    X.setData(x_data, x_layout);
-    
-    // Use REPLICATE primitive to broadcast X from root to all GPUs
+
     X.replicate(0);  // root = 0
+    WQKV.shard(2, 0 ); // shard dim = 2, root = 0
+
+    Layout qkvlayout (device_mesh, {B, T ,C /world_size }); // can add dim = 1 as another parameter if we are doing context parallelism
+
+    DTensor q(device_mesh, pg, qkvlayout);
     
+    DTensor k(device_mesh, pg, qkvlayout);
+    
+    DTensor v(device_mesh, pg, qkvlayout); 
+
+    WQKV.qkvslpit(q,k,v);
+
+
+
     if (rank == 0) {
         std::cout << "=== Input X (replicated via broadcast) ===" << std::endl;
-        std::cout << "Shape: [" << M << ", " << K << "]" << std::endl;
+        std::cout << "Shape: [" << B << ", " << T << ", " << C << "]" << std::endl;
     }
     
-    // ============================================================
-    // STEP 2: Create W1 (column-sharded: each GPU has K x N/P)
-    // ============================================================
+
     DTensor W1(device_mesh, pg);
-    int local_N = N / world_size;
-    std::vector<float> w1_data(K * local_N);
-    for (int i = 0; i < K * local_N; i++) w1_data[i] = 0.01f * (rank + 1);
+    int local_F = F / world_size;
     
-    // Use sharded layout
-    Layout w1_layout(device_mesh, {K, N}, ShardingType::SHARDED, 1);  // shard on dim 1
-    W1.setData(w1_data, w1_layout);
+    // Full W1 tensor created on root GPU only
+    std::vector<float> w1_full_data(B * C * F );
+    if (rank == 0) {
+        for (int i = 0; i < C * F ; i++) w1_full_data[i] = 0.01f * (i % F + 1);
+    }
+    
+
+    Layout w1_replicated(device_mesh, {T ,C ,F });
+    W1.setData(w1_full_data, w1_replicated);
+    
+    Layout aslayout_(device_mesh,{B, T/2, C/2})
+
+    DTensor W1_shard(device_mesh_, pg_, aslayout_);
+    W1.shard(2, 0);  
     
     if (rank == 0) {
         std::cout << "=== W1 (sharded on dim 1) ===" << std::endl;
-        std::cout << "Global: [" << K << ", " << N << "], Local: [" << K << ", " << local_N << "]" << std::endl;
+        std::cout << "Global: [" << C << ", " << F << "], Local: [" << C << ", " << local_F << "]" << std::endl;
     }
     
-    // ============================================================
-    // STEP 3: Column-Parallel MatMul: H = X @ W1
-    // Output H is SHARDED (each GPU has M x N/P)
-    // ============================================================
+   
     DTensor H = X.matmul(W1);
     
     if (rank == 0) {
         std::cout << "\n=== After Column-Parallel MatMul ===" << std::endl;
-        std::cout << "H is SHARDED: [" << M << ", " << local_N << "] per GPU" << std::endl;
+        std::cout << "H is SHARDED: [" << B << ", " << local_F << "] per GPU" << std::endl;
     }
     
-    // ============================================================
-    // STEP 4: Create W2 (row-sharded: each GPU has N/P x K)
-    // ============================================================
     DTensor W2(device_mesh, pg);
-    std::vector<float> w2_data(local_N * K);
-    for (int i = 0; i < local_N * K; i++) w2_data[i] = 0.02f;
     
-    Layout w2_layout(device_mesh, {N, K}, ShardingType::SHARDED, 0);  // shard on dim 0
-    W2.setData(w2_data, w2_layout);
+    // Full W2 tensor created on root GPU only
+    std::vector<float> w2_full_data(T * F * C );
+    if (rank == 0) {
+        for (int i = 0; i < F * C; i++) w2_full_data[i] = 0.02f;
+    }
     
-    // ============================================================
-    // STEP 5: Row-Parallel MatMul: Y = H @ W2 + AllReduce
-    // This requires communication to sum partial results
-    // ============================================================
+    // replicated layout (root has full data, others have placeholder)
+    Layout w2_replicated = Layout::replicated(device_mesh, {T, F ,C });
+    W2.setData(w2_full_data, w2_replicated);
+    
+    W2.shard(1, 0);  // shard on dim 1, root = 0
+    
     DTensor Y = H.matmul(W2);
     
+    Y.sync();
+
     if (rank == 0) {
         std::cout << "\n=== After Row-Parallel MatMul ===" << std::endl;
-        std::cout << "Y shape: [" << M << ", " << K << "] (synched after AllReduce)" << std::endl;
+        std::cout << "Y shape: [" << B << ", " << T << ", " << C << "] (synched after AllReduce)" << std::endl;
         
         auto y_data = Y.getData();
         std::cout << "Y values (first 5): ";
@@ -115,18 +127,15 @@ int main(int argc, char** argv) {
         std::cout << std::endl;
     }
     
-    // ============================================================
-    // STEP 6: Simulate backward pass - sync gradients
-    // ============================================================
-    // In backward pass, gradients need to be summed across GPUs
+
     DTensor grad_Y(device_mesh, pg);
-    std::vector<float> grad_data(M * K);
-    // Generate pseudo-random gradients based on rank and index
-    for (int i = 0; i < M * K; i++) {
+    std::vector<float> grad_data(B * T * C );
+
+    for (int i = 0; i < B * T * C ; i++) {
         grad_data[i] = 0.1f * ((i % 7) + 1) * (rank + 1) + 0.05f * (i % 3);
     }
     
-    Layout grad_layout = Layout::replicated(device_mesh, {M, K});
+    Layout grad_layout = Layout::replicated(device_mesh, {B, T, C });
     grad_Y.setData(grad_data, grad_layout);
     
     if (rank == 0) {
@@ -137,8 +146,7 @@ int main(int argc, char** argv) {
         std::cout << std::endl;
     }
     
-    // Average gradients across all GPUs
-    grad_Y.sync();
+    grad_Y.sync(); // sum gradients
     
     if (rank == 0) {
         std::cout << "\n=== After sync() - Gradients added ===" << std::endl;

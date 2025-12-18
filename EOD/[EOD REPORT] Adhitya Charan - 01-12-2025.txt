@@ -1,0 +1,175 @@
+[EOD REPORT] Adhitya Charan - 01-12-2025
+
+
+
+
+To
+	Praveen Kumar S. Kripa Shankar Person
+	Cc
+	Manoj Kumar SinghNavin Kumar Kiruthik Kanna Anuj Kumar 
+	Bcc
+	Person
+	Subject
+	[EOD REPORT] Adhitya Charan - 01-12-2025
+	Subject : DTensor Layout Refactoring and Distributed Matrix Multiplication
+
+DTensor Layout System Refactoring
+
+
+Today I spent most of my time refactoring the DTensor layout system to make it simpler and more maintainable. The previous implementation used a placement-based approach with abstract base classes for Shard and Replicate placements which, while flexible, ended up being more complex than we actually needed. I simplified this to use an enum-based approach that's much cleaner and easier to reason about.
+
+
+  
+
+The New Layout Abstraction
+
+
+The core idea is that any distributed tensor is either fully replicated across all GPUs or sharded along a specific dimension. I captured this with a ShardingType enum that has just two values - REPLICATED and SHARDED. The Layout class now tracks the device mesh, the global shape of the tensor, which sharding type it uses, and if it's sharded, which dimension is split.
+
+This simplification makes the code much more readable. Instead of having to navigate through placement hierarchies and virtual functions, you can directly query is_replicated() or is_sharded() and get an immediate answer. For element-wise operations, checking layout compatibility is now just comparing the sharding type and shard dimension, rather than walking through placement objects.
+
+
+  
+
+Local Shape Computation
+
+
+One of the key methods in the Layout class is get_local_shape() which calculates what portion of the tensor each GPU actually holds. For replicated tensors this is trivial - every GPU has the full global shape. But for sharded tensors it gets interesting because we need to handle cases where the tensor dimension doesn't divide evenly across GPUs.
+
+The approach I used is to give the extra elements to the first few ranks. For example, if you have 10 elements across 3 GPUs, ranks 0 and 1 get 4 elements each while rank 2 gets 2 elements. This is the standard approach used by PyTorch DTensor and it works well in practice. The calculation itself is straightforward - you compute the base size by dividing the global dimension by world size, then compute the remainder, and ranks less than the remainder get one extra element.
+
+
+  
+
+Distributed Matrix Multiplication
+
+
+The most significant work today was implementing proper distributed matrix multiplication with automatic communication pattern detection. The challenge with distributed matmul is that depending on how the input tensors are sharded, you need completely different communication strategies.
+
+For column-parallel matmul, you have a pattern like X [M, K] @ W [K, N/P] → Y [M, N/P] where X is replicated and W is sharded along dimension 1. Each GPU holds a different slice of the weight matrix columns. The beautiful thing about this pattern is that no communication is needed during the forward pass - each GPU computes its local matmul Y_shard = X @ W_local and produces independent output columns. The communication only happens in the backward pass when you need to aggregate gradients across the input.
+
+For row-parallel matmul, the pattern is different - X [M, K/P] @ W [K/P, N] → Y [M, N] where both X and W are sharded along compatible dimensions. Here each GPU computes a partial result Y_partial = X_local @ W_local, but to get the correct final output you need to sum all these partial results. So immediately after the local matmul, we do an All-Reduce operation that sums the partial results and broadcasts the complete output to all GPUs.
+
+
+  
+
+Automatic Communication Pattern Selection
+
+
+What I implemented today is automatic detection of which communication pattern to use based on the input layouts. The DTensor matmul function looks at the placement types of both input tensors and their shard dimensions. If it detects the column-parallel pattern (first tensor replicated, second tensor sharded on dimension 1), it calls the column-parallel implementation. If it detects the row-parallel pattern (both tensors sharded on compatible dims), it calls the row-parallel implementation with the All-Reduce.
+
+If the layout combination doesn't match any known pattern, it throws a descriptive error message that includes the layouts of both inputs. This makes debugging much easier because you can immediately see what sharding combination was attempted and why it's not supported yet.
+
+
+  
+
+ProcessGroup Interface
+
+
+I also refined the ProcessGroup interface today to have cleaner APIs for collective operations. The ProcessGroup wraps NCCL communicators and provides methods like allReduce, reduceScatter, allGather, broadcast and scatter. Each operation is templated to work with different data types and uses NCCL data type specifications.
+
+The interesting part is the Work abstraction which provides asynchronous operation tracking. When you call allReduce, it returns a Work object that you can wait() on. Under the hood, the Work class uses CUDA events to track when the operation completes. This allows overlapping communication with computation if needed, though for now I'm doing synchronous waits immediately after each collective.
+
+
+  
+
+Tensor Operations Bridge
+
+
+To connect the DTensor system with the underlying tensor library, I created two bridge implementations. The original TensorOpsBridge uses the external tensor library directly. The new TensorOpsBridgeCustom includes integration with our custom CUDA matmul kernel.
+
+For 2D CUDA tensors, the custom bridge dispatches to cuda_matmul which provides better performance than the generic implementation. It extracts the M, K, N dimensions, validates that the K dimensions match between the two tensors, creates the output tensor with the correct shape, and then calls the CUDA kernel. For other cases like batched matmul or CPU tensors, it falls back to the generic implementation.
+
+The bridge also includes element-wise operations like add, sub, mul and div with shape validation. The from_data() helper function makes it easy to create a DTensor from host data by setting up the replicated layout and copying the data to the GPU.
+
+
+  
+
+Memory Management
+
+
+Proper memory management is critical in distributed settings because memory leaks compound quickly across multiple GPUs. The DTensor class maintains two memory blocks - data_block_ for the main storage of the local tensor shard, and temp_block_ for temporary buffers needed during collective operations like allGather and reduceScatter.
+
+Both blocks are allocated through the CachingAllocator which provides efficient memory reuse. The destructor handles cleanup by first synchronizing the CUDA stream to ensure all operations complete, then freeing both blocks back to the allocator. This RAII-style cleanup ensures resources are properly released even if exceptions occur.
+
+
+  
+
+Checkpointing
+
+
+I maintained the N-dimensional safe checkpointing functionality from before. The saveCheckpoint function writes the number of dimensions, the shape array, dtype string, and actual data to a binary file. The loadCheckpoint function reads this back and reconstructs the tensor. 
+
+What makes this N-dimensional safe is that it doesn't assume 2D matrices - it handles arbitrary tensor dimensionality. Each rank can save and load its local shard independently, which is important for distributed checkpointing where you want to avoid serialization bottlenecks.
+
+
+  
+
+Debugging and Visualization
+
+
+The print() function provides a clean way to visualize distributed tensors during development. It first prints the layout description showing the global shape, sharding type, and local shape for that rank. Then it recursively prints the N-dimensional data in a readable bracket format.
+
+The recursive printing handles any tensor dimensionality correctly. For the innermost dimension it prints values separated by commas, and for outer dimensions it recurses with proper bracket nesting. I made sure to synchronize the CUDA stream before reading data to avoid race conditions where the print might read data before a kernel finishes writing it.
+
+
+  
+
+Key Insights
+
+
+What became clear today is that simpler abstractions often lead to more maintainable code. The enum-based layout system is much easier to understand than the previous placement hierarchy, yet it provides all the functionality we actually need. Sometimes in systems programming we can over-engineer abstractions trying to be general, when a simpler concrete approach is better.
+
+Another insight is that communication must be automatic and transparent. Users of the DTensor API shouldn't need to manually insert All-Reduce calls or worry about when communication happens. The operations themselves should understand the layouts of their inputs and handle communication appropriately. This is what makes distributed tensor programming feel natural rather than like manual MPI programming.
+
+Error messages with context are also crucial. In distributed code when something goes wrong, you often have limited visibility into what's happening on other ranks. Including rank information, layout descriptions, and tensor shapes in error messages makes debugging much faster.
+
+
+  
+
+Testing and Validation
+
+
+I tested the implementation with various configurations - 2D and 3D tensors, column-parallel and row-parallel matmul patterns, different numbers of GPUs. The layout system correctly tracks sharding state, the get_local_shape calculations give the right shard sizes even for uneven divisions, and the communication operations execute as expected.
+
+For matmul specifically, I validated that column-parallel gives the right output shape with sharding on dimension 1, and row-parallel produces replicated output after the All-Reduce. The automatic pattern selection works correctly and provides clear errors for unsupported combinations.
+
+
+  
+
+Performance Observations
+
+
+From the quick benchmarks I ran, the CUDA matmul kernel gives significantly better performance than the CPU fallback for large matrices. The All-Reduce operation has acceptable latency up to around 10GB tensor sizes. Memory allocation overhead is minimal thanks to the caching allocator which reuses previously allocated blocks.
+
+Layout queries like get_local_shape are very fast since they just do arithmetic calculations rather than storing pre-computed shapes. This means we can call them frequently without performance concerns.
+
+
+  
+
+Code Organization
+
+
+The codebase structure is now quite clean. The tensor/layout.h file contains the layout abstraction I refactored today. The tensor/dtensor.h and tensor/dtensor.cpp files have the main DTensor implementation with the matmul variants. The tensor/device_mesh files handle the multi-GPU topology. The process_group files wrap NCCL collective operations. And the bridge files provide the connection to the underlying tensor library.
+
+This separation of concerns makes it easy to understand each component's responsibility and modify one part without affecting others.
+
+
+  
+
+Next Steps
+
+
+Tomorrow I'm planning to start implementing backward propagation with automatic gradient communication. This will require tracking gradient layouts and inserting the appropriate All-Reduce operations in the backward pass. The layout refactoring I did today provides a solid foundation for this because the backward communication pattern is essentially the inverse of the forward pattern.
+
+I also want to add support for more complex sharding patterns like 2D sharding where a tensor is partitioned along multiple dimensions simultaneously. This will be important for scaling to larger GPU counts where 1D sharding alone isn't sufficient.
+
+Adding autograd Function wrappers for DTensor operations is another priority. This will allow DTensor operations to integrate seamlessly with automatic differentiation so users can write normal forward pass code and get correct distributed gradients automatically.
+
+
+  
+
+Adhitya Charan
+
+
+Regards

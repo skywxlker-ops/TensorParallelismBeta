@@ -239,8 +239,8 @@ namespace OwnTensor
         //######################################################
         // Memory Deletion 
         //######################################################
-        void release();
-        bool is_valid() const;
+        // void release();
+        // bool is_valid() const;
 
 
         private:

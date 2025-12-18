@@ -28,6 +28,11 @@ public:
     ProcessGroup(int rank, int world_size, int device, const ncclUniqueId &id);
     ~ProcessGroup();
 
+    // Paired send-recv for ring communication (non-blocking)
+
+    template<typename T>
+    std::shared_ptr<Work> sendRecv(T* data, size_t count, int dest, int src, ncclDataType_t dtype);
+
     template<typename T>
     std::shared_ptr<Work> allReduce(T* data, size_t count, ncclDataType_t dtype, ncclRedOp_t op = ncclSum);
 
@@ -43,6 +48,9 @@ public:
 
     template<typename T>
     std::shared_ptr<Work> scatter(T* data, size_t count_per_shard, int root, ncclDataType_t dtype);
+
+    template <typename T>
+    std::shared_ptr<Work> gather(T* data, size_t count, int root, ncclDataType_t dtype);    
 
     cudaStream_t getStream() const { return stream_; }
     ncclComm_t getComm() const { return comm_; }

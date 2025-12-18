@@ -9,7 +9,7 @@
 #include "tensor/device_mesh.h"
 #include "tensor/placement.h"
 
-// Defines the sharding strategy for a DTensor
+
 enum class ShardingType {
     REPLICATED, // Tensor is fully replicated on all devices
     SHARDED     // Tensor is sharded along a specific dimension
@@ -32,7 +32,6 @@ public:
         }
     }
 
-    // --- Accessors ---
 
     bool is_replicated() const {
         return sharding_type_ == ShardingType::REPLICATED;
@@ -70,7 +69,6 @@ public:
         int world_size = mesh_->world_size();
         std::vector<int> local_shape = global_shape_;
         
-        // This is the logic from your planner.h
         int global_dim_size = global_shape_[shard_dim_];
         int base_size = global_dim_size / world_size;
         int remainder = global_dim_size % world_size;
@@ -116,7 +114,6 @@ public:
         return !is_compatible(other);
     }
 
-    // --- Static Factory Methods ---
     
     /**
      * Create a replicated layout (tensor duplicated on all devices)
@@ -129,7 +126,11 @@ public:
         return Layout(mesh, global_shape, ShardingType::REPLICATED);
     }
 
-    // --- Description Utility ---
+     static Layout sharded(std::shared_ptr<DeviceMesh> mesh, 
+                            const std::vector<int>& global_shape) {
+        return Layout(mesh, global_shape, ShardingType::SHARDED);
+    }
+
     std::string describe(int rank) const {
         std::ostringstream oss;
         if (!mesh_) {
@@ -159,15 +160,13 @@ public:
         return oss.str();
     }
 
-    // --- Placement API (Compatibility) ---
     
-    // Constructor taking placements (for compatibility with existing code)
+    // Constructor taking placements 
     Layout(std::shared_ptr<DeviceMesh> mesh, 
            const std::vector<int>& global_shape,
            const std::vector<std::shared_ptr<Placement>>& placements)
         : mesh_(mesh), global_shape_(global_shape), placements_(placements) {
         
-        // Infer simple sharding type from placements for backward compatibility
         sharding_type_ = ShardingType::REPLICATED;
         shard_dim_ = -1;
         
@@ -199,6 +198,6 @@ private:
     std::shared_ptr<DeviceMesh> mesh_;
     std::vector<int> global_shape_;
     ShardingType sharding_type_;
-    int shard_dim_; // Dimension along which tensor is sharded (-1 if REPLICATED)
+    int shard_dim_; 
     std::vector<std::shared_ptr<Placement>> placements_;
 };
