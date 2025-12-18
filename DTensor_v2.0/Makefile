@@ -103,6 +103,11 @@ tests/%.o: tests/%.cpp
 	@echo "[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
+# CUDA compilation rule for .cu files
+tensor/%.o: tensor/%.cu
+	@echo "[NVCC COMPILE] $<"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -c $< -o $@ $(INCLUDES)
+
 $(TENSOR_LIB_A):
 	@if [ ! -f $(TENSOR_LIB_A) ]; then \
 		echo "\n[ERROR] Static library $(TENSOR_LIB_A) not found!"; \
@@ -256,3 +261,70 @@ tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
 	@echo "\nRun with 2 GPUs: mpirun -np 2 ./examples/tensor_parallel_mlp\n"
+
+# MLP Benchmark Test (Optimized with kernel fusion)
+TEST_MLP_BENCHMARK_SRCS = \
+	tests/test_mlp_benchmark.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	tensor/activation_kernels.cu \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TEST_MLP_BENCHMARK_OBJS = $(TEST_MLP_BENCHMARK_SRCS:.cpp=.o)
+TEST_MLP_BENCHMARK_OBJS := $(TEST_MLP_BENCHMARK_OBJS:.cu=.o)
+
+.PHONY: test_mlp_benchmark
+
+test_mlp_benchmark: $(TEST_MLP_BENCHMARK_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_MLP_BENCHMARK_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] MLP Benchmark build complete."
+	@echo "\nRun single GPU: ./tests/test_mlp_benchmark"
+	@echo "Run 2 GPUs: mpirun -np 2 --allow-run-as-root ./tests/test_mlp_benchmark\n"
+
+# DTensor Factory Functions Test
+TEST_DTENSOR_FACTORY_SRCS = \
+	tests/test_dtensor_factories.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	tensor/activation_kernels.cu \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TEST_DTENSOR_FACTORY_OBJS = $(TEST_DTENSOR_FACTORY_SRCS:.cpp=.o)
+TEST_DTENSOR_FACTORY_OBJS := $(TEST_DTENSOR_FACTORY_OBJS:.cu=.o)
+
+.PHONY: test_dtensor_factories
+
+test_dtensor_factories: $(TEST_DTENSOR_FACTORY_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DTENSOR_FACTORY_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] DTensor Factory test build complete."
+	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./tests/test_dtensor_factories\n"
+
+# DTensor Creation Methods Demo Test
+TEST_DTENSOR_CREATION_SRCS = \
+	tests/test_dtensor_creation_methods.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	tensor/activation_kernels.cu \
+	process_group/process_group_nccl.cpp \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TEST_DTENSOR_CREATION_OBJS = $(TEST_DTENSOR_CREATION_SRCS:.cpp=.o)
+TEST_DTENSOR_CREATION_OBJS := $(TEST_DTENSOR_CREATION_OBJS:.cu=.o)
+
+.PHONY: test_dtensor_creation_methods
+
+test_dtensor_creation_methods: $(TEST_DTENSOR_CREATION_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DTENSOR_CREATION_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] DTensor Creation Methods test build complete."
+	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./tests/test_dtensor_creation_methods\n"

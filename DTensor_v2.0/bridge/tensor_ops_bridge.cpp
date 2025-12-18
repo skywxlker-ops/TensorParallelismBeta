@@ -12,7 +12,7 @@
 
 #pragma GCC visibility push(default)
 
-namespace Bridge {
+namespace TensorOpsBridge {
 
 using namespace OwnTensor;
 
@@ -43,6 +43,11 @@ Tensor mul(const Tensor& A, const Tensor& B) {
     if (A.shape().dims != B.shape().dims)
         throw std::runtime_error("mul: shape mismatch between tensors");
     return A * B;
+}
+
+// Scalar multiplication
+Tensor mul(const Tensor& A, float scalar) {
+    return A * scalar;
 }
 
 Tensor div(const Tensor& A, const Tensor& B) {
@@ -165,9 +170,9 @@ DTensor from_data(
 
 
 // =============================================================
-// ✨ AUTOGRAD INTEGRATION
+// ✨ AUTOGRAD INTEGRATION (DISABLED - incomplete integration)
 // =============================================================
-
+/*
 namespace Autograd {
 
 AutogradDTensor create_parameter(
@@ -335,8 +340,9 @@ void register_row_parallel_matmul_vjp(
 }
 
 }  // namespace Autograd
+*/
 
-}  // namespace Bridge
+}  // namespace TensorOpsBridge
 
 #pragma GCC visibility pop
 

@@ -69,8 +69,8 @@ void benchmark_single_gpu(const BenchmarkConfig& config, int rank) {
     for (int i = 0; i < config.warmup_iters; i++) {
         OwnTensor::Tensor H = TensorOpsBridge::matmul(X, W1);   // [BT, C] x [C, F] = [BT, F]
         OwnTensor::Tensor Y = TensorOpsBridge::matmul(H, W2);   // [BT, F] x [F, C] = [BT, C]
-        cudaDeviceSynchronize();
     }
+    cudaDeviceSynchronize();
     
     // Benchmark iterations
     auto start = std::chrono::high_resolution_clock::now();
@@ -149,17 +149,17 @@ void benchmark_tensor_parallel(const BenchmarkConfig& config, int rank, int worl
     
     // Warmup iterations
     for (int i = 0; i < config.warmup_iters; i++) {
-        DTensor H = X.matmul(W1);  // [BT, C] x [C, F/2] = [BT, F/2] (column-parallel)
+        DTensor H = X.matmul_gelu(W1);  // Fused: column-parallel matmul + GELU activation
         DTensor Y = H.matmul(W2);  // [BT, F/2] x [F/2, C] = [BT, C] (row-parallel)
         Y.sync();  // AllReduce to gather results
-        cudaDeviceSynchronize();
     }
+    cudaDeviceSynchronize();
     MPI_Barrier(MPI_COMM_WORLD);
     
     // Benchmark iterations
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < config.bench_iters; i++) {
-        DTensor H = X.matmul(W1);  // Column-parallel matmul
+        DTensor H = X.matmul_gelu(W1);  // Fused: column-parallel matmul + GELU
         DTensor Y = H.matmul(W2);  // Row-parallel matmul
         Y.sync();  // AllReduce to gather results
     }
@@ -251,4 +251,11 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
+
+
+
+
+
+
+
 
