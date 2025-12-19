@@ -173,9 +173,15 @@ void DeviceMesh::initialize_process_groups() {
 
         int device = device_ids_[global_rank_];
 
-        process_groups_[mesh_dim] = std::make_shared<ProcessGroup>(
-            my_group_rank, group_size, device, nccl_id
+        // Create stream and work object for the new ProcessGroupNCCL
+        cudaStream_t stream;
+        cudaStreamCreate(&stream);
+        auto work_obj = std::make_shared<Work>(stream, nullptr);
+        
+        process_groups_[mesh_dim] = std::make_shared<ProcessGroupNCCL>(
+            group_size, my_group_rank, nccl_id, work_obj, stream
         );
+        process_groups_[mesh_dim]->set_owns_stream(true);
     }
 }
 
@@ -194,7 +200,7 @@ ncclUniqueId DeviceMesh::create_nccl_id(int root_rank, MPI_Comm comm) {
     return nccl_id;
 }
 
-std::shared_ptr<ProcessGroup> DeviceMesh::get_process_group(int mesh_dim) {
+std::shared_ptr<ProcessGroupNCCL> DeviceMesh::get_process_group(int mesh_dim) {
     if (mesh_dim < 0 || mesh_dim >= ndim()) {
         throw std::runtime_error("DeviceMesh: invalid mesh_dim");
     }

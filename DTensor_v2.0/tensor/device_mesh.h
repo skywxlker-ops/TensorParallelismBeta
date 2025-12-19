@@ -6,7 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <numeric>
-#include "process_group/process_group.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include <mpi.h>
 #include <nccl.h>
 
@@ -26,7 +26,7 @@ public:
     int get_rank(const std::vector<int>& coordinate) const;
 
  
-    std::shared_ptr<ProcessGroup> get_process_group(int mesh_dim);
+    std::shared_ptr<ProcessGroupNCCL> get_process_group(int mesh_dim);
  
     std::vector<int> get_group_ranks(int mesh_dim) const;
     
@@ -49,7 +49,7 @@ private:
     int global_rank_;                  
     std::vector<int> my_coordinate_;   
     
-    std::vector<std::shared_ptr<ProcessGroup>> process_groups_;
+    std::vector<std::shared_ptr<ProcessGroupNCCL>> process_groups_;
     
     
     std::vector<MPI_Comm> mpi_comms_;

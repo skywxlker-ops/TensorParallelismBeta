@@ -2,7 +2,7 @@
 #include "tensor/dtensor.h" // Include full definitions
 #include "tensor/layout.h"
 #include "tensor/device_mesh.h"
-#include "process_group/process_group.h"
+// ProcessGroupNCCL is now included via dtensor.h -> ProcessGroupNCCL.h
 
 #include <iostream>
 #include <stdexcept>
@@ -25,7 +25,7 @@ static std::vector<int64_t> toDims(const Shape& s) {
 
 // ------------------------------------------------------------
 // Elementwise Ops (sanity-checked wrappers)
-// (These are fine, no changes needed)
+
 // ------------------------------------------------------------
 Tensor add(const Tensor& A, const Tensor& B) {
     if (A.shape().dims != B.shape().dims)
@@ -137,7 +137,7 @@ DTensor from_data(
     const std::vector<float>& host_data,
     const std::vector<int>& shape,
     std::shared_ptr<DeviceMesh> mesh,
-    std::shared_ptr<ProcessGroup> pg) 
+    std::shared_ptr<ProcessGroupNCCL> pg) 
 {
     // 1. Create a new DTensor
     DTensor out(mesh, pg);

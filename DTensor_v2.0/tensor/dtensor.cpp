@@ -12,14 +12,15 @@
 CachingAllocator gAllocator;
 
 
-DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg)
-    : rank_(pg->getRank()),
-      world_size_(pg->getWorldSize()),
+DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, std::shared_ptr<StreamPool> stream_pool)
+    : rank_(pg->get_rank()),
+      world_size_(pg->get_worldsize()),
       device_mesh_(device_mesh),
       pg_(pg),
-      compute_stream_(pg->getComputeStream()),
-      comm_stream_(pg->getCommStream()),
-      data_stream_(pg->getDataStream()),
+      stream_pool_(stream_pool ? stream_pool : std::make_shared<StreamPool>(pg->get_local_rank(), 4)),
+      compute_stream_(stream_pool_ ? stream_pool_->getComputeStream() : nullptr),
+      comm_stream_(stream_pool_ ? stream_pool_->getCommStream() : nullptr),
+      data_stream_(stream_pool_ ? stream_pool_->getDataStream() : nullptr),
       layout_(Layout::replicated(device_mesh, {})), 
       size_(0),
       shape_({0}),
@@ -28,7 +29,7 @@ DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<Proces
                   .with_device(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_))
                   .with_dtype(OwnTensor::Dtype::Float32)),
       temp_tensor_(tensor_) { // TEMPORARY: Restored for debugging
-    cudaSetDevice(rank_);
+    cudaSetDevice(pg->get_local_rank());
     
     // Create events for stream synchronization (enable overlap)
     cudaEventCreateWithFlags(&compute_event_, cudaEventDisableTiming);
@@ -36,21 +37,22 @@ DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<Proces
 }
 
 DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh,
-                 std::shared_ptr<ProcessGroup> pg,
+                 std::shared_ptr<ProcessGroupNCCL> pg,
                  const OwnTensor::Tensor& local_tensor,
                  const Layout& layout)
-    : rank_(pg->getRank()),
-      world_size_(pg->getWorldSize()),
+    : rank_(pg->get_rank()),
+      world_size_(pg->get_worldsize()),
       device_mesh_(device_mesh),
       pg_(pg),
-      compute_stream_(pg->getComputeStream()),
-      comm_stream_(pg->getCommStream()),
-      data_stream_(pg->getDataStream()),
+      stream_pool_(std::make_shared<StreamPool>(pg->get_local_rank(), 4)),
+      compute_stream_(stream_pool_->getComputeStream()),
+      comm_stream_(stream_pool_->getCommStream()),
+      data_stream_(stream_pool_->getDataStream()),
       layout_(layout),
       tensor_(local_tensor),
       temp_tensor_(local_tensor)  // TEMPORARY: Restored for debugging
 {
-    cudaSetDevice(rank_);
+    cudaSetDevice(pg->get_local_rank());
     
     shape_ = layout_.get_local_shape(rank_); 
     size_ = 1;
@@ -142,7 +144,7 @@ void DTensor::setDataFromRoot(const std::vector<float>& host_data,
         }
         
         // Broadcast to all ranks using comm stream (in-place: input == output)
-        pg_->broadcast<float>(tensor_.data<float>(), tensor_.data<float>(), global_size, root, ncclFloat)->wait();
+        pg_->broadcast(tensor_.data<float>(), tensor_.data<float>(), global_size, OwnTensor::Dtype::Float32, root, true);
         
         shape_ = global_shape;
         size_ = global_size;
@@ -172,13 +174,14 @@ void DTensor::setDataFromRoot(const std::vector<float>& host_data,
         }
         
         // Scatter: root sends different chunks to each rank (using comm stream)
-        pg_->scatter<float>(
+        pg_->scatter(
             temp_full_ptr ? temp_full_ptr->data<float>() : nullptr,  // send_buf (root only)
             tensor_.data<float>(),                                     // recv_buf (all ranks)
             local_size,                                                // recv_count
+            OwnTensor::Dtype::Float32,
             root,
-            ncclFloat
-        )->wait();
+            true
+        );
         
         if (temp_full_ptr) delete temp_full_ptr;
         
@@ -192,7 +195,7 @@ void DTensor::setDataFromRoot(const std::vector<float>& host_data,
             temp_full.set_data(host_data);
         }
         
-        pg_->broadcast<float>(temp_full.data<float>(), temp_full.data<float>(), global_size, root, ncclFloat)->wait();
+        pg_->broadcast(temp_full.data<float>(), temp_full.data<float>(), global_size, OwnTensor::Dtype::Float32, root, true);
         _extract_local_shard(temp_full, layout);
     }
     
@@ -312,8 +315,7 @@ void DTensor::waitForComm() {
 
 void DTensor::allReduce() {
     // In-place: input == output
-    auto work = pg_->allReduce<float>(tensor_.data<float>(), tensor_.data<float>(), size_, ncclFloat);
-    work->wait();
+    pg_->all_reduce(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, true);
 }
 
 void DTensor::reduceScatter() {
@@ -322,9 +324,8 @@ void DTensor::reduceScatter() {
     // ProcessGroup::reduceScatter is in-place: reduces full tensor into specific offsets
     // Input: tensor_ (full data)
     // Output: tensor_ + rank * count (reduced shard)
-    auto work = pg_->reduceScatter<float>(
-        tensor_.data<float>(), tensor_.data<float>(), count_per_shard, ncclFloat);
-    work->wait();
+    pg_->reduce_scatter(
+        tensor_.data<float>(), tensor_.data<float>(), count_per_shard, OwnTensor::Dtype::Float32, sum, true);
 
     // Lazy allocation: only reallocate if size changed
     std::vector<int> local_shape = layout_.get_local_shape(rank_);
@@ -349,13 +350,13 @@ void DTensor::allGather() {
     ensureTempTensor(global_shape);
 
     // NCCL allGather: each rank contributes their shard, NCCL gathers into temp_tensor_
-    auto work = pg_->allGather<float>(
+    pg_->all_gather(
         tensor_.data<float>(),
         temp_tensor_.data<float>(),
         count_per_rank,
-        ncclFloat
+        OwnTensor::Dtype::Float32,
+        true
     );
-    work->wait();
    
     std::swap(tensor_, temp_tensor_);
     shape_ = global_shape;
@@ -363,8 +364,7 @@ void DTensor::allGather() {
 }
 
 void DTensor::broadcast(int root) {
-    auto work = pg_->broadcast<float>(tensor_.data<float>(), tensor_.data<float>(), size_, root, ncclFloat);
-    work->wait();
+    pg_->broadcast(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, root, true);
 }
 
 
@@ -386,7 +386,7 @@ void DTensor::replicate(int root) {
                                         .with_dtype(tensor_.dtype()));
     }
     
-    pg_->broadcast<float>(tensor_.data<float>(), tensor_.data<float>(), total_numel, root, ncclFloat)->wait();
+    pg_->broadcast(tensor_.data<float>(), tensor_.data<float>(), total_numel, OwnTensor::Dtype::Float32, root, true);
     
     layout_ = Layout::replicated(device_mesh_, global_shape);
     shape_ = global_shape;
@@ -416,13 +416,14 @@ void DTensor::shard(int dim, int root) {
     size_t shard_numel = 1;
     for (int d : local_shape) shard_numel *= d;
     
-    pg_->scatter<float>(
+    pg_->scatter(
         tensor_.data<float>(),
         tensor_.data<float>() + rank_ * shard_numel,  // output offset for this rank
         shard_numel,
+        OwnTensor::Dtype::Float32,
         root,
-        ncclFloat
-    )->wait();
+        true
+    );
     
     OwnTensor::Shape local_shape_obj;
     local_shape_obj.dims.assign(local_shape.begin(), local_shape.end());
@@ -459,7 +460,7 @@ void DTensor::sync() {
     waitForCompute();
     
     // Start AllReduce on communication stream (async!)
-    pg_->allReduce<float>(tensor_.data<float>(), tensor_.data<float>(), size_, ncclFloat, ncclSum)->wait();
+    pg_->all_reduce(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, true);
     
     // Record that communication is done (for future compute operations that need this result)
     recordCommDone();
@@ -748,14 +749,14 @@ void DTensor::print() const {
 void DTensor::allReduce_async() {
     recordComputeDone();
     waitForCompute();
-    pg_->allReduce<float>(tensor_.data<float>(), tensor_.data<float>(), size_, ncclFloat);
+    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false);
     recordCommDone();
 }
 
 void DTensor::sync_async() {
     recordComputeDone();
     waitForCompute();
-    pg_->allReduce<float>(tensor_.data<float>(), tensor_.data<float>(), size_, ncclFloat, ncclSum);
+    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false);
     recordCommDone();
 }
 
@@ -763,7 +764,7 @@ void DTensor::reduceScatter_async() {
     size_t count_per_shard = size_ / world_size_;
     recordComputeDone();
     waitForCompute();
-    pg_->reduceScatter<float>(tensor_.data<float>(), tensor_.data<float>(), count_per_shard, ncclFloat);
+    pg_->reduce_scatter_async(tensor_.data<float>(), tensor_.data<float>(), count_per_shard, OwnTensor::Dtype::Float32, sum, false);
     std::vector<int> local_shape = layout_.get_local_shape(rank_);
     ensureTempTensor(local_shape);
     cudaMemcpyAsync(temp_tensor_.data<float>(), tensor_.data<float>() + rank_ * count_per_shard, 
@@ -780,7 +781,7 @@ void DTensor::allGather_async() {
     waitForCompute();
     std::vector<int> global_shape = layout_.get_global_shape();
     ensureTempTensor(global_shape);
-    pg_->allGather<float>(tensor_.data<float>(), temp_tensor_.data<float>(), count_per_rank, ncclFloat);
+    pg_->all_gather_async(tensor_.data<float>(), temp_tensor_.data<float>(), count_per_rank, OwnTensor::Dtype::Float32, false);
     std::swap(tensor_, temp_tensor_);
     shape_ = global_shape;
     size_ = tensor_.numel();
@@ -861,8 +862,8 @@ static OwnTensor::TensorOptions getOpts(int rank) {
         .with_dtype(OwnTensor::Dtype::Float32);
 }
 
-DTensor DTensor::empty(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg, vconst Layout& layout) {
-    int rank = pg->getRank();
+DTensor DTensor::empty(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg, const Layout& layout) {
+    int rank = pg->get_rank();
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
     // empty() just allocates memory without initialization - use Tensor constructor directly
@@ -871,8 +872,8 @@ DTensor DTensor::empty(const std::vector<int>& global_shape, std::shared_ptr<Dev
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
-DTensor DTensor::zeros(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg, const Layout& layout) {
-    int rank = pg->getRank();
+DTensor DTensor::zeros(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg, const Layout& layout) {
+    int rank = pg->get_rank();
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
     OwnTensor::Tensor local_tensor = OwnTensor::Tensor::zeros(toShape(local_shape), getOpts(rank));
@@ -880,8 +881,8 @@ DTensor DTensor::zeros(const std::vector<int>& global_shape, std::shared_ptr<Dev
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
-DTensor DTensor::ones(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg, const Layout& layout) {
-    int rank = pg->getRank();
+DTensor DTensor::ones(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg, const Layout& layout) {
+    int rank = pg->get_rank();
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
     OwnTensor::Tensor local_tensor = OwnTensor::Tensor::ones(toShape(local_shape), getOpts(rank));
@@ -889,8 +890,8 @@ DTensor DTensor::ones(const std::vector<int>& global_shape, std::shared_ptr<Devi
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
-DTensor DTensor::full(const std::vector<int>& global_shape, float value, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg, const Layout& layout) {
-    int rank = pg->getRank();
+DTensor DTensor::full(const std::vector<int>& global_shape, float value, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg, const Layout& layout) {
+    int rank = pg->get_rank();
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
     OwnTensor::Tensor local_tensor = OwnTensor::Tensor::full(toShape(local_shape), getOpts(rank), value);
@@ -898,8 +899,8 @@ DTensor DTensor::full(const std::vector<int>& global_shape, float value, std::sh
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
-DTensor DTensor::rand(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg, const Layout& layout) {
-    int rank = pg->getRank();
+DTensor DTensor::rand(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg, const Layout& layout) {
+    int rank = pg->get_rank();
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
     OwnTensor::Tensor local_tensor = OwnTensor::Tensor::rand(toShape(local_shape), getOpts(rank));
@@ -907,8 +908,8 @@ DTensor DTensor::rand(const std::vector<int>& global_shape, std::shared_ptr<Devi
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
-DTensor DTensor::randn(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg, const Layout& layout) {
-    int rank = pg->getRank();
+DTensor DTensor::randn(const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg, const Layout& layout) {
+    int rank = pg->get_rank();
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
     OwnTensor::Tensor local_tensor = OwnTensor::Tensor::randn(toShape(local_shape), getOpts(rank));
@@ -916,8 +917,8 @@ DTensor DTensor::randn(const std::vector<int>& global_shape, std::shared_ptr<Dev
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
-DTensor DTensor::randint(int64_t low, int64_t high, const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg,  const Layout& layout) {
-    int rank = pg->getRank();
+DTensor DTensor::randint(int64_t low, int64_t high, const std::vector<int>& global_shape, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg,  const Layout& layout) {
+    int rank = pg->get_rank();
     std::vector<int> local_shape = layout.get_local_shape(rank);
     
     // randint: Generate uniform [0,1) then scale to [low, high) integers
@@ -942,18 +943,18 @@ DTensor DTensor::randint(int64_t low, int64_t high, const std::vector<int>& glob
 
 DTensor DTensor::from_local(const OwnTensor::Tensor& local_tensor,
                             std::shared_ptr<DeviceMesh> mesh,
-                            std::shared_ptr<ProcessGroup> pg,
+                            std::shared_ptr<ProcessGroupNCCL> pg,
                             const Layout& layout) {
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
 DTensor DTensor::distribute_tensor(const OwnTensor::Tensor& global_tensor,
                                    std::shared_ptr<DeviceMesh> mesh,
-                                   std::shared_ptr<ProcessGroup> pg,
+                                   std::shared_ptr<ProcessGroupNCCL> pg,
                                    const Layout& layout,
                                    int root) {
-    int rank = pg->getRank();
-    int world_size = pg->getWorldSize();
+    int rank = pg->get_rank();
+    int world_size = pg->get_worldsize();
     
     std::vector<int> global_shape = layout.get_global_shape();
     std::vector<int> local_shape = layout.get_local_shape(rank);
@@ -979,8 +980,8 @@ DTensor DTensor::distribute_tensor(const OwnTensor::Tensor& global_tensor,
         }
         
         // Broadcast to all ranks
-        pg->broadcast<float>(full_tensor.data<float>(), full_tensor.data<float>(),
-                             global_size, root, ncclFloat)->wait();
+        pg->broadcast(full_tensor.data<float>(), full_tensor.data<float>(),
+                             global_size, OwnTensor::Dtype::Float32, root, true);
         
         return DTensor(mesh, pg, full_tensor, layout);
     }
@@ -990,13 +991,14 @@ DTensor DTensor::distribute_tensor(const OwnTensor::Tensor& global_tensor,
     
     if (shard_dim == 0) {
         // Row-sharded: Use scatter directly (contiguous chunks)
-        pg->scatter<float>(
+        pg->scatter(
             (rank == root) ? global_tensor.data<float>() : nullptr,
             local_tensor.data<float>(),
             local_size,
+            OwnTensor::Dtype::Float32,
             root,
-            ncclFloat
-        )->wait();
+            true
+        );
         
     } else if (shard_dim == 1) {
         // Column-sharded: Broadcast full tensor, then extract local shard
@@ -1007,8 +1009,8 @@ DTensor DTensor::distribute_tensor(const OwnTensor::Tensor& global_tensor,
                        global_size * sizeof(float), cudaMemcpyDeviceToDevice);
         }
         
-        pg->broadcast<float>(full_tensor.data<float>(), full_tensor.data<float>(),
-                             global_size, root, ncclFloat)->wait();
+        pg->broadcast(full_tensor.data<float>(), full_tensor.data<float>(),
+                             global_size, OwnTensor::Dtype::Float32, root, true);
         
         // Extract column shard (non-contiguous 2D slice)
         int rows = global_shape[0];
@@ -1016,17 +1018,15 @@ DTensor DTensor::distribute_tensor(const OwnTensor::Tensor& global_tensor,
         int local_cols = local_shape[1];
         int col_offset = rank * local_cols;
         
-        cudaStream_t stream = pg->getDataStream();
+        // Use a synchronous copy since we don't have stream pool here
         for (int row = 0; row < rows; ++row) {
-            cudaMemcpyAsync(
+            cudaMemcpy(
                 local_tensor.data<float>() + row * local_cols,
                 full_tensor.data<float>() + row * global_cols + col_offset,
                 local_cols * sizeof(float),
-                cudaMemcpyDeviceToDevice,
-                stream
+                cudaMemcpyDeviceToDevice
             );
         }
-        cudaStreamSynchronize(stream);
     }
     
     return DTensor(mesh, pg, local_tensor, layout);

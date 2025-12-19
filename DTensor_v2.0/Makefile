@@ -47,7 +47,7 @@ SRCS = \
     main.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/process_group_nccl.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     ckpt/ckpt.cpp
@@ -78,7 +78,7 @@ TEST_MLP_SRCS = \
 	test_mlp_forward.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -131,7 +131,7 @@ TEST_DEVICE_MESH_SRCS = \
 	tests/test_device_mesh.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -157,7 +157,7 @@ MATMUL_BENCHMARK_SRCS = \
 	benchmarks/matmul_benchmark.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -175,7 +175,7 @@ ROW_BREAKDOWN_SRCS = \
 	benchmarks/row_parallel_breakdown.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -193,7 +193,7 @@ TEST_MATMUL_SRCS = \
 	tests/test_matmul.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -210,7 +210,7 @@ ROW_BREAKDOWN_CUSTOM_SRCS = \
 	benchmarks/row_parallel_breakdown.cpp \
 	tensor/dtensor_own.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge_own.cpp \
 	ckpt/ckpt.cpp
@@ -227,7 +227,7 @@ GRADIENT_SYNC_SRCS = \
 	examples/gradient_sync_example.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -249,7 +249,7 @@ TP_MLP_SRCS = \
 	examples/tensor_parallel_mlp.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -268,7 +268,7 @@ TEST_MLP_BENCHMARK_SRCS = \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
 	tensor/activation_kernels.cu \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -291,7 +291,7 @@ TEST_DTENSOR_FACTORY_SRCS = \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
 	tensor/activation_kernels.cu \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp
@@ -313,7 +313,7 @@ TEST_DTENSOR_CREATION_SRCS = \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
 	tensor/activation_kernels.cu \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	ckpt/ckpt.cpp

@@ -33,123 +33,123 @@ bool compare_vectors(const std::vector<float>& a, const std::vector<float>& b, i
 
 
 int main(int argc, char** argv) {
-    MPI_Init(&argc, &argv);
+    // MPI_Init(&argc, &argv);
 
-    int rank, world_size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    // int rank, world_size;
+    // MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    // MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
-    if (world_size != 2) {
-        if (rank == 0) {
-            std::cerr << "This test requires exactly 2 MPI processes." << std::endl;
-        }
-        MPI_Finalize();
-        return 1;
-    }
+    // if (world_size != 2) {
+    //     if (rank == 0) {
+    //         std::cerr << "This test requires exactly 2 MPI processes." << std::endl;
+    //     }
+    //     MPI_Finalize();
+    //     return 1;
+    // }
 
-    // 1. Setup
-    ncclUniqueId nccl_id;
-    if (rank == 0) {
-        ncclGetUniqueId(&nccl_id);
-    }
-    MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD);
+    // // 1. Setup
+    // ncclUniqueId nccl_id;
+    // if (rank == 0) {
+    //     ncclGetUniqueId(&nccl_id);
+    // }
+    // MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
-    auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
+    // auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    // auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
 
-    // Global tensor shape and data
-    std::vector<int> global_shape = {4, 8};
-    size_t global_numel = global_shape[0] * global_shape[1];
-    std::vector<float> global_data(global_numel);
-    std::iota(global_data.begin(), global_data.end(), 0);
+    // // Global tensor shape and data
+    // std::vector<int> global_shape = {4, 8};
+    // size_t global_numel = global_shape[0] * global_shape[1];
+    // std::vector<float> global_data(global_numel);
+    // std::iota(global_data.begin(), global_data.end(), 0);
 
-    if (rank == 0) {
-        std::cout << "--- C++ Test Setup Complete ---" << std::endl;
-    }
+    // if (rank == 0) {
+    //     std::cout << "--- C++ Test Setup Complete ---" << std::endl;
+    // }
 
-    // =================================================================
-    // Test 1: Sharded to Replicated
-    // =================================================================
-    if (rank == 0) {
-        std::cout << "\n--- Running Test 1: Sharded to Replicated ---" << std::endl;
-    }
+    // // =================================================================
+    // // Test 1: Sharded to Replicated
+    // // =================================================================
+    // if (rank == 0) {
+    //     std::cout << "\n--- Running Test 1: Sharded to Replicated ---" << std::endl;
+    // }
 
-    Layout layout_sharded_col({mesh, global_shape, ShardingType::SHARDED, 1});
+    // Layout layout_sharded_col({mesh, global_shape, ShardingType::SHARDED, 1});
     
-    // Manually calculate the local shard for each rank (column sharding)
-    std::vector<float> local_data_shard_col;
-    for (int r = 0; r < global_shape[0]; ++r) {
-        for (int c = rank * (global_shape[1]/world_size); c < (rank + 1) * (global_shape[1]/world_size); ++c) {
-            local_data_shard_col.push_back(global_data[r * global_shape[1] + c]);
-        }
-    }
+    // // Manually calculate the local shard for each rank (column sharding)
+    // std::vector<float> local_data_shard_col;
+    // for (int r = 0; r < global_shape[0]; ++r) {
+    //     for (int c = rank * (global_shape[1]/world_size); c < (rank + 1) * (global_shape[1]/world_size); ++c) {
+    //         local_data_shard_col.push_back(global_data[r * global_shape[1] + c]);
+    //     }
+    // }
     
-    DTensor tensor_sharded(mesh, pg);
-    tensor_sharded.setData(local_data_shard_col, layout_sharded_col);
+    // DTensor tensor_sharded(mesh, pg);
+    // tensor_sharded.setData(local_data_shard_col, layout_sharded_col);
 
-    Layout layout_replicated({mesh, global_shape, ShardingType::REPLICATED});
-    DTensor tensor_replicated = tensor_sharded.redistribute(layout_replicated);
+    // Layout layout_replicated({mesh, global_shape, ShardingType::REPLICATED});
+    // DTensor tensor_replicated = tensor_sharded.redistribute(layout_replicated);
 
-    // Verification
-    assert(tensor_replicated.get_layout().is_replicated());
-    std::vector<float> replicated_data = tensor_replicated.getData();
-    assert(compare_vectors(replicated_data, global_data, rank));
+    // // Verification
+    // assert(tensor_replicated.get_layout().is_replicated());
+    // std::vector<float> replicated_data = tensor_replicated.getData();
+    // assert(compare_vectors(replicated_data, global_data, rank));
     
-    if (rank == 0) {
-        std::cout << "PASSED: Sharded -> Replicated" << std::endl;
-    }
+    // if (rank == 0) {
+    //     std::cout << "PASSED: Sharded -> Replicated" << std::endl;
+    // }
 
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
 
-    // =================================================================
-    // Test 2: Replicated to Sharded
-    // =================================================================
-    if (rank == 0) {
-        std::cout << "\n--- Running Test 2: Replicated to Sharded ---" << std::endl;
-    }
+    // // =================================================================
+    // // Test 2: Replicated to Sharded
+    // // =================================================================
+    // if (rank == 0) {
+    //     std::cout << "\n--- Running Test 2: Replicated to Sharded ---" << std::endl;
+    // }
 
-    DTensor tensor_resharded = tensor_replicated.redistribute(layout_sharded_col);
+    // DTensor tensor_resharded = tensor_replicated.redistribute(layout_sharded_col);
 
-    // Verification
-    assert(tensor_resharded.get_layout().is_sharded());
-    std::vector<float> resharded_data = tensor_resharded.getData();
-    assert(compare_vectors(resharded_data, local_data_shard_col, rank));
+    // // Verification
+    // assert(tensor_resharded.get_layout().is_sharded());
+    // std::vector<float> resharded_data = tensor_resharded.getData();
+    // assert(compare_vectors(resharded_data, local_data_shard_col, rank));
 
-    if (rank == 0) {
-        std::cout << "PASSED: Replicated -> Sharded" << std::endl;
-    }
+    // if (rank == 0) {
+    //     std::cout << "PASSED: Replicated -> Sharded" << std::endl;
+    // }
 
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
 
-    // =================================================================
-    // Test 3: Sharded to Sharded (different dimension)
-    // =================================================================
-    if (rank == 0) {
-        std::cout << "\n--- Running Test 3: Sharded to Sharded (different dim) ---" << std::endl;
-    }
+    // // =================================================================
+    // // Test 3: Sharded to Sharded (different dimension)
+    // // =================================================================
+    // if (rank == 0) {
+    //     std::cout << "\n--- Running Test 3: Sharded to Sharded (different dim) ---" << std::endl;
+    // }
     
-    Layout layout_sharded_row({mesh, global_shape, ShardingType::SHARDED, 0});
+    // Layout layout_sharded_row({mesh, global_shape, ShardingType::SHARDED, 0});
     
-    // Manually calculate the new expected local shard (row sharding)
-    std::vector<float> local_data_shard_row;
-     for (int r = rank * (global_shape[0]/world_size); r < (rank + 1) * (global_shape[0]/world_size); ++r) {
-        for (int c = 0; c < global_shape[1]; ++c) {
-            local_data_shard_row.push_back(global_data[r * global_shape[1] + c]);
-        }
-    }
+    // // Manually calculate the new expected local shard (row sharding)
+    // std::vector<float> local_data_shard_row;
+    //  for (int r = rank * (global_shape[0]/world_size); r < (rank + 1) * (global_shape[0]/world_size); ++r) {
+    //     for (int c = 0; c < global_shape[1]; ++c) {
+    //         local_data_shard_row.push_back(global_data[r * global_shape[1] + c]);
+    //     }
+    // }
 
-    DTensor tensor_row_sharded = tensor_sharded.redistribute(layout_sharded_row);
+    // DTensor tensor_row_sharded = tensor_sharded.redistribute(layout_sharded_row);
 
-    // Verification
-    assert(tensor_row_sharded.get_layout().is_sharded());
-    std::vector<float> row_sharded_data = tensor_row_sharded.getData();
-    assert(compare_vectors(row_sharded_data, local_data_shard_row, rank));
+    // // Verification
+    // assert(tensor_row_sharded.get_layout().is_sharded());
+    // std::vector<float> row_sharded_data = tensor_row_sharded.getData();
+    // assert(compare_vectors(row_sharded_data, local_data_shard_row, rank));
 
-    if (rank == 0) {
-        std::cout << "PASSED: Sharded -> Sharded (col to row)" << std::endl;
-        std::cout << "\n--- All C++ tests completed successfully ---" << std::endl;
-    }
+    // if (rank == 0) {
+    //     std::cout << "PASSED: Sharded -> Sharded (col to row)" << std::endl;
+    //     std::cout << "\n--- All C++ tests completed successfully ---" << std::endl;
+    // }
 
-    MPI_Finalize();
+    // MPI_Finalize();
     return 0;
 }

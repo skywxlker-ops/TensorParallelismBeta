@@ -11,8 +11,8 @@
 #include <nccl.h>
 #include <cmath>
 
-void test_empty(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_empty(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {4, 8};
     Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);  // Shard on dim 0
     
@@ -27,8 +27,8 @@ void test_empty(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> 
               << (pass ? "PASS" : "FAIL") << std::endl;
 }
 
-void test_zeros(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_zeros(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {4, 6};
     Layout layout(mesh, global_shape, ShardingType::SHARDED, 1);  // Shard on dim 1
     
@@ -44,8 +44,8 @@ void test_zeros(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> 
               << (all_zeros ? "PASS" : "FAIL") << std::endl;
 }
 
-void test_ones(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_ones(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {4, 4};
     Layout layout = Layout::replicated(mesh, global_shape);  // Replicated
     
@@ -61,8 +61,8 @@ void test_ones(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> p
               << (all_ones ? "PASS" : "FAIL") << std::endl;
 }
 
-void test_full(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_full(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {2, 4};
     Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
     float fill_value = 3.14f;
@@ -79,8 +79,8 @@ void test_full(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> p
               << (all_correct ? "PASS" : "FAIL") << std::endl;
 }
 
-void test_rand(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_rand(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {100, 100};
     Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
     
@@ -102,8 +102,8 @@ void test_rand(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> p
               << ", mean=" << mean << " " << (mean_ok ? "PASS" : "FAIL") << std::endl;
 }
 
-void test_randn(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_randn(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {100, 100};
     Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
     
@@ -127,8 +127,8 @@ void test_randn(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> 
               << ", var=" << variance << " " << (var_ok ? "PASS" : "FAIL") << std::endl;
 }
 
-void test_randint(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_randint(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {4, 4};
     Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
     int64_t low = 0, high = 10;
@@ -146,8 +146,8 @@ void test_randint(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup
               << (in_range ? "PASS" : "FAIL") << std::endl;
 }
 
-void test_from_local(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
-    int rank = pg->getRank();
+void test_from_local(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    int rank = pg->get_rank();
     std::vector<int> global_shape = {4, 4};
     Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
     
@@ -184,12 +184,8 @@ int main(int argc, char** argv) {
     // Setup device mesh following test_mlp_benchmark.cpp pattern
     auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
     
-    // Create NCCL communicator
-    ncclUniqueId nccl_id;
-    if (rank == 0) ncclGetUniqueId(&nccl_id);
-    MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, 0, MPI_COMM_WORLD);
     
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
     
     std::cout << "\n=== DTensor Factory Functions Test (Rank " << rank << "/" << world_size << ") ===\n" << std::endl;
     
@@ -219,7 +215,7 @@ int main(int argc, char** argv) {
     
     // Test distribute_tensor (new)
     {
-        int rank = pg->getRank();
+        int rank = pg->get_rank();
         std::vector<int> global_shape = {4, 8};
         
         // Create global tensor on root
