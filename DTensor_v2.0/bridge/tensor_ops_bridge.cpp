@@ -58,7 +58,7 @@ Tensor div(const Tensor& A, const Tensor& B) {
 
 // ------------------------------------------------------------
 // Local MatMul (2D/3D) using cuBLAS or fallback
-// (This is your local matmul, it is fine, no changes needed)
+
 // ------------------------------------------------------------
 Tensor matmul(const Tensor& A, const Tensor& B) {
     const auto& a_dims = A.shape().dims;
