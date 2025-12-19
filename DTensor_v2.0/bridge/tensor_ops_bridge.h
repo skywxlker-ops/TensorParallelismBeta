@@ -6,7 +6,7 @@
 
 
 class DTensor;
-class ProcessGroup;
+class ProcessGroupNCCL;
 class DeviceMesh;
 
 namespace TensorOpsBridge {
@@ -25,6 +25,6 @@ DTensor from_data(
     const std::vector<float>& host_data,
     const std::vector<int>& shape,
     std::shared_ptr<DeviceMesh> device_mesh,
-    std::shared_ptr<ProcessGroup> pg);
+    std::shared_ptr<ProcessGroupNCCL> pg);
 
 } 

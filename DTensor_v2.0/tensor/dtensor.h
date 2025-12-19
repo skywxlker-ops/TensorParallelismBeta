@@ -4,7 +4,8 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "process_group.h"
+#include "ProcessGroupNCCL.h"
+#include "stream_pool.h"
 #include "memory/cachingAllocator.hpp"
 
 
@@ -27,7 +28,7 @@ extern CachingAllocator gAllocator;
 class DTensor {
 public:
 
-    DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg);
+    DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, std::shared_ptr<StreamPool> stream_pool = nullptr);
     ~DTensor();
 
     // Collective Communication Operations
@@ -99,7 +100,7 @@ public:
 
     const Layout& get_layout() const { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
-    std::shared_ptr<ProcessGroup> get_pg() const { return pg_; }
+    std::shared_ptr<ProcessGroupNCCL> get_pg() const { return pg_; }
     std::shared_ptr<DeviceMesh> get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
 
@@ -114,7 +115,7 @@ public:
      */
     static DTensor empty(const std::vector<int>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
-                         std::shared_ptr<ProcessGroup> pg,
+                         std::shared_ptr<ProcessGroupNCCL> pg,
                          const Layout& layout);
     
     /**
@@ -122,7 +123,7 @@ public:
      */
     static DTensor zeros(const std::vector<int>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
-                         std::shared_ptr<ProcessGroup> pg,
+                         std::shared_ptr<ProcessGroupNCCL> pg,
                          const Layout& layout);
     
     /**
@@ -130,7 +131,7 @@ public:
      */
     static DTensor ones(const std::vector<int>& global_shape,
                         std::shared_ptr<DeviceMesh> mesh,
-                        std::shared_ptr<ProcessGroup> pg,
+                        std::shared_ptr<ProcessGroupNCCL> pg,
                         const Layout& layout);
     
     /**
@@ -139,7 +140,7 @@ public:
     static DTensor full(const std::vector<int>& global_shape,
                         float value,
                         std::shared_ptr<DeviceMesh> mesh,
-                        std::shared_ptr<ProcessGroup> pg,
+                        std::shared_ptr<ProcessGroupNCCL> pg,
                         const Layout& layout);
     
     /**
@@ -147,7 +148,7 @@ public:
      */
     static DTensor rand(const std::vector<int>& global_shape,
                         std::shared_ptr<DeviceMesh> mesh,
-                        std::shared_ptr<ProcessGroup> pg,
+                        std::shared_ptr<ProcessGroupNCCL> pg,
                         const Layout& layout);
     
     /**
@@ -155,7 +156,7 @@ public:
      */
     static DTensor randn(const std::vector<int>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
-                         std::shared_ptr<ProcessGroup> pg,
+                         std::shared_ptr<ProcessGroupNCCL> pg,
                          const Layout& layout);
     
     /**
@@ -164,7 +165,7 @@ public:
     static DTensor randint(int64_t low, int64_t high,
                            const std::vector<int>& global_shape,
                            std::shared_ptr<DeviceMesh> mesh,
-                           std::shared_ptr<ProcessGroup> pg,
+                           std::shared_ptr<ProcessGroupNCCL> pg,
                            const Layout& layout);
     
     /**
@@ -173,7 +174,7 @@ public:
      */
     static DTensor from_local(const OwnTensor::Tensor& local_tensor,
                               std::shared_ptr<DeviceMesh> mesh,
-                              std::shared_ptr<ProcessGroup> pg,
+                              std::shared_ptr<ProcessGroupNCCL> pg,
                               const Layout& layout);
 
     /**
@@ -191,14 +192,14 @@ public:
      */
     static DTensor distribute_tensor(const OwnTensor::Tensor& global_tensor,
                                      std::shared_ptr<DeviceMesh> mesh,
-                                     std::shared_ptr<ProcessGroup> pg,
+                                     std::shared_ptr<ProcessGroupNCCL> pg,
                                      const Layout& layout,
                                      int root = 0);
 
 private:
 
     DTensor(std::shared_ptr<DeviceMesh> device_mesh,
-            std::shared_ptr<ProcessGroup> pg,
+            std::shared_ptr<ProcessGroupNCCL> pg,
             const OwnTensor::Tensor& local_tensor,
             const Layout& layout);
 
@@ -226,7 +227,8 @@ private:
     int rank_;
     int world_size_;
     std::shared_ptr<DeviceMesh> device_mesh_;
-    std::shared_ptr<ProcessGroup> pg_;
+    std::shared_ptr<ProcessGroupNCCL> pg_;
+    std::shared_ptr<StreamPool> stream_pool_;
     
     // Multi-stream support for concurrent execution
     cudaStream_t compute_stream_;  // For matmul, activations
