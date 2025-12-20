@@ -42,6 +42,7 @@ LIBS = \
     -lnccl \
     -lcudart \
     -lcublas \
+    -lcurand \
     -Xlinker -lmpi \
     -Xlinker -lmpi_cxx
 # Removed: -lcgad (autograd library not needed)
@@ -52,7 +53,7 @@ CORE_SRCS = \
     $(PARENT_DIR)/tensor/dtensor_native.cpp \
     $(PARENT_DIR)/tensor/device_mesh.cpp \
     $(PARENT_DIR)/tensor/activation_kernels.cu \
-    $(PARENT_DIR)/process_group/process_group_nccl.cpp \
+    $(PARENT_DIR)/process_group/processGroupNccl.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
     $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp \
     $(PARENT_DIR)/ckpt/ckpt.cpp
@@ -63,7 +64,7 @@ CORE_OBJS := $(CORE_OBJS:.cu=.o)
 
 
 # --- Test Executables ---
-TESTS = test_stream_pool test_process_group test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
+TESTS = test_stream_pool test_process_group test_process_group_nccl test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
 
 # --- Test Source Files ---
 TEST_STREAM_SRC = test_stream_pool.cpp
@@ -96,6 +97,8 @@ TEST_ATTN_SRC = test_attention_parallel.cpp
 TEST_ATTN_OBJ = $(TEST_ATTN_SRC:.cpp=.o)
 TEST_MLP_BENCH_SRC = test_mlp_benchmark.cpp
 TEST_MLP_BENCH_OBJ = $(TEST_MLP_BENCH_SRC:.cpp=.o)
+TEST_PG_NCCL_SRC = test_process_group_nccl.cpp
+TEST_PG_NCCL_OBJ = $(TEST_PG_NCCL_SRC:.cpp=.o)
 
 # =============================================================================
 # Build Rules
@@ -201,6 +204,11 @@ test_mlp_benchmark: $(TEST_MLP_BENCH_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"
 
+test_process_group_nccl: $(TEST_PG_NCCL_OBJ) $(PARENT_DIR)/process_group/processGroupNccl.o $(PARENT_DIR)/tensor/dtensor.o $(PARENT_DIR)/tensor/device_mesh.o $(PARENT_DIR)/tensor/activation_kernels.o $(PARENT_DIR)/memory/cachingAllocator.o $(PARENT_DIR)/bridge/tensor_ops_bridge.o $(TENSOR_LIB_A)
+	@echo "\\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
 # --- Run Test Rules ---
 
 run_stream: test_stream_pool
@@ -250,6 +258,12 @@ run_mlp_bench_tp: test_mlp_benchmark
 	@echo "Running: MLP Benchmark (2-GPU TP)"
 	@echo "=========================================="
 	mpirun -np 2 --allow-run-as-root ./test_mlp_benchmark
+
+run_pg_nccl: test_process_group_nccl
+	@echo "\n=========================================="
+	@echo "Running: ProcessGroupNCCL Tests (2 Ranks)"
+	@echo "=========================================="
+	mpirun -np 2 --allow-run-as-root ./test_process_group_nccl
 
 # Run all tests sequentially
 run_all: run_stream run_pg run_mlp run_redist run_gpu_init
