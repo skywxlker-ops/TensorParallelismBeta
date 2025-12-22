@@ -104,3 +104,35 @@ public:
 private:
     std::string reduce_op_;  
 };
+
+
+// class Partial : public Placement {
+// public:
+//     // The default reduction operation is "sum" [2].
+//     explicit Partial(std::string reduce_op = "sum") : reduce_op_(std::move(reduce_op)) {}
+    
+//     PlacementType type() const override { 
+//         return PlacementType::PARTIAL; 
+//     }
+    
+//     std::string reduce_op() const { return reduce_op_; }
+    
+//     std::string describe() const override {
+//         std::ostringstream oss;
+//         oss << "Partial(reduce_op=" << reduce_op_ << ")"; [3]
+//         return oss.str();
+//     }
+    
+//     std::shared_ptr<Placement> clone() const override {
+//         return std::make_shared<Partial>(reduce_op_);
+//     }
+    
+//     bool equals(const Placement* other) const override {
+//         if (other->type() != PlacementType::PARTIAL) return false;
+//         // Equality depends on the reduction operation used [4, 5].
+//         return reduce_op_ == static_cast<const Partial*>(other)->reduce_op_;
+//     }
+    
+// private:
+//     std::string reduce_op_;  
+// };
