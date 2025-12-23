@@ -100,23 +100,23 @@ Tensor matmul(const Tensor& A, const Tensor& B) {
 
 
 
-DTensor from_data(
-    const std::vector<float>& host_data,
-    const std::vector<int>& shape,
-    std::shared_ptr<DeviceMesh> device_mesh,
-    std::shared_ptr<ProcessGroup> pg) 
-{
+// DTensor from_data(
+//     const std::vector<float>& host_data,
+//     const std::vector<int>& shape,
+//     std::shared_ptr<DeviceMesh> device_mesh,
+//     std::shared_ptr<ProcessGroup> pg) 
+// {
     
-    DTensor out(device_mesh, pg);
+//     DTensor out(device_mesh, pg);
 
 
-    Layout replicated_layout = Layout::replicated(device_mesh, shape);
+//     Layout replicated_layout = Layout::replicated(device_mesh, shape);
 
 
-    out.setData(host_data, replicated_layout);
+//     out.setData(host_data, replicated_layout);
     
-    return out;
-}
+//     return out;
+// }
 
 
 }  

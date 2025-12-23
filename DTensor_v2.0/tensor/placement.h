@@ -15,7 +15,7 @@ public:
     virtual ~Placement() = default;
     // Placement() = default;
     virtual PlacementType type() const = 0;
-    virtual int dim() const {} // temp optimization
+    virtual int dim() const { return -1;}; // temp optimization
 
 };
 

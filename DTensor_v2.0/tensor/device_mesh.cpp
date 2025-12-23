@@ -12,7 +12,7 @@ DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape,
     }
 
     total_devices_ = std::accumulate(mesh_shape_.begin(), mesh_shape_.end(), 
-                                     1, std::multiplies<int>());
+                                     1, std::multiplies<int64_t>());
     
 
     MPI_Comm_rank(MPI_COMM_WORLD, &global_rank_);
@@ -60,12 +60,12 @@ DeviceMesh::~DeviceMesh() {
 }
 
 
-std::vector<int> DeviceMesh::get_coordinate(int rank) const {
-    std::vector<int> coord(ndim());
-    int remaining = rank;
+std::vector<int64_t> DeviceMesh::get_coordinate(int rank) const {
+    std::vector<int64_t> coord(ndim());
+    int64_t remaining = rank;
     
     // Row-major ordering (x,y) y changes faster
-    for (int dim = ndim() - 1; dim >= 0; --dim) {
+    for (int64_t dim = ndim() - 1; dim >= 0; --dim) {
         coord[dim] = remaining % mesh_shape_[dim];
         remaining /= mesh_shape_[dim];
     }
@@ -73,16 +73,17 @@ std::vector<int> DeviceMesh::get_coordinate(int rank) const {
     return coord;
 }
 
-int DeviceMesh::get_rank(const std::vector<int>& coordinate) const {
-    if ((int)coordinate.size() != ndim()) {
+
+int DeviceMesh::get_rank(const std::vector<int64_t>& coordinate) const {
+    if ((int64_t)coordinate.size() != ndim()) {
         throw std::runtime_error("DeviceMesh: coordinate size must match mesh ndim");
     }
     
     int rank = 0;
-    int stride = 1;
+    int64_t stride = 1;
     
     // Row-major ordering
-    for (int dim = ndim() - 1; dim >= 0; --dim) {
+    for (int64_t dim = ndim() - 1; dim >= 0; --dim) {
         if (coordinate[dim] < 0 || coordinate[dim] >= mesh_shape_[dim]) {
             throw std::runtime_error("DeviceMesh: coordinate out of bounds");
         }
@@ -94,16 +95,16 @@ int DeviceMesh::get_rank(const std::vector<int>& coordinate) const {
 }
 
 
-std::vector<int> DeviceMesh::get_group_ranks(int mesh_dim) const {
+std::vector<int> DeviceMesh::get_group_ranks(int64_t mesh_dim) const {
     if (mesh_dim < 0 || mesh_dim >= ndim()) {
         throw std::runtime_error("DeviceMesh: invalid mesh_dim");
     }
     
     std::vector<int> ranks;
 
-    std::vector<int> base_coord = my_coordinate_;
+    std::vector<int64_t> base_coord = my_coordinate_;
     
-    for (int i = 0; i < mesh_shape_[mesh_dim]; ++i) {
+    for (int64_t i = 0; i < mesh_shape_[mesh_dim]; ++i) {
         base_coord[mesh_dim] = i;
         ranks.push_back(get_rank(base_coord));
     }
@@ -111,7 +112,7 @@ std::vector<int> DeviceMesh::get_group_ranks(int mesh_dim) const {
     return ranks;
 }
 
-int DeviceMesh::get_dim_rank(int mesh_dim) const {
+int DeviceMesh::get_dim_rank(int64_t mesh_dim) const {
     if (mesh_dim < 0 || mesh_dim >= ndim()) {
         throw std::runtime_error("DeviceMesh: invalid mesh_dim");
     }
@@ -122,27 +123,27 @@ void DeviceMesh::initialize_process_groups() {
     process_groups_.resize(ndim());
     mpi_comms_.resize(ndim(), MPI_COMM_NULL);
     
-    for (int mesh_dim = 0; mesh_dim < ndim(); ++mesh_dim) {
+    for (int64_t mesh_dim = 0; mesh_dim < ndim(); ++mesh_dim) {
   
         std::vector<int> group_ranks = get_group_ranks(mesh_dim);
-        int group_size = group_ranks.size();
+        int64_t group_size = group_ranks.size();
  
         auto it = std::find(group_ranks.begin(), group_ranks.end(), global_rank_);
-        int my_group_rank = std::distance(group_ranks.begin(), it);
+        int64_t my_group_rank = std::distance(group_ranks.begin(), it);
         
-        int color = 0;
-        int multiplier = 1;
-        for (int d = ndim() - 1; d >= 0; --d) {
+        int64_t color = 0;
+        int64_t multiplier = 1;
+        for (int64_t d = ndim() - 1; d >= 0; --d) {
             if (d != mesh_dim) { 
                 color += my_coordinate_[d] * multiplier;
                 multiplier *= mesh_shape_[d];
             }
         }
 
-        int key = my_coordinate_[mesh_dim];
+        int64_t key = my_coordinate_[mesh_dim];
 
        
-        int mpi_err = MPI_Comm_split(MPI_COMM_WORLD, color, key, &mpi_comms_[mesh_dim]);
+        int64_t mpi_err = MPI_Comm_split(MPI_COMM_WORLD, color, key, &mpi_comms_[mesh_dim]);
         if (mpi_err != MPI_SUCCESS) {
             throw std::runtime_error("DeviceMesh: MPI_Comm_split failed for mesh_dim " + 
                                    std::to_string(mesh_dim));
@@ -166,12 +167,10 @@ void DeviceMesh::initialize_process_groups() {
                       << " expected=" << my_group_rank << "\n";
             throw std::runtime_error("DeviceMesh: MPI sub-communicator rank mismatch");
         }
-        
-  
+          
         ncclUniqueId nccl_id = create_nccl_id(0, mpi_comms_[mesh_dim]);
-        
 
-        int device = device_ids_[global_rank_];
+        int64_t device = device_ids_[global_rank_];
 
         process_groups_[mesh_dim] = std::make_shared<ProcessGroup>(
             my_group_rank, group_size, device, nccl_id
@@ -194,7 +193,7 @@ ncclUniqueId DeviceMesh::create_nccl_id(int root_rank, MPI_Comm comm) {
     return nccl_id;
 }
 
-std::shared_ptr<ProcessGroup> DeviceMesh::get_process_group(int mesh_dim) {
+std::shared_ptr<ProcessGroup> DeviceMesh::get_process_group(int64_t mesh_dim) {
     if (mesh_dim < 0 || mesh_dim >= ndim()) {
         throw std::runtime_error("DeviceMesh: invalid mesh_dim");
     }
@@ -202,7 +201,7 @@ std::shared_ptr<ProcessGroup> DeviceMesh::get_process_group(int mesh_dim) {
 }
 
 
-int DeviceMesh::size() const {
+int64_t DeviceMesh::size() const {
     return total_devices_;
 }
 

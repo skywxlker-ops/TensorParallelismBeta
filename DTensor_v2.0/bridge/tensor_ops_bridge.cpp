@@ -1,15 +1,16 @@
+#include "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/TensorLib.h"
 #include "bridge/tensor_ops_bridge.h"
-#include "tensor/dtensor.h" 
 #include "tensor/layout.h"
 #include "tensor/device_mesh.h"
 #include "tensor/placement.h"
 #include "process_group/process_group.h"
-#include "include/TensorLib.h"
 #include <iostream>
 #include <stdexcept>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <nccl.h>
+#include "tensor/dtensor.h" 
+
 
 #pragma GCC visibility push(default)
 
@@ -64,8 +65,8 @@ OwnTensor::Tensor matmul(const OwnTensor::Tensor& A, const  OwnTensor::Tensor& B
 
  
     if (a_dims.size() == 2 && b_dims.size() == 2) {
-        if (A.device().device == OwnTensor::Tensor::Device::CUDA &&
-            B.device().device == OwnTensor::Tensor::Device::CUDA) {
+        if (A.device().device == OwnTensor::Device::CUDA &&
+            B.device().device == OwnTensor::Device::CUDA) {
             
             // A : [M, K], B : [K, N]
             int M = a_dims[0];
@@ -116,27 +117,26 @@ OwnTensor::Tensor matmul(const OwnTensor::Tensor& A, const  OwnTensor::Tensor& B
     }
 
     
-    return OwnTensor::Tensor::matmul(A, B);
+    return OwnTensor::matmul(A, B);
 }
 
 
-DTensor from_data(
-    const std::vector<float>& host_data,
-    const std::vector<int>& shape,
-    std::shared_ptr<DeviceMesh> device_mesh,
-    std::shared_ptr<ProcessGroup> pg) 
-{
+// DTensor from_data(
+//     const std::vector<float>& host_data,
+//     const std::vector<int>& shape,
+//     std::shared_ptr<DeviceMesh> device_mesh,
+//     std::shared_ptr<ProcessGroup> pg) 
+// {
 
-    DTensor out(device_mesh, pg);
 
-   
-    Layout replicated_layout = Layout::replicated(device_mesh, shape);
-
-  
-    out.setData(host_data, replicated_layout);
+//     Layout replicated_layout(device_mesh, shape);
     
-    return out;
-}
+//     DTensor out(device_mesh, pg, replicated_layout);
+  
+//     out.setData(host_data);
+    
+//     return out;
+// }
 
 
 

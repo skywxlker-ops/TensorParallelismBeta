@@ -1,19 +1,20 @@
-#include "tensor/dtensor.h"
-#include <cuda_runtime.h>
 #include <nccl.h>
+#include <cuda_runtime.h>
 #include <fstream>
 #include <iostream>
 #include <filesystem>
 #include <numeric> 
 #include <stdexcept> 
 #include <sstream>
-#include "../Tensor-Implementations/include/TensorLib.h"
+#include "tensor/dtensor.h"
+#include "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/TensorLib.h"
+
 
 
 CachingAllocator gAllocator;
 // using namespace OwnTensor;
 
-DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg, Layout layout)
+DTensor::DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroup> pg, Layout layout)
     : rank_(pg->getRank()),
       world_size_(pg->getWorldSize()),// worldsize is no. of GPUs in a group.
       device_mesh_(device_mesh),
@@ -25,7 +26,11 @@ DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<Proces
 
       { 
         shape_ = layout.get_global_shape();
-        OwnTensor::Tensor tensor  = OwnTensor::Tensor({shape_},{ OwnTensor::Dtype::Float32, OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_)});
+        OwnTensor::TensorOptions opts;
+        opts.dtype = OwnTensor::Dtype::Float32;
+        opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
+        OwnTensor::Shape shape{shape_};
+        OwnTensor::Tensor tensor = OwnTensor::Tensor(shape, opts);
         size_ = 1;
         for (int d : layout_.get_global_shape()) size_ *= d;        
       }
@@ -58,7 +63,7 @@ DTensor::~DTensor() {
   
     cudaStreamSynchronize(stream_); 
     // if (data_block_) gAllocator.freeMemory(data_block_);
-    tensor_.release();
+    // tensor_.release();
 }
 
 void DTensor::setData(const std::vector<float>& host_data) {
@@ -99,79 +104,12 @@ std::vector<float> DTensor::getData() const {
     return host_data;
 }
 
-// void DTensor::allReduce() {
 
-//     auto work = pg_->allReduce<float>(tensor_.data<float>(), size_, ncclFloat);
-//     work->wait();
-// }
-
-// void DTensor::reduceScatter() {
-//     size_t count_per_shard = size_ / world_size_;
-    
-
-//     auto work = pg_->reduceScatter<float>(
-//         tensor_.data<float>(), count_per_shard, ncclFloat);
-//     work->wait();
-
-
-    
-//     std::vector<int> local_shape = layout_.get_local_shape(rank_);
-//     OwnTensor::Shape shape_obj;
-//     shape_obj.dims.assign(local_shape.begin(), local_shape.end());
-    
-//     temp_tensor_ = OwnTensor::Tensor(shape_obj, 
-//                                      OwnTensor::TensorOptions()
-//                                          .with_device(tensor_.device())
-//                                          .with_dtype(tensor_.dtype()));
-
-//     cudaMemcpyAsync(temp_tensor_.data<float>(), 
-//                     tensor_.data<float>() + rank_ * count_per_shard, 
-//                     count_per_shard * sizeof(float), 
-//                     cudaMemcpyDeviceToDevice, stream_);
-//     cudaStreamSynchronize(stream_);
-
-//     std::swap(tensor_, temp_tensor_);
-//     shape_ = local_shape;
-//     size_ = count_per_shard;
-// }
-
-// void DTensor::allGather() {
-//     size_t count_per_rank = size_; 
-
-//     std::vector<int> global_shape = layout_.get_global_shape();
-//     OwnTensor::Shape shape_obj;
-//     shape_obj.dims.assign(global_shape.begin(), global_shape.end());
-    
-//     temp_tensor_ = OwnTensor::Tensor(shape_obj, 
-//                                      OwnTensor::TensorOptions()
-//                                          .with_device(tensor_.device())
-//                                          .with_dtype(tensor_.dtype()));
-
-//     // Copy local shard to correct position in full tensor
-//     cudaMemcpyAsync(temp_tensor_.data<float>() + rank_ * count_per_rank,
-//                     tensor_.data<float>(),
-//                     count_per_rank * sizeof(float),
-//                     cudaMemcpyDeviceToDevice, stream_);
-    
-    
-//     auto work = pg_->allGather<float>(
-//         temp_tensor_.data<float>(), count_per_rank, ncclFloat);
-//     work->wait();
-   
-//     std::swap(tensor_, temp_tensor_);
-//     shape_ = global_shape;
-//     size_ = temp_tensor_.numel();
-// }
-
-// void DTensor::broadcast(int root) {
-//     auto work = pg_->broadcast<float>(tensor_.data<float>(), size_, root, ncclFloat);
-//     work->wait();
-// }
 
 
 
 void DTensor::replicate(int root) {
-    std::vector<int> global_shape = layout_.get_global_shape();
+    std::vector<int64_t> global_shape = layout_.get_global_shape();
     size_t total_numel = 1;
     for (int d : global_shape) total_numel *= d;
     
@@ -186,7 +124,7 @@ void DTensor::replicate(int root) {
     
     pg_->broadcast<float>(tensor_.data<float>(), total_numel, root, ncclFloat)->wait();
     
-    layout_ = Layout::replicated(device_mesh_, global_shape);
+    layout_ = Layout(device_mesh_, global_shape);
     shape_ = global_shape;
     size_ = total_numel;
 }
@@ -242,7 +180,7 @@ void DTensor::replicate(int root) {
 // }
 
 void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
-    std::vector<int> global_shape = parent_tensor.layout_.get_global_shape();
+    std::vector<int64_t> global_shape = parent_tensor.shape_;
     
     if (dim < 0 || dim >= (int)global_shape.size()) {
         std::ostringstream oss;
@@ -251,7 +189,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
         throw std::runtime_error(oss.str());
     }
     
-    std::vector<int> local_shape = parent_tensor.layout_.get_local_shape(rank_);
+    std::vector<int64_t> local_shape = parent_tensor.layout_.get_local_shape(rank_);
     size_t shard_numel = 1;
     for (int d : local_shape) shard_numel *= d;
     
@@ -278,7 +216,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
 }
 
 void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
-    std::vector<int> global_shape = layout_.get_global_shape();
+    std::vector<int64_t> global_shape = layout_.get_global_shape();
     
     if (dim < 0 || dim >= (int)global_shape.size()) {
         std::ostringstream oss;
@@ -287,14 +225,14 @@ void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
         throw std::runtime_error(oss.str());
     }
     
-    std::vector<int> local_shape = layout_.get_local_shape(rank_);
+    std::vector<int64_t> local_shape = layout_.get_local_shape(rank_);
     size_t shard_numel = 1;
     for (int d : local_shape) shard_numel *= d;
 
 
     cudaMemcpyAsync(
         tensor_.data<float>() + rank_ * shard_numel,
-        sharded_tensor.data<float>(),
+        sharded_tensor.tensor_.data<float>(),
         shard_numel * sizeof(float),
         cudaMemcpyDeviceToDevice,
         stream_
@@ -305,11 +243,9 @@ void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
     pg_->allGather<float>(
         tensor_.data<float>(),
         shard_numel,
-        root,
         ncclFloat
     )->wait();
 
-    ~sharded_tensor;
 }
 
 
@@ -318,14 +254,14 @@ void DTensor::sync() {
     pg_->allReduce<float>(tensor_.data<float>(), size_, ncclFloat, ncclSum)->wait();
 }
 
-// meant for WQKV matrix DTensor
-void DTensor::qkvsplit( DTensor &q, DTensor &k,DTensor &v){
-    for (int i = 0; i < size_; i++  ){
-        if ( i < size_ /3) q.tensor_.data[i%(size_/3)] = tensor_.data[i];
-        else if( i < 2*size_ /3) q.tensor_.data[i%(size_/3)] = tensor_.data[i];
-        else  q.tensor_->data[i%(size_/3)] = tensor_.data[i];
-    }
-}
+// //meant for WQKV matrix DTensor
+// void DTensor::qkvsplit( DTensor &q, DTensor &k,DTensor &v){
+//     for (int i = 0; i < size_; i++  ){
+//         if ( i < size_ /3) q.tensor_.data[i%(size_/3)] = tensor_.data[i];
+//         else if( i < 2*size_ /3) q.tensor_.data[i%(size_/3)] = tensor_.data[i];
+//         else  q.tensor_->data[i%(size_/3)] = tensor_.data[i];
+//     }
+// }
 
 void DTensor::permute_striped(int dim) {
     if (dim < 0 || dim >= (int)shape_.size()) {
@@ -430,92 +366,98 @@ DTensor DTensor::func(const DTensor& other) const { \
     return DTensor(device_mesh_, pg_, result, layout_); \
 }
 
-DEFINE_TENSOR_OP(add, add)
-DEFINE_TENSOR_OP(sub, sub)
-DEFINE_TENSOR_OP(mul, mul)
-DEFINE_TENSOR_OP(div, div)
+// DEFINE_TENSOR_OP(add, add)
+// DEFINE_TENSOR_OP(sub, sub)
+// DEFINE_TENSOR_OP(mul, mul)
+// DEFINE_TENSOR_OP(div, div)
 
 
+void DTensor::matmul( DTensor& A,  DTensor& B)  {
 
-DTensor DTensor::matmul(const DTensor& other) const {
-    const Layout& a_layout = this->layout_;
-    const Layout& b_layout = other.get_layout();
-
-    auto a_placement = a_layout.get_placement(0); 
-    auto b_placement = b_layout.get_placement(0);
-
-
-    if (a_placement->type() == PlacementType::REPLICATE &&
-        b_placement->type() == PlacementType::SHARD &&
-        static_cast<const Shard*>(b_placement.get())->dim() == 2) {
-        return _column_parallel_matmul(other);
+    if( ( shape_[1] != A.layout_.get_global_shape()[1] ) || ( shape_[2] != B.layout_.get_global_shape()[2] )){
+        throw std::runtime_error("DTensor shape doesnt match matmul output shape ");
     }
 
-    if (a_placement->type() == PlacementType::SHARD &&
-        static_cast<const Shard*>(a_placement.get())->dim() == 2 &&
-        b_placement->type() == PlacementType::SHARD &&
-        static_cast<const Shard*>(b_placement.get())->dim() == 1) {
-         return _row_parallel_matmul(other);
-    }
-
-    std::ostringstream oss;
-    oss << "DTensor::matmul: This sharding combination is not implemented!\n"
-        << "  Layout A: " << a_layout.describe(rank_) << "\n"
-        << "  Layout B: " << b_layout.describe(rank_);
-    throw std::runtime_error(oss.str());
+    tensor_ = TensorOpsBridge::matmul(A.tensor_, B.tensor_);
 }
 
-DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
-    OwnTensor::Tensor Y_shard = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
-    std::vector<int> Y_global_shape = {
-        this->layout_.get_global_shape()[0],
-        other.get_layout().get_global_shape()[1]
-    };
-    Layout Y_layout(device_mesh_, Y_global_shape, 1);
+
+// DTensor DTensor::matmul(const DTensor& other) const {
+//     const Layout& a_layout = this->layout_;
+//     const Layout& b_layout = other.get_layout();
+
+//     auto a_placement = a_layout.get_placement(0); 
+//     auto b_placement = b_layout.get_placement(0);
+
+
+//     if (a_placement->type() == PlacementType::REPLICATE &&
+//         b_placement->type() == PlacementType::SHARD &&
+//         static_cast<const Shard*>(b_placement.get())->dim() == 2) {
+//         return _column_parallel_matmul(other);
+//     }
+
+//     if (a_placement->type() == PlacementType::SHARD &&
+//         static_cast<const Shard*>(a_placement.get())->dim() == 2 &&
+//         b_placement->type() == PlacementType::SHARD &&
+//         static_cast<const Shard*>(b_placement.get())->dim() == 1) {
+//          return _row_parallel_matmul(other);
+//     }
+
+//     std::ostringstream oss;
+//     oss << "DTensor::matmul: This sharding combination is not implemented!\n"
+//         << "  Layout A: " << a_layout.describe(rank_) << "\n"
+//         << "  Layout B: " << b_layout.describe(rank_);
+//     throw std::runtime_error(oss.str());
+// }
+
+// DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
+//     OwnTensor::Tensor Y_shard = TensorOpsBridge::matmul(this->tensor_, other.tensor_);
+//     std::vector<int64_t> Y_global_shape = {
+//         this->layout_.get_global_shape()[0],
+//         other.get_layout().get_global_shape()[1]
+//     };
+//     Layout Y_layout(DTensor::device_mesh_, Y_global_shape, 1);
     
-    return DTensor(device_mesh_, pg_, Y_shard, Y_layout);
-}
+//     return DTensor(DTensor::device_mesh_, pg_, Y_shard, Y_layout);
+// }
 
-DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
-    OwnTensor::Tensor Y_partial = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
-    std::vector<int> Y_global_shape = {
-        this->layout_.get_global_shape()[0],
-        other.get_layout().get_global_shape()[1]
-    };
-    Layout Y_layout(device_mesh_, Y_global_shape, 2);
-    DTensor Y_out(device_mesh_, pg_, Y_partial, Y_layout);
-    
-    return Y_out;
-}
+// DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
+//     OwnTensor::Tensor Y_partial = TensorOpsBridge::matmul(this->tensor_, other.tensor_);
+//     std::vector<int64_t> Y_global_shape = {
+//         this->layout_.get_global_shape()[0],
+//         other.get_layout().get_global_shape()[1]
+//     };
+//     Layout Y_layout(device_mesh_, Y_global_shape, 2);
+
+//     return  DTensor (device_mesh_, pg_, Y_partial, Y_layout);
+// }
 
 // DTensor DTensor::_ring(const DTensor& other) const {
 
 
 
-DTensor DTensor::reshape(const std::vector<int>& new_global_shape) const {
+//  DTensor DTensor::reshape(const std::vector<int64_t>& new_global_shape) const {
 
-    if (layout_.is_sharded()) {
-        throw std::runtime_error("DTensor::reshape: Reshaping sharded tensors not yet implemented");
-    }
-
-
-    int new_local_size = 1;
-    for (int d : new_global_shape) new_local_size *= d;
-    if (new_local_size != size_) {
-        throw std::runtime_error("DTensor::reshape: local element count mismatch.");
-    }
-
-    OwnTensor::Shape shape_obj;
-    shape_obj.dims.assign(new_global_shape.begin(), new_global_shape.end());
-    
-
-    OwnTensor::Tensor reshaped_tensor = tensor_.reshape(shape_obj);
+//     if (layout_.is_sharded()) {
+//         throw std::runtime_error("DTensor::reshape: Reshaping sharded tensors not yet implemented");
+//     }
 
 
-    Layout new_layout(device_mesh_, new_global_shape);
+//     int new_local_size = 1;
+//     for (int d : new_global_shape) new_local_size *= d;
+//     if (new_local_size != size_) {
+//         throw std::runtime_error("DTensor::reshape: local element count mismatch.");
+//     }
 
-    return DTensor(device_mesh_, pg_, reshaped_tensor, new_layout);
-}
+//     OwnTensor::Shape shape_obj;
+//     shape_obj.dims.assign(new_global_shape.begin(), new_global_shape.end());
+
+
+
+//     Layout new_layout(device_mesh_, new_global_shape);
+
+//     return DTensor(device_mesh_, pg_,  new_layout);
+// }
 
 
 // Checkpointing (N-D Safe)
@@ -553,7 +495,7 @@ void DTensor::loadCheckpoint(const std::string& path) {
     int ndim = 0;
     file.read(reinterpret_cast<char*>(&ndim), sizeof(int));
     
-    std::vector<int> loaded_shape(ndim);
+    std::vector<int64_t> loaded_shape(ndim);
     file.read(reinterpret_cast<char*>(loaded_shape.data()), ndim * sizeof(int));
     char dtype_buf[32];
     file.read(dtype_buf, sizeof(dtype_buf));
@@ -566,16 +508,16 @@ void DTensor::loadCheckpoint(const std::string& path) {
     file.read(reinterpret_cast<char*>(host_data.data()), loaded_size * sizeof(float));
     file.close();
 
-    Layout loaded_layout = Layout::replicated(device_mesh_, loaded_shape);
+    Layout loaded_layout(device_mesh_, loaded_shape);
     
-    setData(host_data, loaded_layout);
+    setData(host_data);
 
     std::cout << "[Rank " << rank_ << "] Checkpoint loaded: " << path
               << " (" << ndim << "D, " << size_ << " elements)\n";
 }
 
 void DTensor::printRecursive(const std::vector<float>& data,
-                             const std::vector<int>& dims,
+                             const std::vector<int64_t>& dims,
                              int dim,
                              int offset) const {
     if (dims.empty() || dim < 0) return;

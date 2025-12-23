@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../Tensor-Implementations/include/TensorLib.h"
+#include "..//home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/TensorLib.h"
 #include <memory>
 #include <vector>
 

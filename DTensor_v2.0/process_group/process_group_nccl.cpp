@@ -69,7 +69,7 @@ std::shared_ptr<Work> ProcessGroup::reduceScatter(T* data, size_t count_per_shar
 }
 
 template <typename T>
-std::shared_ptr<Work> ProcessGroup::allGather(T* , size_t count_per_rank, ncclDataType_t dtype) {
+std::shared_ptr<Work> ProcessGroup::allGather(T* data , size_t count_per_rank, ncclDataType_t dtype) {
     auto work = std::make_shared<Work>(stream_);
     ncclAllGather(data + rank_ * count_per_rank , data , count_per_rank, dtype, comm_, stream_);
     work->markCompleted(true);
@@ -133,3 +133,7 @@ std::shared_ptr<Work> ProcessGroup::gather(T* data, size_t count, int root, nccl
 
 
 
+template std::shared_ptr<Work> ProcessGroup::allReduce<float>(float*, unsigned long, ncclDataType_t, ncclRedOp_t);
+template std::shared_ptr<Work> ProcessGroup::scatter<float>(float*, unsigned long, int, ncclDataType_t);
+template std::shared_ptr<Work> ProcessGroup::allGather<float>(float*, unsigned long, ncclDataType_t);
+template std::shared_ptr<Work> ProcessGroup::broadcast<float>(float*, unsigned long, int, ncclDataType_t);

@@ -16,27 +16,27 @@ class DeviceMesh {
 public:
 
     DeviceMesh(const std::vector<int>& mesh_shape, 
-               const std::vector<int>& device_ids = {});
+                       const std::vector<int>& device_ids);
     
     ~DeviceMesh();
     
-    std::vector<int> get_coordinate(int rank) const;
+    std::vector<int64_t> get_coordinate(int rank) const;
     
     
-    int get_rank(const std::vector<int>& coordinate) const;
+    int get_rank(const std::vector<int64_t>& coordinate) const;
 
  
-    std::shared_ptr<ProcessGroup> get_process_group(int mesh_dim);
+    std::shared_ptr<ProcessGroup> get_process_group(int64_t mesh_dim);
  
-    std::vector<int> get_group_ranks(int mesh_dim) const;
+    std::vector<int> get_group_ranks(int64_t mesh_dim) const;
     
     
-    int get_dim_rank(int mesh_dim) const;
+    int get_dim_rank(int64_t mesh_dim) const ;
     
     
-    int ndim() const { return mesh_shape_.size(); }
+    int64_t ndim() const { return mesh_shape_.size(); }
     const std::vector<int>& shape() const { return mesh_shape_; }
-    int size() const;  // Total number of devices
+    int64_t size() const;  // Total number of devices
     int rank() const { return global_rank_; }
     int world_size() const { return total_devices_; }
 
@@ -45,9 +45,9 @@ public:
 private:
     std::vector<int> mesh_shape_;      
     std::vector<int> device_ids_;      
-    int total_devices_;              
+    int64_t total_devices_;              
     int global_rank_;                  
-    std::vector<int> my_coordinate_;   
+    std::vector<int64_t> my_coordinate_;   
     
     std::vector<std::shared_ptr<ProcessGroup>> process_groups_;
     
