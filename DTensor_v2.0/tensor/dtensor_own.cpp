@@ -242,6 +242,14 @@ DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
     return Y_out;
 }
 
+void DTensor::matmulcustom( DTensor& A,  DTensor& B)  {
+
+    if( ( shape_[1] != A.layout_.get_global_shape()[1] ) || ( shape_[2] != B.layout_.get_global_shape()[2] )){
+        throw std::runtime_error("DTensor shape doesnt match matmul output shape ");
+    }
+
+    tensor_ = TensorOpsBridgeCustom::matmul(A.tensor_, B.tensor_);
+}
 
 DTensor DTensor::reshape(const std::vector<int>& new_global_shape) const {
 

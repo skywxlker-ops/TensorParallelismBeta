@@ -44,6 +44,7 @@ class Replicate : public Placement {
 public:
     Replicate() = default;
     
+    
     PlacementType type() const override { 
         return PlacementType::REPLICATE; 
     }

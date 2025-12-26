@@ -21,7 +21,7 @@ public:
 
     // Constructor for a new layout
     Layout(DeviceMesh mesh, const std::vector<int64_t> global_shape, int dim)
-        : mesh_(mesh), global_shape_(global_shape), placement_(new Shard()) {
+        : mesh_(mesh), global_shape_(global_shape), placement_(new Shard(dim)) {
         
         if ( (placement_->dim() < 0 || (size_t)placement_->dim() >= global_shape.size())) {
             throw std::runtime_error("Invalid shard_dim for SHARDED layout.");
@@ -126,7 +126,7 @@ public:
     std::string describe(int rank) const {
         std::ostringstream oss;
 
-        oss << "[Layout] Rank " << rank << "/" << mesh_.world_size() << " | ";
+        oss << "[Layout] Rank " << rank <<" | ";
         oss << "Global Shape: [";
         for (size_t i = 0; i < global_shape_.size(); ++i) {
             oss << global_shape_[i] << (i == global_shape_.size() - 1 ? "" : ", ");

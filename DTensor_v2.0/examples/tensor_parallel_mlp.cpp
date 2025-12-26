@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
 
     Layout x_layout( device_mesh,  { B, T, C });
     
-    Layout wqkv_layout(device_mesh, {B, C, 3 * C }, 2);
+    // Layout wqkv_layout(device_mesh, {B, C, 3 * C }, 2);
 
     DTensor X(device_mesh, pg, x_layout);
     std::vector<float> x_data(B * T * C );
@@ -75,12 +75,16 @@ int main(int argc, char** argv) {
 
     if (rank == 0) {
         std::cout << "=== Input X (replicated via broadcast) ===" << std::endl;
-        std::cout << "Shape: [" << B << ", " << T << ", " << C << "]" << std::endl;
+        std::cout << "Shape: [" << X.get_layout().get_global_shape()[0] << ", " << X.get_layout().get_global_shape()[1] << ", " << X.get_layout().get_global_shape()[2] << "]" << std::endl;
     }
     
-    Layout w1_layout(device_mesh, {B ,C ,F }, 1);
+    Layout w1_layout(device_mesh, {B ,C ,F }, 2);
+
+    // std::cout << "Layout completed!!" << std::endl;
 
     DTensor W1(device_mesh, pg, w1_layout);
+
+    // std::cout << "DTensor completed!!" << std::endl;
     int local_F = F / world_size;
     
     // Full W1 tensor created on root GPU only
@@ -89,41 +93,43 @@ int main(int argc, char** argv) {
         for (int i = 0; i < C * F ; i++) w1_full_data[i] = 0.01f * (i % F + 1);
     }
     
-
+    
     W1.setData(w1_full_data);
     
+    std::cout << "allocation started" <<std::endl;
     Layout W1_asS_layout(device_mesh,{B, C, F/2});
 
     DTensor W1_Shard(device_mesh, pg, W1_asS_layout);
-
-    W1_Shard.shard(1, 0, W1);  
     
+    W1_Shard.shard(2, 0, W1);  
+    std::cout << "allocation ended" << rank<<std::endl;
     if (rank == 0) {
-        std::cout << "=== W1 (sharded on dim 1) ===" << std::endl;
-        std::cout << "Global: [" <<  C << ", " << F << "], Local: [" << C << ", " << local_F << "]" << std::endl;
+        std::cout << "=== W1 (sharded on dim 2) ===" << std::endl;
+        std::cout << "Global: [" <<  W1.get_layout().get_global_shape()[0] << ", " << W1.get_layout().get_global_shape()[1] <<", " <<W1.get_layout().get_global_shape()[2]<<"], Local: [" << W1_Shard.get_layout().get_global_shape()[0] << ", " << W1_Shard.get_layout().get_global_shape()[1] <<", "<<W1_Shard.get_layout().get_global_shape()[2]<< "]" << std::endl;
     }
     
     Layout H_layout(device_mesh, {B ,T ,F/2 });
-
+std::cout<<"m"<<rank;
     DTensor H (device_mesh, pg, H_layout);
 
     H.matmul(X,W1_Shard);
-    
-    if (rank == 0) {
+      std::cout<<"k"<<rank;
+      
+    if (rank == 1) {
         std::cout << "\n=== After Column-Parallel MatMul ===" << std::endl;
-        std::cout << "H is SHARDED: [" << B << ", " << local_F << "] per GPU" << std::endl;
+        std::cout << "H is SHARDED: [" << H.get_layout().get_global_shape()[0] << ", " << H.get_layout().get_global_shape()[1] << ", "<<H.get_layout().get_global_shape()[2]<<"] per GPU" <<rank<< std::endl;
     }
-    
-    Layout w2_layout(device_mesh, {B, F, C }, 2);
-
+      std::cout<<"p";
+    Layout w2_layout(device_mesh, {B, F, C }, 1);
+    std::cout<<"t";
     DTensor W2(device_mesh, pg, w2_layout);
-    
+    std::cout<<"q";
     // Full W2 tensor created on root GPU only
-    std::vector<float> w2_full_data(B * (F/2) * C );
+    std::vector<float> w2_full_data(B * F * C );
     if (rank == 0) {
         for (int i = 0; i < B * (F/2) * C; i++) w2_full_data[i] = 0.02f;
     }
-    
+  
     // replicated layout (root has full data, others have placeholder)
     W2.setData(w2_full_data);
 
@@ -131,7 +137,7 @@ int main(int argc, char** argv) {
 
     DTensor W2_Shard(device_mesh, pg, W1_asS_layout);
     
-    W2_Shard.shard(2, 0, W2);  // shard on dim 2, root = 0, parentTensor W2
+    W2_Shard.shard(1, 0, W2);  // shard on dim 1, root = 0, parentTensor W2
     
 
     DTensor Y(device_mesh, pg, x_layout);;

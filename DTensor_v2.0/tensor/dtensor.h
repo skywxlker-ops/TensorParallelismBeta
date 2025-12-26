@@ -38,7 +38,7 @@ public:
 
     void setData(const std::vector<float>& host_data) ;
     std::vector<float> getData() const; 
-
+    
     // DTensor add(const DTensor& other) const;
     // DTensor sub(const DTensor& other) const;
     // DTensor mul(const DTensor& other) const;
@@ -53,6 +53,7 @@ public:
 
     void replicate(int root = 0);
     
+    void    rotate3D( int dim, bool direction);
 
     void shard(int dim, int root , DTensor &parent_tensor );
 
@@ -65,8 +66,8 @@ public:
     // void DTensor::qkvsplit( DTensor &q, DTensor &k,DTensor &v);
     void unpermute_striped(int dim = 0);
 
-    void saveCheckpoint(const std::string& path) const;
-    void loadCheckpoint(const std::string& path);
+    // void saveCheckpoint(const std::string& path) const;
+    // void loadCheckpoint(const std::string& path);
 
 
     void print() const;
@@ -77,7 +78,7 @@ public:
     std::shared_ptr<ProcessGroup> get_pg() const { return pg_; }
     DeviceMesh get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
-
+    int getSize() const { return size_;}
 
 private:
 
