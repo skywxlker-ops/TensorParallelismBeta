@@ -12,23 +12,24 @@
 // Defines the sharding strategy for a DTensor
 enum class ShardingType {
     REPLICATED, // Tensor is fully replicated on all devices
-    SHARDED     // Tensor is sharded along a specific dimension
+    SHARDED,    // Tensor is sharded along a specific dimension
+    PARTIAL     // Tensor is pending reduction (each rank has partial value)
 };
 
 class Layout {
 public:
     // Default constructor for an uninitialized/replicated layout
-    Layout() : mesh_(nullptr), sharding_type_(ShardingType::REPLICATED), shard_dim_(-1) {}
+    Layout() : mesh_(nullptr), sharding_type_(ShardingType::REPLICATED), shard_dim_(-1), reduce_op_("sum") {}
 
     // Constructor for a new layout
-    Layout(std::shared_ptr<DeviceMesh> mesh, const std::vector<int>& global_shape, ShardingType type, int shard_dim = -1)
-        : mesh_(mesh), global_shape_(global_shape), sharding_type_(type), shard_dim_(shard_dim) {
+    Layout(std::shared_ptr<DeviceMesh> mesh, const std::vector<int>& global_shape, ShardingType type, int shard_dim = -1, const std::string& reduce_op = "sum")
+        : mesh_(mesh), global_shape_(global_shape), sharding_type_(type), shard_dim_(shard_dim), reduce_op_(reduce_op) {
         
         if (sharding_type_ == ShardingType::SHARDED && (shard_dim < 0 || (size_t)shard_dim >= global_shape.size())) {
             throw std::runtime_error("Invalid shard_dim for SHARDED layout.");
         }
-        if (sharding_type_ == ShardingType::REPLICATED) {
-            shard_dim_ = -1; // Ensure shard_dim is -1 for replicated tensors
+        if (sharding_type_ == ShardingType::REPLICATED || sharding_type_ == ShardingType::PARTIAL) {
+            shard_dim_ = -1; // Ensure shard_dim is -1 for replicated/partial tensors
         }
     }
 
@@ -40,6 +41,14 @@ public:
 
     bool is_sharded() const {
         return sharding_type_ == ShardingType::SHARDED;
+    }
+
+    bool is_partial() const {
+        return sharding_type_ == ShardingType::PARTIAL;
+    }
+
+    std::string get_reduce_op() const {
+        return reduce_op_;
     }
 
     // Check if sharded along a specific dimension
@@ -146,6 +155,8 @@ public:
 
         if (is_replicated()) {
             oss << "REPLICATED";
+        } else if (is_partial()) {
+            oss << "PARTIAL (reduce_op=" << reduce_op_ << ")";
         } else {
             oss << "SHARDED (Dim: " << shard_dim_ << ")";
         }
@@ -165,7 +176,7 @@ public:
     Layout(std::shared_ptr<DeviceMesh> mesh, 
            const std::vector<int>& global_shape,
            const std::vector<std::shared_ptr<Placement>>& placements)
-        : mesh_(mesh), global_shape_(global_shape), placements_(placements) {
+        : mesh_(mesh), global_shape_(global_shape), placements_(placements), reduce_op_("sum") {
         
         // Infer simple sharding type from placements for backward compatibility
         sharding_type_ = ShardingType::REPLICATED;
@@ -176,6 +187,9 @@ public:
             if (placements[0]->type() == PlacementType::SHARD) {
                 sharding_type_ = ShardingType::SHARDED;
                 shard_dim_ = static_cast<Shard*>(placements[0].get())->dim();
+            } else if (placements[0]->type() == PlacementType::PARTIAL) {
+                sharding_type_ = ShardingType::PARTIAL;
+                reduce_op_ = static_cast<Partial*>(placements[0].get())->reduce_op();
             }
         }
     }
@@ -199,6 +213,7 @@ private:
     std::shared_ptr<DeviceMesh> mesh_;
     std::vector<int> global_shape_;
     ShardingType sharding_type_;
-    int shard_dim_; // Dimension along which tensor is sharded (-1 if REPLICATED)
+    int shard_dim_; // Dimension along which tensor is sharded (-1 if REPLICATED/PARTIAL)
+    std::string reduce_op_; // Reduction operation for PARTIAL tensors ("sum", "avg", etc.)
     std::vector<std::shared_ptr<Placement>> placements_;
 };

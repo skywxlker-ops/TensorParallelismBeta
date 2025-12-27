@@ -67,6 +67,19 @@ public:
 
     DTensor reshape(const std::vector<int>& new_global_shape) const;
 
+    /**
+     * Redistribute tensor to a new layout.
+     * Handles all transitions:
+     *   - Partial → Replicate (AllReduce)
+     *   - Partial → Shard (ReduceScatter)  
+     *   - Shard → Replicate (AllGather)
+     *   - Replicate → Shard (local slice)
+     *   - Shard → Shard (AllGather + local slice)
+     * @param target_layout Target layout to redistribute to
+     * @return New DTensor with the target layout
+     */
+    DTensor redistribute(const Layout& target_layout) const;
+
     // Layout transformations (in-place)
     /**
      * Replicate tensor to all devices using Broadcast (in-place).
@@ -104,15 +117,7 @@ public:
     std::shared_ptr<DeviceMesh> get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
 
-    // =========================================================================
-    // Static Factory Functions (PyTorch-style)
-    // =========================================================================
-    // These create DTensors directly with sharded memory allocation,
-    // without ever needing a global tensor.
-    
-    /**
-     * Create an uninitialized DTensor (fastest - no memset).
-     */
+
     static DTensor empty(const std::vector<int>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
                          std::shared_ptr<ProcessGroupNCCL> pg,

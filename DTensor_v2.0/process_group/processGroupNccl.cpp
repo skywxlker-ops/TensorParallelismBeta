@@ -462,21 +462,5 @@ ProcessGroupNCCL::launch_work_collectives(
 }
 
 
- 
-// std::thread(
-//   [work = work_collectives,
-//    timeout = std::chrono::seconds(120),
-//    flag = &time_limit_exceeded]() {
-
-//     auto start = std::chrono::steady_clock::now();
-
-//     while (!work->query()) {
-//         if (std::chrono::steady_clock::now() - start > timeout) {
-//             flag->store(true);
-//             return;
-//         }
-//         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-//     }
-//   }
-// ).join();
-
+// Explicit template instantiation (required for linking)
+// The lambda types used in async operations require this
