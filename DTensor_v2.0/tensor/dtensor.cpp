@@ -7,8 +7,7 @@
 #include <stdexcept> 
 #include <sstream>
 #include "tensor/dtensor.h"
-#include "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/TensorLib.h"
-
+#include "TensorLib.h"
 
 
 CachingAllocator gAllocator;
@@ -27,6 +26,11 @@ DTensor::DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroup> pg, Layou
     //   data_block_(nullptr),
       { 
         shape_ = layout.get_global_shape();
+        // if(rank_ == 0 ) {
+        //     std::cout <<"Dtensor Constructor: \n";
+        //     for(auto i: shape_) { std::cout << i << " ";}
+        //     std::cout<<"\n";
+        // }
         OwnTensor::TensorOptions opts;
         opts.dtype = OwnTensor::Dtype::Float32;
         opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
@@ -518,10 +522,15 @@ DTensor DTensor::func(const DTensor& other) const { \
 
 void DTensor::matmul( DTensor& A,  DTensor& B)  {
 
-    if( ( shape_[1] != A.layout_.get_global_shape()[1] ) || ( shape_[2] != B.layout_.get_global_shape()[2] )){
+    if( ( shape_[1] != A.layout_.get_global_shape()[1] ) || ( shape_[2] != B.layout_.get_global_shape()[2] ) ){
+        std:: cout<<"A"<< "["<<A.layout_.get_global_shape()[0]<<", "<<A.layout_.get_global_shape()[1]<<", "<<A.layout_.get_global_shape()[2]<<"] "<<std::endl;
+        std:: cout<<"B"<< "["<<B.layout_.get_global_shape()[0]<<", "<<B.layout_.get_global_shape()[1]<<", "<<B.layout_.get_global_shape()[2]<<"] "<<std::endl;
+    
+        std:: cout<<"shape"<< "["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] "<<std::endl;
+
         throw std::runtime_error("DTensor shape doesnt match matmul output shape ");
     }
-    
+    std:: cout<< "\n Matmul \n";
     std:: cout<< "["<<A.layout_.get_global_shape()[0]<<", "<<A.layout_.get_global_shape()[1]<<", "<<A.layout_.get_global_shape()[2]<<"] "<<std::endl;
     std:: cout<< "["<<B.layout_.get_global_shape()[0]<<", "<<B.layout_.get_global_shape()[1]<<", "<<B.layout_.get_global_shape()[2]<<"] "<<std::endl;
     
@@ -713,4 +722,15 @@ void DTensor::print() const {
     std::cout << "[Rank " << rank_ << " Data] ";
     printRecursive(host_data, shape_, 0, 0);
     std::cout << "\n";
+}
+
+void DTensor::display(){
+    tensor_.to_cpu().display();
+}
+
+void DTensor::rand() {
+    OwnTensor::TensorOptions opts;
+        opts.dtype = OwnTensor::Dtype::Float32;
+        opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
+    tensor_  = OwnTensor::Tensor::rand({shape_}, opts);
 }

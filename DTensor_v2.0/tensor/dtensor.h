@@ -9,8 +9,8 @@
 
 
 #include "bridge/tensor_ops_bridge.h"
-#include "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/device/Device.h"
-#include "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/dtype/Dtype.h"
+#include "device/Device.h"
+#include "dtype/Dtype.h"
 
 
 #include "tensor/device_mesh.h"
@@ -28,13 +28,6 @@ public:
 
     DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroup> pg, Layout layout);
     ~DTensor();
-
-
-    void allReduce();
-    void reduceScatter();
-    void allGather();
-    void broadcast(int root);
-
 
     void setData(const std::vector<float>& host_data) ;
     std::vector<float> getData() const; 
@@ -68,7 +61,9 @@ public:
 
     // void saveCheckpoint(const std::string& path) const;
     // void loadCheckpoint(const std::string& path);
+    void display();
 
+    void rand() ;
 
     void print() const;
     
@@ -100,7 +95,7 @@ private:
     Layout layout_;
     
     OwnTensor::Tensor tensor_;      
-    OwnTensor::Tensor temp_tensor_; 
+    // OwnTensor::Tensor temp_tensor_; 
 
 
     int size_;

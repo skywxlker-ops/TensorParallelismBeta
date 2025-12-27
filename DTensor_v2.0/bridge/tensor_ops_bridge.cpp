@@ -1,4 +1,4 @@
-#include "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/TensorLib.h"
+#include "TensorLib.h"
 #include "bridge/tensor_ops_bridge.h"
 #include "tensor/layout.h"
 #include "tensor/device_mesh.h"

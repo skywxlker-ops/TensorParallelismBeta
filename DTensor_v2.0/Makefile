@@ -9,8 +9,8 @@ NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -g -ccbin=/home/blu-bridge25/.loca
 TARGET = main
 
 CUDA_HOME      := /usr/local/cuda
-TENSOR_LIB_DIR := /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations
-TENSOR_LIB_A   := /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib/libtensor.a
+TENSOR_LIB_DIR := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations
+TENSOR_LIB_A   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib/libtensor.a
 
 INCLUDES = \
     -I. \
@@ -22,7 +22,7 @@ INCLUDES = \
     -I$(CUDA_HOME)/include
 
 LIB_PATHS = \
-    -L/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib \
+    -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib
 
@@ -85,7 +85,7 @@ TEST_MLP_OBJS = $(TEST_MLP_SRCS:.cpp=.o)
 $(TENSOR_LIB_A):
 	@if [ ! -f $(TENSOR_LIB_A) ]; then \
 		echo "\n[ERROR] Static library $(TENSOR_LIB_A) not found!"; \
-		echo "        Please compile the '/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations' submodule first.\n"; \
+		echo "        Please compile the '/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations' submodule first.\n"; \
 		exit 1; \
 	fi
 

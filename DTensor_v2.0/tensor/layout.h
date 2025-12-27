@@ -22,7 +22,10 @@ public:
     // Constructor for a new layout
     Layout(DeviceMesh mesh, const std::vector<int64_t> global_shape, int dim)
         : mesh_(mesh), global_shape_(global_shape), placement_(new Shard(dim)) {
-        
+        //std::cout<< "Dimensions"<<std::endl;
+        // for(auto i: global_shape){
+        //     std::cout << i <<std::endl;
+        // }
         if ( (placement_->dim() < 0 || (size_t)placement_->dim() >= global_shape.size())) {
             throw std::runtime_error("Invalid shard_dim for SHARDED layout.");
         }

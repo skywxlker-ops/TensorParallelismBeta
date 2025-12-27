@@ -1,8 +1,8 @@
 #pragma once
 
-#include "/home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/include/TensorLib.h"
 #include <memory>
 #include <vector>
+#include "TensorLib.h"
 
 
 class DTensor;
@@ -10,8 +10,6 @@ class ProcessGroup;
 class DeviceMesh;
 
 namespace TensorOpsBridge {
-
-
 
 
 OwnTensor::Tensor matmul(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
