@@ -548,24 +548,23 @@ DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
 
 DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
     // Row-Parallel: H [M, N/P] @ W2 [N/P, K] -> Y_partial [M, K]
-    // Each GPU computes partial result, we use SYNC to sum them
+    // Each GPU computes partial result
+    // Returns Partial tensor - user calls redistribute() when they need full result
     
     // Step 1: Local matmul - produces partial result
     OwnTensor::Tensor Y_partial = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
 
-    // Step 2: Create replicated layout (all GPUs will have same data after sync)
+    // Step 2: Create PARTIAL layout (lazy reduction)
+    // User will call redistribute(replicated) to trigger AllReduce when needed
     std::vector<int> Y_global_shape = {
         this->layout_.get_global_shape()[0],
         other.get_layout().get_global_shape()[1]
     };
-    Layout Y_layout = Layout::replicated(device_mesh_, Y_global_shape);
-    DTensor Y_out(device_mesh_, pg_, Y_partial, Y_layout);
-
-    // Step 3: Use SYNC primitive (AllReduce with SUM)
-    // Y = Y_partial_0 + Y_partial_1 + ... = H_full @ W2_full
-    Y_out.sync();
+    Layout Y_layout(device_mesh_, Y_global_shape, ShardingType::PARTIAL, -1, "sum");
     
-    return Y_out;
+    // Return Partial tensor - no sync() here!
+    // Y = Y_partial_0 + Y_partial_1 + ... will happen when user redistributes
+    return DTensor(device_mesh_, pg_, Y_partial, Y_layout);
 }
 
 /**
@@ -635,6 +634,259 @@ DTensor DTensor::reshape(const std::vector<int>& new_global_shape) const {
     Layout new_layout = Layout::replicated(device_mesh_, new_global_shape);
 
     return DTensor(device_mesh_, pg_, reshaped_tensor, new_layout);
+}
+
+// ============================================================================
+// Redistribute: Convert tensor between different layouts
+// ============================================================================
+
+DTensor DTensor::redistribute(const Layout& target_layout) const {
+    // Check if layouts are already the same
+    if (layout_ == target_layout) {
+        return DTensor(device_mesh_, pg_, tensor_, layout_);
+    }
+    
+    std::vector<int> global_shape = layout_.get_global_shape();
+    std::vector<int> target_local_shape = target_layout.get_local_shape(rank_);
+    
+    // Calculate sizes
+    size_t target_local_numel = 1;
+    for (int d : target_local_shape) target_local_numel *= d;
+    
+    size_t global_numel = 1;
+    for (int d : global_shape) global_numel *= d;
+
+    // ========================================================================
+    // Case 1: Partial → Replicate (AllReduce)
+    // ========================================================================
+    if (layout_.is_partial() && target_layout.is_replicated()) {
+        // Create output tensor (same size as input for Partial, which is global size)
+        OwnTensor::Shape output_shape;
+        output_shape.dims.assign(global_shape.begin(), global_shape.end());
+        OwnTensor::Tensor output(output_shape, 
+                                 OwnTensor::TensorOptions()
+                                     .with_device(tensor_.device())
+                                     .with_dtype(tensor_.dtype()));
+        
+        // Copy current tensor to output
+        cudaMemcpy(output.data<float>(), tensor_.data<float>(), 
+                   global_numel * sizeof(float), cudaMemcpyDeviceToDevice);
+        
+        // AllReduce to sum all partial values
+        pg_->all_reduce(output.data<float>(), output.data<float>(), 
+                       global_numel, OwnTensor::Dtype::Float32, sum, true);
+        
+        return DTensor(device_mesh_, pg_, output, target_layout);
+    }
+    
+    // ========================================================================
+    // Case 2: Partial → Shard (ReduceScatter)
+    // ========================================================================
+    if (layout_.is_partial() && target_layout.is_sharded()) {
+        int target_shard_dim = target_layout.get_shard_dim();
+        
+        // Only support dim=0 sharding for ReduceScatter (contiguous chunks)
+        if (target_shard_dim != 0) {
+            throw std::runtime_error("Partial → Shard only supports shard_dim=0 for now");
+        }
+        
+        // Allocate output tensor for local shard
+        OwnTensor::Shape output_shape;
+        output_shape.dims.assign(target_local_shape.begin(), target_local_shape.end());
+        OwnTensor::Tensor output(output_shape, 
+                                 OwnTensor::TensorOptions()
+                                     .with_device(tensor_.device())
+                                     .with_dtype(tensor_.dtype()));
+        
+        // ReduceScatter: reduce and scatter in one operation
+        pg_->reduce_scatter(tensor_.data<float>(), output.data<float>(), 
+                           target_local_numel, OwnTensor::Dtype::Float32, sum, true);
+        
+        return DTensor(device_mesh_, pg_, output, target_layout);
+    }
+    
+    // ========================================================================
+    // Case 3: Shard → Replicate (AllGather)
+    // ========================================================================
+    if (layout_.is_sharded() && target_layout.is_replicated()) {
+        int shard_dim = layout_.get_shard_dim();
+        
+        // Allocate output tensor for full global tensor
+        OwnTensor::Shape output_shape;
+        output_shape.dims.assign(global_shape.begin(), global_shape.end());
+        OwnTensor::Tensor output(output_shape, 
+                                 OwnTensor::TensorOptions()
+                                     .with_device(tensor_.device())
+                                     .with_dtype(tensor_.dtype()));
+        
+        size_t local_numel = tensor_.numel();
+        
+        if (shard_dim == 0) {
+            // Row sharding: data is contiguous
+            // ProcessGroupNCCL::all_gather expects data at sendbuff + rank * count offset
+            // So we copy local data to the correct offset in output first
+            cudaMemcpy(output.data<float>() + rank_ * local_numel,
+                       tensor_.data<float>(),
+                       local_numel * sizeof(float),
+                       cudaMemcpyDeviceToDevice);
+            
+            // Now all_gather will read from output + rank * count, which is where we put data
+            pg_->all_gather(output.data<float>(), output.data<float>(), 
+                           local_numel, OwnTensor::Dtype::Float32, true);
+        } else if (shard_dim == 1 && global_shape.size() == 2) {
+            // Column sharding: AllGather gives us [rank0_cols | rank1_cols | ...]
+            // We need to interleave to get proper column order
+            
+            // Step 1: Allocate temp buffer for AllGather result
+            OwnTensor::Shape temp_shape;
+            temp_shape.dims.assign(global_shape.begin(), global_shape.end());
+            OwnTensor::Tensor temp(temp_shape, 
+                                   OwnTensor::TensorOptions()
+                                       .with_device(tensor_.device())
+                                       .with_dtype(tensor_.dtype()));
+            
+            // Copy local data to correct offset for ProcessGroupNCCL
+            cudaMemcpy(temp.data<float>() + rank_ * local_numel,
+                       tensor_.data<float>(),
+                       local_numel * sizeof(float),
+                       cudaMemcpyDeviceToDevice);
+            
+            // Step 2: AllGather into temp buffer
+            pg_->all_gather(temp.data<float>(), temp.data<float>(), 
+                           local_numel, OwnTensor::Dtype::Float32, true);
+            
+            // Step 3: Rearrange from [rank0_data | rank1_data | ...] strided layout
+            // to proper [row0, row1, ...] layout
+            int rows = global_shape[0];
+            int global_cols = global_shape[1];
+            int local_cols = layout_.get_local_shape(rank_)[1];
+            
+            // For each rank's contribution, copy its columns to the correct positions
+            for (int src_rank = 0; src_rank < world_size_; ++src_rank) {
+                int col_offset = src_rank * local_cols;
+                size_t src_offset = src_rank * local_numel;
+                
+                for (int row = 0; row < rows; ++row) {
+                    cudaMemcpy(
+                        output.data<float>() + row * global_cols + col_offset,
+                        temp.data<float>() + src_offset + row * local_cols,
+                        local_cols * sizeof(float),
+                        cudaMemcpyDeviceToDevice
+                    );
+                }
+            }
+        } else {
+            throw std::runtime_error("Shard → Replicate: Only dim 0 or dim 1 (2D) supported");
+        }
+        
+        return DTensor(device_mesh_, pg_, output, target_layout);
+    }
+    
+    // ========================================================================
+    // Case 4: Replicate → Shard (local slice)
+    // ========================================================================
+    if (layout_.is_replicated() && target_layout.is_sharded()) {
+        int target_shard_dim = target_layout.get_shard_dim();
+        
+        // Allocate output tensor for local shard
+        OwnTensor::Shape output_shape;
+        output_shape.dims.assign(target_local_shape.begin(), target_local_shape.end());
+        OwnTensor::Tensor output(output_shape, 
+                                 OwnTensor::TensorOptions()
+                                     .with_device(tensor_.device())
+                                     .with_dtype(tensor_.dtype()));
+        
+        if (target_shard_dim == 0) {
+            // Row sharding: contiguous slice
+            size_t offset = 0;
+            for (int r = 0; r < rank_; ++r) {
+                std::vector<int> r_shape = target_layout.get_local_shape(r);
+                size_t r_numel = 1;
+                for (int d : r_shape) r_numel *= d;
+                offset += r_numel;
+            }
+            
+            cudaMemcpy(output.data<float>(), 
+                       tensor_.data<float>() + offset,
+                       target_local_numel * sizeof(float), 
+                       cudaMemcpyDeviceToDevice);
+                       
+        } else if (target_shard_dim == 1 && global_shape.size() == 2) {
+            // Column sharding: non-contiguous 2D slice
+            int rows = global_shape[0];
+            int global_cols = global_shape[1];
+            int local_cols = target_local_shape[1];
+            int col_offset = rank_ * local_cols;
+            
+            for (int row = 0; row < rows; ++row) {
+                cudaMemcpy(
+                    output.data<float>() + row * local_cols,
+                    tensor_.data<float>() + row * global_cols + col_offset,
+                    local_cols * sizeof(float),
+                    cudaMemcpyDeviceToDevice
+                );
+            }
+        } else {
+            throw std::runtime_error("Replicate → Shard: Only dim 0 or dim 1 (2D) supported");
+        }
+        
+        return DTensor(device_mesh_, pg_, output, target_layout);
+    }
+    
+    // ========================================================================
+    // Case 5: Shard → Shard (different dimensions: AllGather + local slice)
+    // ========================================================================
+    if (layout_.is_sharded() && target_layout.is_sharded()) {
+        // Step 1: AllGather to replicated
+        Layout replicated_layout = Layout::replicated(device_mesh_, global_shape);
+        DTensor replicated = this->redistribute(replicated_layout);
+        
+        // Step 2: Local slice to target sharding
+        return replicated.redistribute(target_layout);
+    }
+    
+    // ========================================================================
+    // Case 6: Replicate → Partial (partition)
+    // ========================================================================
+    if (layout_.is_replicated() && target_layout.is_partial()) {
+        std::string reduce_op = target_layout.get_reduce_op();
+        
+        // Create output tensor (same size as input)
+        OwnTensor::Shape output_shape;
+        output_shape.dims.assign(global_shape.begin(), global_shape.end());
+        OwnTensor::Tensor output(output_shape, 
+                                 OwnTensor::TensorOptions()
+                                     .with_device(tensor_.device())
+                                     .with_dtype(tensor_.dtype()));
+        
+        if (reduce_op == "sum") {
+            // For sum: partition(v) = v / world_size
+            // So that reduce(partitions) = v
+            cudaMemcpy(output.data<float>(), tensor_.data<float>(),
+                       global_numel * sizeof(float), cudaMemcpyDeviceToDevice);
+            
+            // Scale by 1/world_size using a simple kernel or TensorOpsBridge
+            float scale_factor = 1.0f / world_size_;
+            OwnTensor::Tensor scaled = TensorOpsBridge::mul(output, scale_factor);
+            output = std::move(scaled);
+            
+        } else if (reduce_op == "avg" || reduce_op == "min" || reduce_op == "max") {
+            // For avg/min/max: partition(v) = v (keep original)
+            cudaMemcpy(output.data<float>(), tensor_.data<float>(),
+                       global_numel * sizeof(float), cudaMemcpyDeviceToDevice);
+        } else {
+            throw std::runtime_error("Replicate → Partial: Unsupported reduce_op: " + reduce_op);
+        }
+        
+        return DTensor(device_mesh_, pg_, output, target_layout);
+    }
+    
+    // Unsupported transition
+    std::ostringstream oss;
+    oss << "DTensor::redistribute: Unsupported layout transition\n"
+        << "  From: " << layout_.describe(rank_) << "\n"
+        << "  To: " << target_layout.describe(rank_);
+    throw std::runtime_error(oss.str());
 }
 
 

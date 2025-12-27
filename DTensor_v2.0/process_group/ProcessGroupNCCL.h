@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <atomic>
-#include "../Tensor-Implementations/include/TensorLib.h"
+#include "TensorLib.h"
 #include "CpuSync.hpp"
 
 #define NCCLCHECK(cmd)                                                                       \

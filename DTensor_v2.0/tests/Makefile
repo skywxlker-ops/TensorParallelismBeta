@@ -50,21 +50,19 @@ LIBS = \
 # --- Core DTensor Objects (from parent directory) ---
 CORE_SRCS = \
     $(PARENT_DIR)/tensor/dtensor.cpp \
-    $(PARENT_DIR)/tensor/dtensor_native.cpp \
     $(PARENT_DIR)/tensor/device_mesh.cpp \
     $(PARENT_DIR)/tensor/activation_kernels.cu \
     $(PARENT_DIR)/process_group/processGroupNccl.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
-    $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp \
-    $(PARENT_DIR)/ckpt/ckpt.cpp
-# Removed: stream_pool.cpp, error_handler.cpp, tensor_ops_bridge_stub.cpp (not in cloned version)
+    $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp
+# Note: dtensor_native.cpp removed (uses old ProcessGroup API), ckpt.cpp removed (directory doesn't exist)
 
 CORE_OBJS = $(CORE_SRCS:.cpp=.o)
 CORE_OBJS := $(CORE_OBJS:.cu=.o)
 
 
 # --- Test Executables ---
-TESTS = test_stream_pool test_process_group test_process_group_nccl test_mlp_forward test_redistribute test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
+TESTS = test_stream_pool test_process_group test_process_group_nccl test_mlp_forward test_redistribute test_partial_layout test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
 
 # --- Test Source Files ---
 TEST_STREAM_SRC = test_stream_pool.cpp
@@ -99,6 +97,10 @@ TEST_MLP_BENCH_SRC = test_mlp_benchmark.cpp
 TEST_MLP_BENCH_OBJ = $(TEST_MLP_BENCH_SRC:.cpp=.o)
 TEST_PG_NCCL_SRC = test_process_group_nccl.cpp
 TEST_PG_NCCL_OBJ = $(TEST_PG_NCCL_SRC:.cpp=.o)
+TEST_PARTIAL_SRC = test_partial_layout.cpp
+TEST_PARTIAL_OBJ = $(TEST_PARTIAL_SRC:.cpp=.o)
+TEST_LAZY_PARTIAL_SRC = test_lazy_partial_matmul.cpp
+TEST_LAZY_PARTIAL_OBJ = $(TEST_LAZY_PARTIAL_SRC:.cpp=.o)
 
 # =============================================================================
 # Build Rules
@@ -150,6 +152,16 @@ test_mlp_forward: $(TEST_MLP_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] $@ build complete"
 
 test_redistribute: $(TEST_REDIST_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_partial_layout: $(TEST_PARTIAL_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_lazy_partial_matmul: $(TEST_LAZY_PARTIAL_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"
