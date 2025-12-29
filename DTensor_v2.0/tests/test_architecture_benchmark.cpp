@@ -13,7 +13,7 @@
 // Case 2: Native DTensor (in OwnTensor namespace)
 #include "tensor/dtensor_native.h"
 
-#include "process_group/process_group.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 

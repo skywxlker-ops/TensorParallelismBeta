@@ -1,6 +1,6 @@
 #include "../tensor/dtensor.h"
 #include "../bridge/tensor_ops_bridge.h"
-#include "../process_group/process_group.h"
+#include "../process_group/ProcessGroupNCCL.h"
 #include <iostream>
 
 extern "C" void __force_link_dtensor_symbols() {

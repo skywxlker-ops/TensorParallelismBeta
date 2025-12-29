@@ -57,8 +57,7 @@ Tensor div(const Tensor& A, const Tensor& B) {
 }
 
 // ------------------------------------------------------------
-// Local MatMul (2D/3D) using cuBLAS or fallback
-
+// Local MatMul (2D/3D) using Tensor-Implementations
 // ------------------------------------------------------------
 Tensor matmul(const Tensor& A, const Tensor& B) {
     const auto& a_dims = A.shape().dims;
@@ -67,64 +66,7 @@ Tensor matmul(const Tensor& A, const Tensor& B) {
     if (a_dims.size() < 2 || b_dims.size() < 2)
         throw std::runtime_error("matmul: both tensors must be at least 2D");
 
-    // --- Case 1: Simple 2D MatMul ---
-    if (a_dims.size() == 2 && b_dims.size() == 2) {
-        if (A.device().device == OwnTensor::Device::CUDA &&
-            B.device().device == OwnTensor::Device::CUDA) {
-            
-            // A is [M, K], B is [K, N]
-            int M = a_dims[0];
-            int K = a_dims[1];
-            int N = b_dims[1];
-            
-            if (a_dims[1] != b_dims[0]) {
-                 throw std::runtime_error("matmul: shape mismatch (K dimensions)");
-            }
-
-            Tensor C(Shape{{M, N}},
-                     TensorOptions()
-                         .with_device(A.device())
-                         .with_dtype(A.dtype()));
-
-            cublasHandle_t handle;
-            cublasCreate(&handle);
-
-            const float alpha = 1.0f;
-            const float beta = 0.0f;
-
-            // Note: cuBLAS is column-major.
-            // (A[M,K] * B[K,N]) = C[M,N]
-            // In Col-major: C_col[N,M] = B_col[N,K] * A_col[K,M]
-            // We are passing in row-major pointers, so we reverse the order
-            // and swap M/N.
-            cublasStatus_t status = cublasSgemm(
-                handle,
-                CUBLAS_OP_N, CUBLAS_OP_N,
-                N, M, K,
-                &alpha,
-                B.data<float>(), N,
-                A.data<float>(), K,
-                &beta,
-                C.data<float>(), N);
-
-            cublasDestroy(handle);
-
-            if (status != CUBLAS_STATUS_SUCCESS)
-                throw std::runtime_error("cuBLAS sgemm failed");
-
-            return C;
-        }
-
-        // CPU fallback
-        return OwnTensor::matmul(A, B);
-    }
-
-    // --- Case 2: Batched MatMul (3D) ---
-    if (a_dims.size() == 3 && b_dims.size() == 3) {
-        return OwnTensor::matmul(A, B);
-    }
-
-    // --- Fallback ---
+    // Use Tensor-Implementations for all cases
     return OwnTensor::matmul(A, B);
 }
 

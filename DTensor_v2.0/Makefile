@@ -262,12 +262,11 @@ tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
 	@echo "\nRun with 2 GPUs: mpirun -np 2 ./examples/tensor_parallel_mlp\n"
 
-# MLP Benchmark Test (Optimized with kernel fusion)
+# MLP Benchmark Test
 TEST_MLP_BENCHMARK_SRCS = \
 	tests/test_mlp_benchmark.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	tensor/activation_kernels.cu \
 	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
@@ -290,7 +289,6 @@ TEST_DTENSOR_FACTORY_SRCS = \
 	tests/test_dtensor_factories.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	tensor/activation_kernels.cu \
 	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
@@ -312,7 +310,6 @@ TEST_DTENSOR_CREATION_SRCS = \
 	tests/test_dtensor_creation_methods.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	tensor/activation_kernels.cu \
 	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \

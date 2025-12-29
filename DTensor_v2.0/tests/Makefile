@@ -51,7 +51,6 @@ LIBS = \
 CORE_SRCS = \
     $(PARENT_DIR)/tensor/dtensor.cpp \
     $(PARENT_DIR)/tensor/device_mesh.cpp \
-    $(PARENT_DIR)/tensor/activation_kernels.cu \
     $(PARENT_DIR)/process_group/processGroupNccl.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
     $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp
@@ -62,7 +61,7 @@ CORE_OBJS := $(CORE_OBJS:.cu=.o)
 
 
 # --- Test Executables ---
-TESTS = test_stream_pool test_process_group test_process_group_nccl test_mlp_forward test_redistribute test_partial_layout test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
+TESTS = test_process_group test_process_group_nccl test_mlp_forward test_redistribute test_partial_layout test_fault_tolerance test_autograd_tp test_gpu_native_init test_p2p_scatter test_benchmark_init test_pipelined_init test_architecture_benchmark test_benchmark_layouts test_attention_parallel test_mlp_benchmark
 
 # --- Test Source Files ---
 TEST_STREAM_SRC = test_stream_pool.cpp

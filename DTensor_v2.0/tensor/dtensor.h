@@ -5,7 +5,6 @@
 #include <string>
 #include <cuda_runtime.h>
 #include "ProcessGroupNCCL.h"
-#include "stream_pool.h"
 #include "memory/cachingAllocator.hpp"
 
 
@@ -17,7 +16,6 @@
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 #include "tensor/placement.h"
-#include "tensor/activation_kernels.h"
 
 
 using namespace OwnTensor;
@@ -28,7 +26,7 @@ extern CachingAllocator gAllocator;
 class DTensor {
 public:
 
-    DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, std::shared_ptr<StreamPool> stream_pool = nullptr);
+    DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroupNCCL> pg);
     ~DTensor();
 
     // Collective Communication Operations
@@ -60,10 +58,6 @@ public:
     DTensor mul(const DTensor& other) const;
     DTensor div(const DTensor& other) const;
     DTensor matmul(const DTensor& other) const;
-    
-    // Fused matmul + activation operations for kernel fusion optimization
-    DTensor matmul_gelu(const DTensor& other) const;
-    DTensor matmul_relu(const DTensor& other) const;
 
     DTensor reshape(const std::vector<int>& new_global_shape) const;
 
@@ -233,7 +227,6 @@ private:
     int world_size_;
     std::shared_ptr<DeviceMesh> device_mesh_;
     std::shared_ptr<ProcessGroupNCCL> pg_;
-    std::shared_ptr<StreamPool> stream_pool_;
     
     // Multi-stream support for concurrent execution
     cudaStream_t compute_stream_;  // For matmul, activations
@@ -253,11 +246,7 @@ private:
     std::vector<int> shape_; 
     std::string dtype_ = "float32";
 
-    
-    // Fused operations (Phase 4 optimization)
-    DTensor matmul_bias_gelu(const DTensor& weights, const DTensor& bias) const;
-    DTensor matmul_bias_relu(const DTensor& weights, const DTensor& bias) const;
-    void add_bias(const DTensor& bias);
+
 
     void printRecursive(const std::vector<float>& data,
                         const std::vector<int>& dims,
