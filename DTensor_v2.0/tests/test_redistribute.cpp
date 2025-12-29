@@ -148,16 +148,13 @@ int main(int argc, char** argv) {
     
     // Create a PARTIAL layout - each rank has a portion of the sum
     Layout layout_partial(mesh, global_shape, ShardingType::PARTIAL, -1, "sum");
-    
-    // Each rank gets partial data: final sum should equal global_data * world_size
-    // So we give each rank the full global_data, and after AllReduce we expect global_data * 2
+
     DTensor tensor_partial(mesh, pg);
     tensor_partial.setData(global_data, layout_partial);
-    
-    // Redistribute Partial -> Replicated (triggers AllReduce)
+
     DTensor tensor_from_partial = tensor_partial.redistribute(layout_replicated);
     
-    // Expected: sum of all partial values = global_data * world_size
+
     std::vector<float> expected_sum(global_numel);
     for (size_t i = 0; i < global_numel; ++i) {
         expected_sum[i] = global_data[i] * world_size;
@@ -185,10 +182,9 @@ int main(int argc, char** argv) {
     DTensor tensor_rep(mesh, pg);
     tensor_rep.setData(global_data, layout_replicated);
     
-    // Redistribute Replicated -> Partial (should divide by world_size for "sum")
+
     DTensor tensor_partitioned = tensor_rep.redistribute(layout_partial);
-    
-    // Expected: partitioned_value = global_data / world_size
+
     std::vector<float> expected_partitioned(global_numel);
     for (size_t i = 0; i < global_numel; ++i) {
         expected_partitioned[i] = global_data[i] / world_size;
@@ -215,19 +211,16 @@ int main(int argc, char** argv) {
     // Create partial tensor - each rank has global_data
     DTensor tensor_partial2(mesh, pg);
     tensor_partial2.setData(global_data, layout_partial);
-    
-    // Redistribute Partial -> Sharded on dim 0 (triggers ReduceScatter)
+
     DTensor tensor_reduced_sharded = tensor_partial2.redistribute(layout_sharded_row);
-    
-    // Expected: row shard of (global_data * world_size)
+
     std::vector<float> expected_reduced_shard;
     for (int r = rank * (global_shape[0]/world_size); r < (rank + 1) * (global_shape[0]/world_size); ++r) {
         for (int c = 0; c < global_shape[1]; ++c) {
             expected_reduced_shard.push_back(global_data[r * global_shape[1] + c] * world_size);
         }
     }
-    
-    // Verification
+
     assert(tensor_reduced_sharded.get_layout().is_sharded());
     std::vector<float> reduced_sharded_data = tensor_reduced_sharded.getData();
     assert(compare_vectors(reduced_sharded_data, expected_reduced_shard, rank));

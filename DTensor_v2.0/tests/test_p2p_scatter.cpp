@@ -6,7 +6,7 @@
 #include <memory>
 #include <cstring>
 
-#include "process_group/process_group.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
 
 #define CUDA_CHECK(call) do { \

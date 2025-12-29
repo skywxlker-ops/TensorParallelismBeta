@@ -10,7 +10,7 @@
 
 // === DTensor Core ===
 #include "tensor/dtensor.h"
-#include "process_group/process_group.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 
@@ -51,7 +51,7 @@ void print_section(int rank, const std::string& section) {
 
 void test_mlp_forward(int rank, int world_size, 
                       std::shared_ptr<DeviceMesh> mesh, 
-                      std::shared_ptr<ProcessGroup> pg) {
+                      std::shared_ptr<ProcessGroupNCCL> pg) {
     
     print_separator(rank, "MLP Forward Pass Test (Tensor Parallelism)");
     
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
     try {
         // Create mesh and process group
         std::shared_ptr<DeviceMesh> mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-        std::shared_ptr<ProcessGroup> pg = std::make_shared<ProcessGroup>(
+        std::shared_ptr<ProcessGroupNCCL> pg = std::make_shared<ProcessGroupNCCL>(
             rank, world_size, device_id, id
         );
         

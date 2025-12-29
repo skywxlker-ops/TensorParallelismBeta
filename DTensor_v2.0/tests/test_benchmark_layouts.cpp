@@ -9,7 +9,7 @@
 #include <string>
 
 #include "tensor/dtensor.h"
-#include "process_group/process_group.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 

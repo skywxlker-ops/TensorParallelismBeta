@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "process_group/process_group.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "memory/cachingAllocator.hpp"
 
 // Native OwnTensor includes  

@@ -1,6 +1,6 @@
 
 
-#include "tensor/dtensor.h"
+#include "DTensor_v2.0/tensor/dtensor.h"
 #include <iostream>
 #include <vector>
 #include <nccl.h>
