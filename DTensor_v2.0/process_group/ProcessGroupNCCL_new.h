@@ -114,7 +114,7 @@ inline constexpr ncclRedOp_t ncclOperationConversion(op_t op){
 class ProcessGroupNCCL{
 
 public: 
-    ProcessGroupNCCL(int world_size, int rank, ncclUniqueId& id, std::shared_ptr<Work> work_obj, cudaStream_t& stream );
+    ProcessGroupNCCL(int world_size, int rank, ncclUniqueId id, std::shared_ptr<Work> work_obj, cudaStream_t &stream );
     ProcessGroupNCCL()=default;
     ~ProcessGroupNCCL();
 
@@ -168,6 +168,8 @@ public:
     bool is_owns_stream(){ return owns_stream_; }  
     std::shared_ptr<Work> get_work_obj(){ return work_obj_; }
 
+    cudaStream_t getStream() const { return communication_stream_; }
+    ncclComm_t getComm() const { return comm_; }
     
     //synchronization using cudaEvent_t
     bool blockStreamEvent();

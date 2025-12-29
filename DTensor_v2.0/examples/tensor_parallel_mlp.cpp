@@ -13,17 +13,20 @@ int main(int argc, char** argv) {
     int rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-    
+    std::shared_ptr<Work> work_obj;
    
     DeviceMesh device_mesh ({2}, {0,1});
 
     ncclUniqueId nccl_id;
+    cudaStream_t comm_stream;
+    cudaStreamCreate(&comm_stream);
     if (rank == 0) ncclGetUniqueId(&nccl_id);
     MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, 0, MPI_COMM_WORLD);
     
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
-    
-  /*  
+//         std::shared_ptr<ProcessGroupNCCL> pg = std::make_shared<ProcessGroupNCCL>(
+//             world_size, rank, nccl_id, work_obj, comm_stream);
+//   /*  
+    auto pg = init_process_group(world_size, rank, comm_stream);
     const int64_t B = 8;      // batch size
     const int64_t C = 768;      // input features
     const int64_t T = 1024;      // token length

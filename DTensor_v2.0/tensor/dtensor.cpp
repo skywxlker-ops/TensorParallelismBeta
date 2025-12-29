@@ -13,9 +13,9 @@
 CachingAllocator gAllocator;
 // using namespace OwnTensor;
 
-DTensor::DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroup> pg, Layout layout)
-    : rank_(pg->getRank()),
-      world_size_(pg->getWorldSize()),// worldsize is no. of GPUs in a group.
+DTensor::DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout)
+    : rank_(pg->get_rank()),
+      world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
       device_mesh_(device_mesh),
       pg_(pg),
       stream_(pg->getStream()),
@@ -124,7 +124,7 @@ void DTensor::replicate(int root) {
                                         .with_dtype(tensor_.dtype()));
     }
     
-    pg_->broadcast<float>(tensor_.data<float>(), total_numel, root, ncclFloat)->wait();
+    pg_->broadcast_async(tensor_.data<float>(), tensor_.data<float>(), total_numel, OwnTensor::Dtype::Float32, root)->wait();
     
     layout_ = Layout(device_mesh_, global_shape);
     shape_ = global_shape;
@@ -298,29 +298,35 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
     for (int64_t m = 0; m < global_shape[0]; m++){
         for(int64_t n = 0; n < global_shape[1]; n++){
                 if(dim == 2){
-                pg_->scatter<float>(
+                pg_->scatter_async(
                 parent_tensor.tensor_.data<float>() + m * n * global_shape[2] ,
+                parent_tensor.tensor_.data<float>() + m * n * global_shape[2] + rank_ * (shard_numel/ ( global_shape[0] * global_shape[1] )),
                 shard_numel / ( global_shape[0] * global_shape[1] ),
+                OwnTensor::Dtype::Float32,
                 root,
-                ncclFloat
+                false
                 )->wait();
                 }
             }   
             if(dim == 1){
-            pg_->scatter<float>(
+            pg_->scatter_async(
             parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2]  ,
+            parent_tensor.tensor_.data<float>() +  m * global_shape[1] * global_shape[2] + rank_ * ( shard_numel /  global_shape[0] ),
             shard_numel / global_shape[0],
+            OwnTensor::Dtype::Float32,
             root,
-            ncclFloat
+            false
             )->wait();
             }
         }
         if(dim == 0){
-        pg_->scatter<float>(
+        pg_->scatter_async(
         parent_tensor.tensor_.data<float>() ,
+        parent_tensor.tensor_.data<float>() + rank_ * shard_numel,
         shard_numel ,
+        OwnTensor::Dtype::Float32,
         root,
-        ncclFloat
+        false
         )->wait();
         }
     for (int64_t m = 0; m < global_shape[0]; m++){
@@ -328,7 +334,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
             if(dim == 2){ 
             cudaMemcpyAsync(
             tensor_.data<float>() + m * n * (shard_numel/( global_shape[0] * global_shape[1] )),
-            parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2]  +  n * global_shape[2]  + rank_ * (shard_numel/ (world_size_ << 1)),
+            parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2]  +  n * global_shape[2]  + rank_ * (shard_numel/ ( global_shape[0] * global_shape[1] )),
             shard_numel * sizeof(float)/( global_shape[0] * global_shape[1] ),
             cudaMemcpyDeviceToDevice,
             stream_
@@ -339,7 +345,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
         if(dim == 1){ 
         cudaMemcpyAsync(
         tensor_.data<float>() + m * (shard_numel/global_shape[0]),
-        parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2]   + rank_ * (shard_numel/world_size_),
+        parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2]   + rank_ * (shard_numel/global_shape[0]),
         shard_numel * sizeof(float)/global_shape[0],
         cudaMemcpyDeviceToDevice,
         stream_
@@ -388,10 +394,12 @@ void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
     
     cudaStreamSynchronize(stream_);
     
-    pg_->allGather<float>(
+    pg_->all_gather_async(
+        tensor_.data<float>() + rank_ * shard_numel,
         tensor_.data<float>(),
         shard_numel,
-        ncclFloat
+        OwnTensor::Dtype::Float32,
+        false
     )->wait();
 
 }
@@ -399,7 +407,7 @@ void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
 
 
 void DTensor::sync() {
-    pg_->allReduce<float>(tensor_.data<float>(), size_, ncclFloat, ncclSum)->wait();
+    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false)->wait();
 }
 
 // //meant for WQKV matrix DTensor

@@ -172,9 +172,11 @@ void DeviceMesh::initialize_process_groups() {
 
         int64_t device = device_ids_[global_rank_];
 
-        process_groups_[mesh_dim] = std::make_shared<ProcessGroup>(
-            my_group_rank, group_size, device, nccl_id
-        );
+        std::shared_ptr<Work> work_obj;
+
+        process_groups_[mesh_dim] = std::make_shared<ProcessGroupNCCL>(
+             group_size, my_group_rank, nccl_id, work_obj);
+    
     }
 }
 
@@ -193,7 +195,7 @@ ncclUniqueId DeviceMesh::create_nccl_id(int root_rank, MPI_Comm comm) {
     return nccl_id;
 }
 
-std::shared_ptr<ProcessGroup> DeviceMesh::get_process_group(int64_t mesh_dim) {
+std::shared_ptr<ProcessGroupNCCL> DeviceMesh::get_process_group(int64_t mesh_dim) {
     if (mesh_dim < 0 || mesh_dim >= ndim()) {
         throw std::runtime_error("DeviceMesh: invalid mesh_dim");
     }

@@ -6,20 +6,20 @@
 #include <iostream>
 
 // ---------------- Work ----------------
-class Work {
-public:
-    explicit Work(cudaStream_t stream);
-    ~Work();
+// class Work {
+// public:
+//     explicit Work(cudaStream_t stream);
+//     ~Work();
 
-    void markCompleted(bool success = true);
-    bool wait();
+//     void markCompleted(bool success = true);
+//     bool wait();
 
-private:
-    cudaStream_t stream_;
-    cudaEvent_t event_;
-    bool completed_;
-    bool success_;
-};
+// private:
+//     cudaStream_t stream_;
+//     cudaEvent_t event_;
+//     bool completed_;
+//     bool success_;
+// };
 
 
 // ---------------- ProcessGroup ----------------

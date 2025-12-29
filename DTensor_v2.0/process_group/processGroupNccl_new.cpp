@@ -19,7 +19,7 @@
 
 
 
-ProcessGroupNCCL::ProcessGroupNCCL(int world_size, int rank, ncclUniqueId& id, std::shared_ptr<Work> work_obj, cudaStream_t& stream )
+ProcessGroupNCCL::ProcessGroupNCCL(int world_size, int rank, ncclUniqueId id, std::shared_ptr<Work> work_obj, cudaStream_t& stream )
 :world_size_(world_size), id_(id), rank_(rank), work_obj_(work_obj), communication_stream_(stream)
 {
     //no_of_gpus per node for initialization.

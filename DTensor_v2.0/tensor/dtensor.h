@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "process_group/process_group.h"
+#include "process_group/ProcessGroupNCCL_new.h"
 #include "memory/cachingAllocator.hpp"
 
 
@@ -26,7 +26,7 @@ extern CachingAllocator gAllocator;
 class DTensor {
 public:
 
-    DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroup> pg, Layout layout);
+    DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout);
     ~DTensor();
 
     void setData(const std::vector<float>& host_data) ;
@@ -70,7 +70,7 @@ public:
 
     const Layout& get_layout() const { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
-    std::shared_ptr<ProcessGroup> get_pg() const { return pg_; }
+    std::shared_ptr<ProcessGroupNCCL> get_pg() const { return pg_; }
     DeviceMesh get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
     int getSize() const { return size_;}
@@ -89,7 +89,7 @@ private:
     int rank_;
     int world_size_;
     DeviceMesh device_mesh_;
-    std::shared_ptr<ProcessGroup> pg_;
+    std::shared_ptr<ProcessGroupNCCL> pg_;
     cudaStream_t stream_;
 
     Layout layout_;

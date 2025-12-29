@@ -33,7 +33,7 @@ LDFLAGS = -L/home/blu-bridge25/.local/lib -Xlinker -rpath -Xlinker /home/blu-bri
 SRCS = main.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNCCL_new.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp
 
@@ -58,7 +58,7 @@ TEST_MLP_SRCS = \
 	test_mlp_forward.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
+	process_group/processGroupNCCL_new.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 
@@ -212,20 +212,30 @@ clean:
 
 # Tensor Parallel MLP Example
 TP_MLP_SRCS = \
-	examples/tensor_parallel_mlp.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/process_group_nccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp 
+    examples/tensor_parallel_mlp.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp 
 
 TP_MLP_OBJS = $(TP_MLP_SRCS:.cpp=.o)
 
+# tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
+# 	@echo "\n[LINKING] Creating example executable: $@"
+# 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LDFLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+# 	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
+
 
 tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
-	@echo "\n[LINKING] Creating example executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LDFLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
-	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIBS) $(LDFLAGS)
+
+# Use a more explicit pattern that handles subdirectories better
+$(TP_MLP_OBJS): %.o: %.cpp
+	@echo "[COMPILE] $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
 
 
 # # Striped Attention Example
