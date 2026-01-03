@@ -58,11 +58,12 @@ CORE_SRCS = \
 CORE_OBJS = $(CORE_SRCS:.cpp=.o)
 
 # --- Test Executables ---
-TESTS = test_mlp_interconnect_bandwidth test_mlp_kernel_vs_sync test_mlp_arithmetic_intensity
+TESTS = test_mlp_interconnect_bandwidth test_mlp_kernel_vs_sync test_mlp_async_timing test_mlp_arithmetic_intensity
 
 # --- Test Object Files ---
 TEST_BW_OBJ = test_mlp_interconnect_bandwidth.o
 TEST_KERNEL_OBJ = test_mlp_kernel_vs_sync.o
+TEST_ASYNC_OBJ = test_mlp_async_timing.o
 TEST_AI_OBJ = test_mlp_arithmetic_intensity.o
 
 # =============================================================================
@@ -98,6 +99,11 @@ test_mlp_interconnect_bandwidth: $(TEST_BW_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] $@ build complete"
 
 test_mlp_kernel_vs_sync: $(TEST_KERNEL_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+
+test_mlp_async_timing: $(TEST_ASYNC_OBJ) $(CORE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"
