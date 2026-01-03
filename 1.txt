@@ -1,0 +1,194 @@
+Calculating Arithmetic Intensity
+Arithmetic Intensity (AI) evaluates whether a GPU is suitable for a given computational workload. It is the ratio of the number of the data type to the amount of data movement (in bytes) between memory and the compute units.
+
+It is also recommended to also look at the Compute Capability of the GPU. This is a number NVIDIA assigns to their GPU to provide a general view about the GPU. Some CUDA versions may require a minimum CC to be available, and CUDA versions may be required for certain frameworks and algorithms.
+
+Here's a basic example of how to calculate arithmetic intensity and use it to verify GPU suitability when using FLOPs (This could also be TOPs, for example) and without Compute Capability.
+
+The formula:
+
+\[
+
+AI = \frac{\text{FLOPs}}{\text{Bytes Transferred to/from Memory}}
+
+\]
+
+FLOPs - The number of floating-point operations required by your algorithm.
+Bytes Transferred - The total memory bandwidth utilized during the computation.
+This is the just foundation. Read more about calculating Arithmetic Intensity here.
+
+Once you know your algorithm's Arithmetic Intensity, compare it to the chosen GPU's capabilities:
+
+1. Check the GPU's memory bandwidth (GB/s). Determine if the GPU's memory bandwidth can handle your workload.
+
+2. Review the GPU's peak FLOP/s performance.
+
+3. Use the roofline model to determine if your workload is memory-bound or compute-bound:
+
+     \[
+
+     \text{Threshold AI} = \frac{\text{Peak FLOP/s}}{\text{Memory Bandwidth}}
+
+     \]
+
+     Compare your calculated AI to this value:
+
+If \( AI < \text{Threshold AI} \), your workload is memory-bound.
+If \( AI > \text{Threshold AI} \), your workload is compute-bound.
+4. Based on the calculated Arithmetic Intensity:
+
+If the GPU's compute and memory capabilities exceed the demands of your algorithm, the GPU is suitable.
+For workloads with low AI (memory-bound), ensure the GPU has sufficient memory bandwidth.
+For workloads with high AI (compute-bound), ensure the GPU has high FLOP/s capacity.
+
+
+What is Arithmetic Intensity?
+Arithmetic intensity describes the ratio of computational operations (like additions, multiplications, etc.) to memory operations (like loads and stores) that a program or algorithm performs. Arithmetic intensity provides insight into how well an algorithm can make use of computational power versus how often it has to wait on memory operations. This can be used for optimizing performance for parallel computing and high-performance applications. 
+
+A high arithmetic intensity means the program is doing a lot of calculations with relatively less memory transfer.
+Low arithmetic intensity means that the program is spending more time transferring data between memory and the CPU/GPU, potentially turning into a bottleneck and resulting in slow performance.
+GPU Architecture and the Role of Arithmetic Intensity
+One of the key factors determining the performance of a GPU is its arithmetic intensity. 
+
+GPUs are designed to process large-scale parallel tasks with a high degree of computational complexity. Modern GPUs have thousands of smaller compute cores, making them ideal for tasks that can be broken down into many independent computations. Therefore, their performance depends on the ability to keep these cores busy.
+
+High arithmetic intensity ensures that these cores are not waiting around for data from memory but are continuously performing computations, improving the overall throughput and efficiency of the GPU.
+
+Memory access is often a bottleneck, because data transfers between the GPU’s memory and its cores are relatively slow compared to the speed of the cores themselves. If an application has low arithmetic intensity, it will require frequent memory accesses, which can lead to a bottleneck. A high arithmetic intensity minimizes this problem because the amount of data transfer is reduced relative to the amount of work done per data element.
+
+Key Factors Impacting Arithmetic Intensity
+Arithmetic intensity is a key factor in optimizing performance, particularly in GPU-accelerated applications. Here are the key factors impacting arithmetic intensity:
+
+Algorithm Structure – The design of the algorithm determines how much computation is required relative to data movement.
+
+Algorithms with more intensive mathematical operations (e.g., matrix multiplication, Fourier transforms) typically have higher arithmetic intensity.
+Algorithms that require a lot of data fetching and moving (e.g., data-intensive tasks like sorting or large-scale I/O operations) may have lower arithmetic intensity.
+Memory Access Patterns – The way memory is accessed influences arithmetic intensity.
+
+Efficient memory access patterns that minimize data fetching overhead (e.g., by making use of caches or coalescing memory accesses in GPUs) increase arithmetic intensity.
+Disorganized memory access patterns or excessive random memory access can reduce the ratio of computation to memory transfer, lowering arithmetic intensity.
+Data Locality – Data locality refers to the use of data that is close to the processor. Temporal locality (accessing the same data multiple times in a short period) and spatial locality (accessing data that is physically close together in memory) help minimize memory latency, allowing for more computations to occur relative to memory transfers.
+
+High locality tends to increase arithmetic intensity, while poor locality can significantly reduce it.
+Processor Architecture – The characteristics of the processor or GPU, such as the number of computational units, cache hierarchy and memory bandwidth, impact arithmetic intensity and the arithmetic intensity computer architecture.
+
+Processors with high computational power and sufficient memory bandwidth are more capable of sustaining high arithmetic intensity.
+Bottlenecks due to limited computational units or memory bandwidth can cause the arithmetic intensity to drop, as computations have to wait for data to be fetched.
+Data Size and Problem Scale – The size of the data being processed influences arithmetic intensity.
+
+For large datasets, more computation is often needed to process or analyze the data, which can increase arithmetic intensity.
+Compiler Optimizations – The ability of compilers to optimize code for memory access patterns, loop unrolling, vectorization and parallelism can affect arithmetic intensity.
+
+Compiler optimizations that increase parallel execution or minimize unnecessary data movement can lead to higher arithmetic intensity, making better use of available computational resources.
+Parallelism – The level of parallelism in a system (e.g., multi-core processors, GPUs, etc.) influences arithmetic intensity.
+
+In highly parallel systems, many operations can be carried out simultaneously, potentially increasing the arithmetic intensity.
+If the system is not designed to handle large data efficiently, it may not be able to keep all computation units busy, reducing arithmetic intensity.
+Data Transfer Overhead – The time spent on moving data (and not calculations) impacts arithmetic intensity.
+
+If the data transfer overhead (such as communication between CPU and GPU or between nodes in a distributed system) is high, it reduces arithmetic intensity.
+Importance of Measuring Arithmetic Intensity in GPU Workloads
+Here’s why measuring arithmetic intensity is important:
+
+Identifying the Root Cause of Bottlenecks 
+
+A workload with low arithmetic intensity (i.e., more memory accesses than computations) tends to be memory-bound, meaning that memory bandwidth becomes the limiting factor in performance.
+High arithmetic intensity indicates that the workload is compute-bound, meaning the processor is the limiting factor.
+Identifying Inefficient Memory Access Patterns: Low arithmetic intensity can indicate inefficient memory access patterns. For example, workloads that access memory too frequently or in inefficient ways (like non-contiguous accesses) will incur high memory latency, which leads to slower performance.
+
+Maximizing Throughput: Measuring arithmetic intensity helps developers adjust workloads to better align with the capabilities of the hardware and execute faster..
+
+Balancing Compute and Memory Resources: Adjusting arithmetic intensity helps ensure that both compute and memory resources are fully utilized, enhancing overall cost-effectiveness.
+
+Guiding Algorithm Design: Measuring the arithmetic intensity of different algorithms can help guide the choice of algorithms that are better suited for GPU processing or lead to changes in algorithm structure to improve their AI.
+
+Calculating Arithmetic Intensity for a Specific Model
+Arithmetic intensity helps determine which GPU you need for your LLM. The formula for arithmetic intensity calculation is:
+
+\[
+AI = \frac{\text{FLOPs}}{\text{Bytes Transferred to/from Memory}}
+\]
+For arithmetic intensity of matrix multiplication for the operation:
+
+C=A×B
+
+A is an m×k matrix, B is a k×n matrix, C is an m×n matrix,
+
+AI= Number of floating-point operations (FLOPs)​/ Number of memory accesses (bytes)
+
+ 
+
+Read more about how to use the arithmetic intensity formula and how arithmetic intensity relates to choosing your LLM in this blog.
+
+Optimizing Arithmetic Intensity
+Arithmetic intensity can help you with your GPU workloads. Here’s how to optimize:
+
+Increase Computation per Data Load – Combine multiple loops operating on the same data to reduce memory accesses. If an operation is lightweight (e.g., simple arithmetic), recomputing values can be cheaper than fetching them from memory.
+Optimize Data Access Patterns – Access memory in a contiguous manner to take advantage of cache lines. Reuse recently loaded data as much as possible.
+Use Blocking and Tiling Techniques – Process small chunks of data that fit in cache before moving to the next block, reducing memory traffic.
+Optimize Data Layout and Structures with structure of arrays (when processing elements individually) and array of structures (when elements are frequently accessed together). Plus, use padded or aligned memory.
+Leverage Vectorization and SIMD Instructions – Use Single Instruction Multiple Data (SIMD) to process multiple values simultaneously.
+Reduce Redundant Memory Transfers – Preload data into cache before it is needed. Avoid unnecessary memory writes or loads by restructuring code logic.
+Leverage High-Bandwidth Memory & Compute Hierarchies – Use GPU shared memory or register-level optimization for high-performance kernels. Optimize CPU-GPU memory transfers using pinned memory and unified memory models (e.g., CUDA’s Unified Memory)
+
+
+Arithmetic Intensity
+
+Performance is defined by memory bandwidth, compute, latency. If compute is more limited than memory, it is compute bound. Vice versa for memory bound. Arithmetic intensity is the ratio of compute operations to memory operations (Specifically FLOPs per byte transferred). If you are compute bound, optimizing for memory does not benefit your system, and vice versa. Calculating arithmetic intensity tells you which parts of your system to focus on optimizing. Arithmetic intensity itself is calculated as a hardware threshold as well as for individual operations. Real world performance depends on actual model architecture, dataset characteristics, training/inference regime, memory access patterns, cache utilization, batch size, operator fusion, etc…
+
+Arithmetic intensity can also be applied to operations as below. Values only approximate:
+
+Low arithmetic intensity operations (10-100 FLOPs/byte) include elementwise ops, activations, normalizations (Example, addition involves moving 2N values to GPU but doing only N ops)
+
+High intensity ops (100 - 1000 FLOPs/byte) include matmuls and convolutions. Larger batch sizes also increase intensity - This is because input data increases while the memory access cost for weight matrices remains constant - Hence larger batches improve GPU compute utilization.
+
+Hence, frameworks focus heavily on fusion of low intensity operations. Operations can have different arithmetic intensity depending on problem size (small matrices have lower intensity because less data can be reused), implementation (tiled algorithms are faster), precision (FP16 doubles available compute).
+
+Consider the arithmetic intensity threshold. At 312 TFLOPs and a mem bandwidth of 1.55 TB/s for FP16 tensor ops in an A100, the arithmetic intensity threshold is roughly 201. Ops with intensity below this are memory bound, while ops above it are compute bound. A memory bound operation results in idle GPU compute while a compute bound operation results in bottlenecking. In practice, hitting this precise 100% resource utilization is rare. 
+
+Arithmetic Intensity : Understand Op limits — Memory or Compute
+Jaideep Ray
+Jaideep Ray
+
+Follow
+3 min read
+·
+Dec 31, 2021
+67
+
+
+
+
+Why ?
+Widespread adoption of DNN in different domains makes performance optimization a highly impactful area. In this post we learn about op limits and a measure for that : arithmetic intensity.
+
+How do we define performance ?
+Performance is defined by memory bandwidth, compute bandwidth and latency. Consider a simplified model (M) where a function reads its input from memory, performs math operations, then writes its output to memory. The total time for the function is max (Total time for memory access, Total time for math compute) if the operations are done concurrently. The longer of the two times demonstrates what limits performance: If math time is longer we say that a function is compute limited or math limited, if memory time is longer then it is memory limited.
+Operations representable as matrix multiplies (including fully-connected, convolutional, and recurrent layers) can be both math or memory bound depending on matrix size. Larger layers tend to have more calculations relative to the number of memory accesses, a ratio that we refer to as arithmetic intensity. If arithmetic intensity exceeds a particular threshold (dependent on the GPU type and the type of calculation being done), the operation is math-bound and can be optimized accordingly.
+Operations not representable as matrix multiplies such as activation functions, pooling, and batch normalization are nearly always memory-bound.
+If an operation is memory-bound, tweaking parameters to more efficiently utilize the processor is ineffective.
+Arithmetic Intensity :
+Memory time is equal to the number of bytes accessed in memory divided by the processor’s memory bandwidth (#bytes/BW_mem). Math time is equal to the number of operations divided by the processor’s math bandwidth (#ops/BW_math).
+Thus, on a given processor a given training algorithm is math limited if :
+Get Jaideep Ray’s stories in your inbox
+Join Medium for free to get updates from this writer.
+
+Enter your email
+Subscribe
+Press enter or click to view image in full size
+
+Math limited op
+ops/bytes is known as Arithmetic intensity for an algorithm. It is measured in FLOPS/bytes. BW_math / BW_mem is known as ops:bytes ratio for a processor.
+(algorithm, processor) is math limited if arithmetic_intensity > ops:bytes
+(algorithm, processor) is memory limited if arithmetic_intensity < ops:bytes
+Arithmetic intensity is most often defined as a FLOP per Byte ratio. [2]
+
+Analyzing performance :
+Press enter or click to view image in full size
+
+Analyzing performance
+Arithmetic intensity : ops/bytes
+Math to Memory bw : BW_math/BW_mem
+Compare (1) & (2)
+How to compute Arithmetic Intensity ?
+Use a profiler to get flops count and memory access. Pytorch profiler contains both functionality now. Use flops counter built in pytorch profiler to count flops per module or pytorch operator. Here are some ways to optimize your op performance. We will discuss them in a separate post.
