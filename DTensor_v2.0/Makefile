@@ -325,3 +325,29 @@ test_dtensor_creation_methods: $(TEST_DTENSOR_CREATION_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DTENSOR_CREATION_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] DTensor Creation Methods test build complete."
 	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./tests/test_dtensor_creation_methods\n"
+
+# Rotate3D Sharding Test
+TEST_ROTATE3D_SRCS = \
+	tests/test_rotate3d_sharding.cpp \
+	tensor/dtensor.cpp \
+	tensor/device_mesh.cpp \
+	process_group/processGroupNccl.cpp \
+	process_group/reverse.cu \
+	memory/cachingAllocator.cpp \
+	bridge/tensor_ops_bridge.cpp \
+	ckpt/ckpt.cpp
+
+TEST_ROTATE3D_OBJS = $(TEST_ROTATE3D_SRCS:.cpp=.o)
+TEST_ROTATE3D_OBJS := $(TEST_ROTATE3D_OBJS:.cu=.o)
+
+.PHONY: test_rotate3d_sharding
+
+process_group/reverse.o: process_group/reverse.cu
+	@echo "[NVCC COMPILE] $<"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -c $< -o $@ $(INCLUDES)
+
+test_rotate3d_sharding: $(TEST_ROTATE3D_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_ROTATE3D_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Rotate3D Sharding test build complete."
+	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./tests/test_rotate3d_sharding\n"
