@@ -60,6 +60,16 @@ public:
         return shard_dim_;
     }
 
+    // Set the shard dimension (used by rotate3D after transpose)
+    void set_shard_dim(int dim) {
+        shard_dim_ = dim;
+    }
+
+    // Set the global shape (used after in-place operations that change shape)
+    void set_global_shape(const std::vector<int>& shape) {
+        global_shape_ = shape;
+    }
+
     const std::vector<int>& get_global_shape() const {
         return global_shape_;
     }

@@ -98,6 +98,15 @@ public:
      * Multiplies all elements by the given scalar.
      */
     void scale(float factor);
+    
+    /**
+     * Rotate a 3D tensor around the specified axis (in-place).
+     * Also updates the shard dimension to follow the transpose.
+     * @param dim Rotation axis (0=X, 1=Y, 2=Z)
+     * @param direction Rotation direction (true=one way, false=opposite)
+     */
+    void rotate3D(int dim, bool direction);
+    
     void saveCheckpoint(const std::string& path) const;
     void loadCheckpoint(const std::string& path);
 

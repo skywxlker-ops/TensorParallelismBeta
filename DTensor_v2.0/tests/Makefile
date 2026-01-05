@@ -43,6 +43,7 @@ LIBS = \
     -lcudart \
     -lcublas \
     -lcurand \
+    -lgomp \
     -Xlinker -lmpi \
     -Xlinker -lmpi_cxx
 # Removed: -lcgad (autograd library not needed)
@@ -219,6 +220,32 @@ test_process_group_nccl: $(TEST_PG_NCCL_OBJ) $(PARENT_DIR)/process_group/process
 	@echo "\\n[LINKING] $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $@ build complete"
+
+# Rotate3D Sharding Test
+TEST_ROTATE3D_SRC = test_rotate3d_sharding.cpp
+TEST_ROTATE3D_OBJ = $(TEST_ROTATE3D_SRC:.cpp=.o)
+REVERSE_KERNEL_OBJ = $(PARENT_DIR)/process_group/reverse.o
+
+$(PARENT_DIR)/process_group/reverse.o: $(PARENT_DIR)/process_group/reverse.cu
+	@echo "[NVCC COMPILE] $<"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -c $< -o $@ -I$(PARENT_DIR) -I$(CUDA_HOME)/include
+
+test_rotate3d_sharding: $(TEST_ROTATE3D_OBJ) $(CORE_OBJS) $(REVERSE_KERNEL_OBJ) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./test_rotate3d_sharding\n"
+
+# MLP Nsight Profiling Test
+TEST_MLP_NSIGHT_SRC = test_mlp_nsight_profile.cpp
+TEST_MLP_NSIGHT_OBJ = $(TEST_MLP_NSIGHT_SRC:.cpp=.o)
+
+test_mlp_nsight_profile: $(TEST_MLP_NSIGHT_OBJ) $(CORE_OBJS) $(REVERSE_KERNEL_OBJ) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $^ $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ build complete"
+	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./test_mlp_nsight_profile"
+	@echo "Profile: nsys profile -o mlp_profile mpirun -np 2 --allow-run-as-root ./test_mlp_nsight_profile\n"
 
 # --- Run Test Rules ---
 
