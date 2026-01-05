@@ -166,3 +166,5 @@ int main(int argc, char** argv) {
 
 // make test_mlp_arithmetic_intensity
 // mpirun -np 2 --allow-run-as-root ./test_mlp_arithmetic_intensity
+
+
