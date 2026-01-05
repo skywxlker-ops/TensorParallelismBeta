@@ -168,32 +168,44 @@ void DeviceMesh::initialize_process_groups() {
             throw std::runtime_error("DeviceMesh: MPI sub-communicator rank mismatch");
         }
           
-        ncclUniqueId nccl_id = create_nccl_id(0, mpi_comms_[mesh_dim]);
+        // ncclUniqueId nccl_id = create_nccl_id(0, mpi_comms_[mesh_dim]);
 
         int64_t device = device_ids_[global_rank_];
 
+        // CRITICAL: Set CUDA device BEFORE creating any CUDA resources (streams, events)
+        // CUDA streams and events are device-specific and must be created on the correct device
+        int gpus_per_node = 1;
+        const char* env = std::getenv("NO_GPUS_PER_NODE");
+        if (env) {
+            int parsed = std::atoi(env);
+            if (parsed > 0) gpus_per_node = parsed;
+        }
+        int local_rank = global_rank_ % gpus_per_node;
+        cudaSetDevice(local_rank);
+
         std::shared_ptr<Work> work_obj;
+        cudaStream_t comm_stream;
+        cudaStreamCreate(&comm_stream);
 
-        process_groups_[mesh_dim] = std::make_shared<ProcessGroupNCCL>(
-             group_size, my_group_rank, nccl_id, work_obj);
+        process_groups_[mesh_dim] = init_process_group(group_size, my_group_rank, comm_stream);
     
     }
 }
 
-ncclUniqueId DeviceMesh::create_nccl_id(int root_rank, MPI_Comm comm) {
-    ncclUniqueId nccl_id;
+// ncclUniqueId DeviceMesh::create_nccl_id(int root_rank, MPI_Comm comm) {
+//     ncclUniqueId nccl_id;
 
-    int my_rank_in_comm;
-    MPI_Comm_rank(comm, &my_rank_in_comm);
+//     int my_rank_in_comm;
+//     MPI_Comm_rank(comm, &my_rank_in_comm);
     
-    if (my_rank_in_comm == root_rank) {
-        ncclGetUniqueId(&nccl_id);
-    }
+//     if (my_rank_in_comm == root_rank) {
+//         ncclGetUniqueId(&nccl_id);
+//     }
 
-    MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, root_rank, comm);
+//     MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, root_rank, comm);
     
-    return nccl_id;
-}
+//     return nccl_id;
+// }
 
 std::shared_ptr<ProcessGroupNCCL> DeviceMesh::get_process_group(int64_t mesh_dim) {
     if (mesh_dim < 0 || mesh_dim >= ndim()) {

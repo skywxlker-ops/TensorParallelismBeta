@@ -16,15 +16,19 @@
 // };
 
 class Layout {
+
+    std::shared_ptr<Placement> placement_;
+    std::vector<int64_t> global_shape_;
+
 public: 
-    Layout(DeviceMesh mesh, const std::vector<int64_t> global_shape) : mesh_(mesh), global_shape_(global_shape), placement_(new Replicate()) {}
+    Layout(const DeviceMesh& mesh, const std::vector<int64_t> global_shape) : mesh_(&mesh), global_shape_(global_shape), placement_(std::make_shared<Replicate>()) {}
 
     // Constructor for a new layout
-    Layout(DeviceMesh mesh, const std::vector<int64_t> global_shape, int dim)
-        : mesh_(mesh), global_shape_(global_shape), placement_(new Shard(dim)) {
+    Layout(const DeviceMesh& mesh, const std::vector<int64_t> global_shape, int dim)
+        : mesh_(&mesh), global_shape_(global_shape), placement_(std::make_shared<Shard>(dim)) {
         //std::cout<< "Dimensions"<<std::endl;
         // for(auto i: global_shape){
-        //     std::cout << i <<std::endl;
+
         // }
         if ( (placement_->dim() < 0 || (size_t)placement_->dim() >= global_shape.size())) {
             throw std::runtime_error("Invalid shard_dim for SHARDED layout.");
@@ -47,40 +51,71 @@ public:
     }
 
     int get_shard_dim() const {
+        if (placement_->type() == PlacementType::SHARD) {
         return placement_->dim();
+        }
+        return -1; 
+    }
+    
+    void set_shard_dim( int d)  {
+
+        placement_->setDim(d);       
+        
     }
 
     const std::vector<int64_t>& get_global_shape() const {
         return global_shape_;
     }
 
-    DeviceMesh get_mesh() const {
-        return mesh_;
+    void set_global_shape(std::vector<int64_t> new_shape)  {
+        global_shape_ = new_shape;
+    }
+
+    const DeviceMesh& get_mesh() const {
+        return *mesh_;
     }
 
     // --- Core Logic ---
 
     // Calculates the shape of the local shard for a given rank
+
     std::vector<int64_t> get_local_shape(int rank) const {
-        if (is_replicated() || global_shape_.empty()) {
-            return global_shape_;
+         if (placement_->type() == PlacementType::REPLICATE) {
+             return global_shape_; // No sharding, return full shape
+         }
+     
+         int d = placement_->dim();
+         // Ensure d is valid before indexing global_shape_
+         if (d < 0 || (size_t)d >= global_shape_.size()) {
+             return global_shape_;
+         }
+
+
+        int world_size = mesh_->world_size();
+        // 2. SAFETY: Prevent division by zero if mesh is uninitialized
+        if (world_size <= 0) return global_shape_;
+
+        std::vector<int64_t> local_shape = global_shape_;
+
+        // 3. SAFETY: Check the shard dimension
+        int shard_dim = placement_->dim();
+        if (shard_dim < 0 || (size_t)shard_dim >= global_shape_.size()) {
+            // If this is -1, global_shape_[shard_dim] will trigger bad_array_new_length
+            return global_shape_; 
         }
 
-        int world_size = mesh_.world_size();
-        std::vector<int64_t> local_shape = global_shape_;
-        
-        int global_dim_size = global_shape_[placement_->dim()];
-        int base_size = global_dim_size / world_size;
-        int remainder = global_dim_size % world_size;
-        
-        int local_dim_size = (rank < remainder) ? (base_size + 1) : base_size;
-        
-        // Set the local shape for the sharded dimension
-        local_shape[placement_->dim()] = local_dim_size;
-        
+        int64_t global_dim_size = global_shape_[shard_dim];
+        int64_t base_size = global_dim_size / world_size;
+        int64_t remainder = global_dim_size % world_size;
+
+        int64_t local_dim_size = (rank < remainder) ? (base_size + 1) : base_size;
+
+        local_shape[shard_dim] = local_dim_size;
+
         return local_shape;
     }
-    
+
+
     // Helper to get total number of elements in the global tensor
     int64_t global_numel() const {
         if (global_shape_.empty()) return 0;
@@ -91,11 +126,11 @@ public:
     Layout reshape(const std::vector<int64_t>& new_global_shape) const {
         // A simple check: if sharding dim is preserved and size is same, keep it.
         if (is_sharded() && placement_->dim() < (int64_t)new_global_shape.size() && new_global_shape[placement_->dim()] == global_shape_[placement_->dim()]) {
-             return Layout(mesh_, new_global_shape, placement_->dim());
+             return Layout(*mesh_, new_global_shape, placement_->dim());
         }
         
         // Default: fall back to replicated
-        return Layout(mesh_, new_global_shape);
+        return Layout(*mesh_, new_global_shape);
     }
 
     // Check for element-wise op compatibility
@@ -170,26 +205,27 @@ public:
     //     }
     // }
 
-    std::shared_ptr<Placement> get_placement(int index) const {
-        if (index < 0 || index ) {
-            // Fallback if placements are not set but simple sharding is
-            if (placements_.empty()) {
-                if (placement_->type() == PlacementType::REPLICATE) {
-                    return std::make_shared<Replicate>();
-                } else {
-                    return std::make_shared<Shard>(placement_->dim());
-                }
-            }
-            throw std::out_of_range("Placement index out of range");
-        }
-        return placements_[index];
-    }
+    // std::shared_ptr<Placement> get_placement(int index) const {
+    //     if (index < 0 || index ) {
+    //         // Fallback if placements are not set but simple sharding is
+    //         if (placements_.empty()) {
+    //             if (placement_->type() == PlacementType::REPLICATE) {
+    //                 return std::make_shared<Replicate>();
+    //             } else {
+    //                 return std::make_shared<Shard>(placement_->dim());
+    //             }
+    //         }
+    //         throw std::out_of_range("Placement index out of range");
+    //     }
+    //     return placements_[index];
+    // }
 
     private:
-        DeviceMesh mesh_;
-        std::vector<int64_t> global_shape_;
-        Replicate replicate_;
-        Shard shard_;
-        Placement* placement_;
-        std::vector<std::shared_ptr<Placement>> placements_;
+        const DeviceMesh* mesh_;
+        // std::vector<int64_t> global_shape_;
+
+        // Placement* placement_;
+        // std::vector<std::shared_ptr<Placement>> placements_;
+
+
     };

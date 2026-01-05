@@ -92,6 +92,19 @@ void ProcessGroupNCCL::end_time(float& ms) {
 
 //init commuication
 std::shared_ptr<ProcessGroupNCCL> init_process_group(int world_size, int rank, cudaStream_t stream){
+    // CRITICAL: Use GLOBAL MPI rank for device selection, not the sub-group rank parameter
+    int global_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &global_rank);
+
+    int gpus_per_node = 1;
+    const char* env = std::getenv("NO_GPUS_PER_NODE");
+    if (env) {
+        int parsed = std::atoi(env);
+        if (parsed > 0) gpus_per_node = parsed;
+    }
+    int local_rank = global_rank % gpus_per_node;
+    CUDACHECK(cudaSetDevice(local_rank));
+
     cudaStream_t communication_stream;
     bool stream_created = false;
     if(stream == 0){
@@ -404,6 +417,9 @@ ProcessGroupNCCL::launch_work_collectives(
     NCCLFUNC nccl_op,
     bool to_sync
 ) {
+    // Ensure we're on the correct CUDA device before creating CUDA events
+    CUDACHECK(cudaSetDevice(local_rank_));
+    
     // Create Work object
     auto work_collectives = std::make_shared<Work>(stream, comm_);
 

@@ -12,11 +12,10 @@
 #include "device/Device.h"
 #include "dtype/Dtype.h"
 
-
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 #include "tensor/placement.h"
-
+#include "reverse.cuh"
 
 using namespace OwnTensor;
 
@@ -26,7 +25,7 @@ extern CachingAllocator gAllocator;
 class DTensor {
 public:
 
-    DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout);
+    DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout);
     ~DTensor();
 
     void setData(const std::vector<float>& host_data) ;
@@ -36,19 +35,23 @@ public:
     // DTensor sub(const DTensor& other) const;
     // DTensor mul(const DTensor& other) const;
     // DTensor div(const DTensor& other) const;
+    
     void matmul( DTensor& A,  DTensor& B);
 
+    void Linear(  DTensor& Input,  DTensor& Weights,  DTensor& Bias);
     // DTensor matmul(const DTensor& other) const;
     // DTensor  _column_parallel_matmul(const DTensor& other) const;
     // DTensor _row_parallel_matmul(const DTensor& other) const;
-    DTensor reshape(const std::vector<int64_t>& new_global_shape) const;
+    // DTensor reshape(const std::vector<int64_t>& new_global_shape) const;
 
 
     void replicate(int root = 0);
-    
-    void    rotate3D( int dim, bool direction);
+
+
+    void rotate3D( int dim, bool direction);
 
     void shard(int dim, int root , DTensor &parent_tensor );
+    void shard_default(int dim, int root, DTensor &parent_tensor);
 
     void sync();
 
@@ -67,11 +70,11 @@ public:
 
     void print() const;
     
-
-    const Layout& get_layout() const { return layout_; }
+    void setShape(std::vector<int64_t>newShape){ shape_ = newShape ; }
+    const Layout& get_layout()  { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
     std::shared_ptr<ProcessGroupNCCL> get_pg() const { return pg_; }
-    DeviceMesh get_device_mesh() const { return device_mesh_; }
+    const DeviceMesh& get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
     int getSize() const { return size_;}
 
@@ -88,7 +91,7 @@ private:
 
     int rank_;
     int world_size_;
-    DeviceMesh device_mesh_;
+    const DeviceMesh& device_mesh_;
     std::shared_ptr<ProcessGroupNCCL> pg_;
     cudaStream_t stream_;
 
@@ -110,3 +113,5 @@ private:
                         int dim,
                         int offset) const;
 };
+
+// void launch_reverse_kernel(float* d_src, float* d_dst, int nx, int ny, int nz, int dim, cudaStream_t stream);

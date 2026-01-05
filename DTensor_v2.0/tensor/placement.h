@@ -8,35 +8,34 @@ enum class PlacementType {
     REPLICATE    
 };
 
-
 class Placement {
 public:
     Placement() = default;
-    virtual ~Placement() = default;
-    // Placement() = default;
-    virtual PlacementType type() const = 0;
-    virtual int dim() const { return -1;}; // temp optimization
+    virtual ~Placement(); // Declaration only, no '= default' here
 
+    virtual PlacementType type() const = 0;
+    virtual int dim() const { return -1; } 
+    virtual void setDim(int dim) { } 
 };
 
 
 class Shard : public Placement {
 public:
-    explicit Shard(int dim) : dim_(dim) {}
+
     Shard() = default;
+    
+    explicit Shard(int dim) : dim_(dim) {}
     
     PlacementType type() const override { 
         return PlacementType::SHARD; 
     }
     
-    
-    int dim() const{ return dim_; }
-    void setDim(int dim) { dim_ = dim; }
-    
-    
+    int dim() const override { return dim_; }
+    void setDim(int dim) override { dim_ = dim; }
     
 private:
-    int dim_;  
+
+    int dim_ = 0;  
 };
 
 

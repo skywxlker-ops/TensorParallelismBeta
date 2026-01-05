@@ -94,10 +94,10 @@ clean:
 	@echo "[CLEAN] Removing object files and executables..."
 	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
 	rm -f tests/*.o tests/test_device_mesh tests/test_matmul
-	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom
+	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom benchmarks/shard_benchmarking
 	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
 
-.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom gradient_sync_example
+.PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom gradient_sync_example shard_benchmarking
 
 # TEST_DEVICE_MESH_SRCS = \
 # 	tests/test_device_mesh.cpp \
@@ -211,15 +211,26 @@ clean:
 # 	@echo "\nRun with 4 GPUs: mpirun -np 4 ./examples/gradient_sync_example\n"
 
 # Tensor Parallel MLP Example
+
+CUDA_SRCS = process_group/reverse.cu
+CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
+
 TP_MLP_SRCS = \
     examples/tensor_parallel_mlp.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \
     memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp 
+    bridge/tensor_ops_bridge.cpp \
+	tensor/placement.cpp 
 
-TP_MLP_OBJS = $(TP_MLP_SRCS:.cpp=.o)
+
+TP_MLP_OBJS = $(TP_MLP_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+CUDA_LDFLAGS = -L/usr/local/cuda-12.6/include
+
+%.o: %.cu
+	nvcc -c $< -o $@
 
 # tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 # 	@echo "\n[LINKING] Creating example executable: $@"
@@ -231,12 +242,36 @@ tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIBS) $(LDFLAGS)
 
+
+
 # Use a more explicit pattern that handles subdirectories better
-$(TP_MLP_OBJS): %.o: %.cpp
-	@echo "[COMPILE] $<"
+
+$(TP_MLP_SRCS:.cpp=.o): %.o: %.cpp
+	@echo "[COMPILE C++] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
+# NEW CUDA rule
+$(CUDA_OBJS): %.o: %.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
+# Shard Benchmarking
+SHARD_BENCH_SRCS = \
+    benchmarks/shard_benchmarking.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+SHARD_BENCH_OBJS = $(SHARD_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+shard_benchmarking: $(SHARD_BENCH_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating benchmark executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(SHARD_BENCH_OBJS) $(TENSOR_LIB_A) $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Shard Benchmarking build complete."
+	@echo "\nRun with: mpirun -np 2 ./benchmarks/shard_benchmarking\n"
 
 # # Striped Attention Example
 # STRIPED_ATTN_SRCS = \

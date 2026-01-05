@@ -18,6 +18,14 @@ public:
     DeviceMesh(const std::vector<int>& mesh_shape, 
                        const std::vector<int>& device_ids);
     
+    // Disable copying - DeviceMesh owns MPI_Comm handles that must not be double-freed
+    DeviceMesh(const DeviceMesh&) = delete;
+    DeviceMesh& operator=(const DeviceMesh&) = delete;
+    
+    // Allow move semantics
+    DeviceMesh(DeviceMesh&&) = default;
+    DeviceMesh& operator=(DeviceMesh&&) = default;
+    
     ~DeviceMesh();
     
     std::vector<int64_t> get_coordinate(int rank) const;

@@ -8,12 +8,13 @@
 #include <sstream>
 #include "tensor/dtensor.h"
 #include "TensorLib.h"
-
+#include "mlp/layers.h"
+// #include "reverse.cuh"
 
 CachingAllocator gAllocator;
 // using namespace OwnTensor;
 
-DTensor::DTensor(DeviceMesh device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout)
+DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout)
     : rank_(pg->get_rank()),
       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
       device_mesh_(device_mesh),
@@ -181,65 +182,97 @@ void DTensor::replicate(int root) {
 //     // shard_tensor.release() 
 // }
 
-void DTensor::rotate3D( int dim, bool direction) {
-    std::vector<int64_t> n = this->get_layout().get_global_shape();
-    // Treat each Z-layer as a 2D matrix and rotate it
+// void DTensor::rotate3D( int dim, bool direction) {
+//     std::vector<int64_t> n = this->get_layout().get_global_shape();
+//     // Treat each Z-layer as a 2D matrix and rotate it
 
-    float* data = static_cast<float*>(this->tensor_.data());
-    if( dim == 0){
-    // shape n = {nx, ny, nz}
-    for (int64_t x = 0; x < n[0]; ++x) {
-        // 1. Transpose Y and Z
-        for (int64_t y = 0; y < n[1]; ++y) {
-            for (int64_t z = y + 1; z < n[2]; ++z) {
-                std::swap(*(data + x*n[1]*n[2] + y*n[2] + z), 
-                          *(data + x*n[1]*n[2] + z*n[2] + y));
-            }
-        }
-        // 2. Reverse Z-rows (Contiguous)
-        for (int64_t y = 0; y < n[1]; ++y) {
-            float* zStart = data + x*n[1]*n[2] + y*n[2];
-            std::reverse(zStart, zStart + n[2]);
-        }
-    }
-    }
+//     float* data = static_cast<float*>(this->tensor_.data());
+//     if( dim == 0){
+//     // shape n = {nx, ny, nz}
+//     layout_.set_global_shape({n[0],n[2],n[1]});
+//     for (int64_t x = 0; x < n[0]; ++x) {
+//         // 1. Transpose Y and Z
+//         for (int64_t y = 0; y < n[1]; ++y) {
+//             for (int64_t z = y + 1; z < n[2]; ++z) {
+//                 std::swap(*(data + x*n[1]*n[2] + y*n[2] + z), 
+//                           *(data + x*n[1]*n[2] + z*n[1] + y));
+//             }
+//         }
+//         // 2. Reverse Z-rows (Contiguous)
+//         if(direction == 0){
+//             for (int64_t y = 0; y < n[1]; ++y) {
+//                 for (int64_t z = 0; z < n[2] / 2; ++z) {
+//                     std::swap(*(data + x*n[1]*n[2] + z*n[1] + y), 
+//                               *(data + x*n[1]*n[2] + (n[2]-1-z)*n[1] + y));
+//                 }     
+//             } 
+//         }
+//         else{
+//             for (int64_t z = 0; z < n[2]; ++z) {
+//                 float* yStart = data + x*n[1]*n[2] + z*n[1];
+//                 std::reverse(yStart, yStart + n[2]);
+//             }  
+//         }
+//     }
+//     }
 
-    if( dim == 1){
-    for (int64_t y = 0; y < n[1]; ++y) {
-        // 1. Transpose X and Z
-        for (int64_t x = 0; x < n[0]; ++x) {
-            for (int64_t z = x + 1; z < n[2]; ++z) {
-                std::swap(*(data + x*n[1]*n[2] + y*n[2] + z), 
-                          *(data + z*n[1]*n[2] + y*n[2] + x));
-            }
-        }
+//     if( dim == 1){
+//     layout_.set_global_shape({n[2],n[1],n[0]});
+//     for (int64_t y = 0; y < n[1]; ++y) {
+//         // 1. Transpose X and Z
+//         for (int64_t x = 0; x < n[0]; ++x) {
+//             for (int64_t z = x + 1; z < n[2]; ++z) {
+//                 std::swap(*(data + x*n[1]*n[2] + y*n[2] + z), 
+//                           *(data + z*n[1]*n[2] + y*n[2] + x));
+//             }
+//         }
+//         if(direction == 0){
+//             for (int64_t x = 0; x < n[0]; ++x) {
+//                 for (int64_t z = 0; z < n[2] / 2; ++z) {
+//                     std::swap(*(data + z*n[1]*n[0] + y*n[0] + x), 
+//                               *(data + (n[2]-1-z)*n[1]*n[0] + y*n[0] + x));
+//                 }     
+//             } 
+//         }
+//         else{
+//             for (int64_t z = 0; z < n[2]; ++z) {
+//                 float* xStart = data + z*n[1]*n[0] + y*n[0];
+//                 std::reverse(xStart, xStart + n[2]);
+//             }
+//         }
+//     }
+//     }
 
-        for (int64_t x = 0; x < n[0]; ++x) {
-            float* zStart = data + x*n[1]*n[2] + y*n[2];
-            std::reverse(zStart, zStart + n[2]);
-        }
-    }
-    }
-
-    if( dim == 2){
-    for (int64_t z = 0; z < n[2]; ++z) {
-        // 1. Transpose X and Y
-        for (int64_t x = 0; x < n[0]; ++x) {
-            for (int64_t y = x + 1; y < n[1]; ++y) {
-                std::swap(*(data + x*n[1]*n[2] + y*n[2] + z), 
-                          *(data + y*n[1]*n[2] + x*n[2] + z));
-            }
-        }
-        // 2. Manual Reverse of X-coordinates (Non-contiguous)
-        for (int64_t y = 0; y < n[1]; ++y) {
-            for (int64_t x = 0; x < n[0] / 2; ++x) {
-                std::swap(*(data + x*n[1]*n[2] + y*n[2] + z), 
-                          *(data + (n[0]-1-x)*n[1]*n[2] + y*n[2] + z));
-            }
-        }
-    }
-    }
-}
+//     if( dim == 2){
+//     layout_.set_global_shape({n[1],n[0],n[2]});
+//     for (int64_t z = 0; z < n[2]; ++z) {
+//         // 1. Transpose X and Y
+//         for (int64_t x = 0; x < n[0]; ++x) {
+//             for (int64_t y = x + 1; y < n[1]; ++y) {
+//                 std::swap(*(data + x*n[1]*n[2] + y*n[2] + z), 
+//                           *(data + y*n[0]*n[2] + x*n[2] + z));
+//             }
+//         }
+//         // 2. Manual Reverse of X-coordinates (Non-contiguous)
+//         if(direction == 0){
+//             for (int64_t x = 0; x < n[0]; ++x) {
+//                 for (int64_t y = 0; y < n[1] / 2; ++y) {
+//                     std::swap(*(data + y*n[0]*n[2] + x*n[2] + z), 
+//                               *(data + y*n[0]*n[2] + (n[0]-1-x)*n[2] + z));
+//                 }
+//             }            
+//         }
+//         else{
+//             for (int64_t y = 0; y < n[1]; ++y) {
+//                 for (int64_t x = 0; x < n[0] / 2; ++x) {
+//                     std::swap(*(data + y*n[0]*n[2] + x*n[2] + z), 
+//                               *(data + y*n[0]*n[2] + (n[0]-1-x)*n[2] + z));
+//                 }
+//             }
+//         }
+//     }
+//     }
+// }
 
     // for (int64_t y = 0; y < n[1]; ++y) {
     
@@ -299,8 +332,8 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
         for(int64_t n = 0; n < global_shape[1]; n++){
                 if(dim == 2){
                 pg_->scatter_async(
-                parent_tensor.tensor_.data<float>() + m * n * global_shape[2] ,
-                parent_tensor.tensor_.data<float>() + m * n * global_shape[2] + rank_ * (shard_numel/ ( global_shape[0] * global_shape[1] )),
+                parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2] +  n * global_shape[2]  ,
+                parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2] +  n * global_shape[2] + rank_ * (shard_numel/ ( global_shape[0] * global_shape[1] )),
                 shard_numel / ( global_shape[0] * global_shape[1] ),
                 OwnTensor::Dtype::Float32,
                 root,
@@ -333,7 +366,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
         for(int64_t n = 0; n < global_shape[1]; n++){
             if(dim == 2){ 
             cudaMemcpyAsync(
-            tensor_.data<float>() + m * n * (shard_numel/( global_shape[0] * global_shape[1] )),
+            tensor_.data<float>() + m * global_shape[1] * global_shape[2]/world_size_ +  n * global_shape[2]/world_size_,
             parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2]  +  n * global_shape[2]  + rank_ * (shard_numel/ ( global_shape[0] * global_shape[1] )),
             shard_numel * sizeof(float)/( global_shape[0] * global_shape[1] ),
             cudaMemcpyDeviceToDevice,
@@ -344,7 +377,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
         }
         if(dim == 1){ 
         cudaMemcpyAsync(
-        tensor_.data<float>() + m * (shard_numel/global_shape[0]),
+        tensor_.data<float>() + m * global_shape[1]/world_size_ * global_shape[2],
         parent_tensor.tensor_.data<float>() + m * global_shape[1] * global_shape[2]   + rank_ * (shard_numel/global_shape[0]),
         shard_numel * sizeof(float)/global_shape[0],
         cudaMemcpyDeviceToDevice,
@@ -365,6 +398,248 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
     }
     
     
+    parent_tensor.tensor_.release();
+
+}
+
+
+
+// void launch_rotate3D_kernel(float* d_src, float* d_dst, int nx, int ny, int nz, int dny, int dnz, int dim, bool direction, cudaStream_t stream);
+
+// void DTensor::rotate3D(int dim, bool direction) {
+//     // 1. Get dimensions
+//     std::vector<int64_t> shape = this->get_layout().get_global_shape();
+//     int64_t nx = shape[0], ny = shape[1], nz = shape[2];
+//     int64_t total_elements = (int64_t)nx * ny * nz;
+//     std::cout<<"\n"<<nx<<" "<<ny<<" "<<nz<<"\n";
+
+//     // 2. Determine new dimensions for the destination
+//     int dnx = nx, dny = ny, dnz = nz;
+    
+//     if (dim == 0)      { std::swap(dny, dnz); }
+//     else if (dim == 1) { std::swap(dnx, dnz); }
+//     else               { std::swap(dnx, dny); }
+
+//     std::cout<<"\n"<<dnx<<" "<<dny<<" "<<dnz<<"\n";
+    
+//     // 3. Allocate a temporary GPU buffer for the result
+//     float* d_src = static_cast<float*>(this->tensor_.data());
+//     float* d_dst;
+//     cudaMalloc(&d_dst, total_elements * sizeof(float));
+
+//     // 4. Configure Kernel Launch (3D block and grid)
+//     dim3 threads(8, 8, 8); 
+//     dim3 blocks((nx + threads.x - 1) / threads.x,
+//                 (ny + threads.y - 1) / threads.y,
+//                 (nz + threads.z - 1) / threads.z);
+
+//     // 5. Launch Kernel on GPU
+//     launch_rotate3D_kernel(d_src, d_dst, nx, ny, nz, dny, dnz, dim, direction, stream_);
+                                            
+//     cudaMemcpyAsync(d_src, d_dst, total_elements * sizeof(float), cudaMemcpyDeviceToDevice, stream_);
+//     cudaStreamSynchronize(stream_);
+//     cudaFree(d_dst);
+
+
+//     std::vector<int64_t> new_shape_vec;
+//     if (dim == 0)      new_shape_vec = {nx, nz, ny};
+//     else if (dim == 1) new_shape_vec = {nz, ny, nx};
+//     else               new_shape_vec = {ny, nx, nz};
+
+//     std::cout<<"\n"<<new_shape_vec[0]<<" "<<new_shape_vec[1]<<" "<<new_shape_vec[2]<<"\n";
+
+//     this->shape_ = new_shape_vec;
+
+//     std::cout<<"\n"<<shape_[0]<<" "<<shape_[1]<<" "<<shape_[2]<<"\n";
+
+//     this->layout_.set_global_shape(new_shape_vec);
+
+//     std::cout<<"\n"<<layout_.get_global_shape()[0]<<" "<<layout_.get_global_shape()[1]<<" "<<layout_.get_global_shape()[2]<<"\n";
+
+//     this->tensor_.reshape(OwnTensor::Shape {new_shape_vec});
+
+//     // if (dim == 0)     std::swap(tensor_.shape().dims[1], tensor_.shape().dims[2]);
+//     // else if (dim == 1) std::swap(tensor_.shape().dims[0], tensor_.shape().dims[2]);
+//     // else               std::swap(tensor_.shape().dims[1], tensor_.shape().dims[0]);
+
+//     std::cout<<"\n"<<tensor_.shape().dims[0]<<" "<<tensor_.shape().dims[1]<<" "<<tensor_.shape().dims[2]<<"\n";
+
+// }
+
+
+void launch_reverse_kernel(float* d_src, float* d_dst, int nx, int ny, int nz, int dim, cudaStream_t stream);
+
+void DTensor::rotate3D(int dim, bool direction){
+    
+    OwnTensor::TensorOptions opts;
+    opts.dtype = OwnTensor::Dtype::Float32;
+    opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
+    OwnTensor::Shape shape{shape_};
+    OwnTensor::Tensor rtensor_({shape}, opts);
+    // std::cout<<"\n Rotate3D "<<rank_<<"\n DTensor shape "<<rank_<<" ";
+    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+    // std::cout<<"\n Tensor shape "<<rank_<<" ";
+    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n\n";
+
+    int64_t nx = rtensor_.shape().dims[0], ny = rtensor_.shape().dims[1], nz = rtensor_.shape().dims[2];
+
+    int64_t total_elements = (int64_t)nx * ny * nz;
+ 
+    float* d_src = static_cast<float*>(rtensor_.data());
+    float* d_dst;
+
+    cudaMalloc(&d_dst, total_elements * sizeof(float));
+
+    if (dim == 0)      {
+        tensor_ = tensor_.transpose(1, 2);
+        std::cout<<"\n after transpose "<<rank_<<"\n";
+        rtensor_ = tensor_.contiguous();
+        std::cout<<"\n after contiguous "<<rank_<<"\n";
+        direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 1, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 2, stream_));
+        if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 1 ) { layout_.set_shard_dim(2); }; if (layout_.get_shard_dim() == 2 ) {  layout_.set_shard_dim(1); }; }
+    }
+    else if (dim == 1) {
+        tensor_ = tensor_.transpose(0, 2);
+        std::cout<<"\n after transpose "<<rank_<<"\n";
+        rtensor_ = tensor_.contiguous();
+        std::cout<<"\n after contiguous "<<rank_<<"\n";
+        direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 0, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 2, stream_));
+        if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 0 ) { layout_.set_shard_dim(2); }; if (layout_.get_shard_dim() == 2 ) {  layout_.set_shard_dim(0); }; }
+    }
+    
+    else {
+        tensor_ = tensor_.transpose(0, 1);
+        std::cout<<"\n after transpose "<<rank_<<"\n";
+        rtensor_ = tensor_.contiguous();
+        std::cout<<"\n after contiguous "<<rank_<<"\n";
+        direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 0, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 1, stream_));
+        if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 0 ) { layout_.set_shard_dim(1); }; if (layout_.get_shard_dim() == 1 ) {  layout_.set_shard_dim(0); }; }
+    }
+    cudaMemcpyAsync(d_src, d_dst, total_elements * sizeof(float), cudaMemcpyDeviceToDevice, stream_);
+    cudaStreamSynchronize(stream_);
+    cudaFree(d_dst);
+
+    // std::cout<<"\n DTensor shape "<<rank_<<"\n";
+    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+    // std::cout<<"\n Tensor shape "<<rank_<<"\n";
+    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
+    tensor_ = rtensor_;
+    setShape(tensor_.shape().dims);
+    // std::cout<<"\n DTensor shape "<<rank_<<"\n";
+    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+    // std::cout<<"\n Tensor shape "<<rank_<<"\n";
+    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
+    layout_.set_global_shape(shape_);
+
+    
+    // std::cout<<"\n Rotate3D post "<<rank_<<"\n DTensor shape "<<rank_<<" ";
+    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+    // std::cout<<"\n Tensor shape "<<rank_<<" ";
+    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n\n";
+    rtensor_.reset();
+
+    rtensor_.release();
+    
+}
+
+// void DTensor::rotate3D(int dim, bool direction) {
+//     // 1. Perform Transpose (Swaps metadata)
+//     if (dim == 0)      tensor_ = tensor_.transpose(1, 2);
+//     else if (dim == 1) tensor_ = tensor_.transpose(0, 2);
+//     else               tensor_ = tensor_.transpose(0, 1);
+
+//     // 2. Materialize contiguous data (Physically reorders data based on transpose)
+//     // This is now our source for the reverse kernel
+
+
+
+
+//     OwnTensor::Tensor rtensor_ = tensor_.contiguous();
+//     float* d_src = static_cast<float*>(rtensor_.data());
+    
+//     // 3. Get actual physical dimensions after transpose
+//     int64_t nx = rtensor_.shape().dims[0];
+//     int64_t ny = rtensor_.shape().dims[1];
+//     int64_t nz = rtensor_.shape().dims[2];
+//     int64_t total_elements = nx * ny * nz;
+
+//     // 4. Set up GPU pointers
+
+//     float* d_dst;
+//     cudaMalloc(&d_dst, total_elements * sizeof(float));
+
+//     // 5. Logic for which axis to reverse to achieve 90-degree rotation
+//     // After transpose(i, j), reversing one of those axes results in 90-deg rotation
+//     int axis_to_reverse;
+//     if (dim == 0)      axis_to_reverse = direction ? 1 : 2;
+//     else if (dim == 1) axis_to_reverse = direction ? 0 : 2;
+//     else               axis_to_reverse = direction ? 0 : 1;
+
+//     launch_reverse_kernel(d_src, d_dst, nx, ny, nz, axis_to_reverse, stream_);
+
+//     // 6. Copy back to rtensor_ memory and cleanup
+//     cudaMemcpyAsync(d_src, d_dst, total_elements * sizeof(float), cudaMemcpyDeviceToDevice, stream_);
+//     cudaStreamSynchronize(stream_);
+//     cudaFree(d_dst);
+
+//     // 7. Update DTensor metadata so it matches rtensor_
+//     tensor_ = rtensor_;
+//     shape_ = rtensor_.shape().dims;
+//     layout_.set_global_shape(shape_);
+
+//     rtensor_.reset();
+
+//     rtensor_.release();
+// }
+
+
+void DTensor::shard_default(int dim, int root, DTensor &parent_tensor) {
+    std::vector<int64_t> global_shape = parent_tensor.shape_;
+    
+    if (dim < 0 || dim >= (int)global_shape.size()) {
+        std::ostringstream oss;
+        oss << "DTensor::shard: Invalid shard dimension " << dim 
+            << " for tensor with " << global_shape.size() << " dimensions";
+        throw std::runtime_error(oss.str());
+    }
+    // std::cout<<"\n Shard Default \n DTensor shape "<<rank_<<" ";
+    // std::cout<<" In Shard ["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+    // std::cout<<"\n Tensor shape "<<rank_<<" ";
+    // std::cout<<" In Shard ["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
+    std::vector<int64_t> local_shape = parent_tensor.layout_.get_local_shape(rank_);
+    // layout_.set_global_shape(parent_tensor.layout_.get_local_shape(rank_));
+    shape_ = parent_tensor.layout_.get_local_shape(rank_);
+    // setShape(parent_tensor.layout_.get_local_shape(rank_));
+    // tensor_.reshape({parent_tensor.layout_.get_local_shape(rank_)}); 
+    size_t shard_numel = 1;
+    for (int d : shape_) shard_numel *= d;
+
+    pg_->scatter_async(
+    parent_tensor.tensor_.data<float>() ,
+    parent_tensor.tensor_.data<float>() + rank_ * shard_numel,
+    shard_numel ,
+    OwnTensor::Dtype::Float32,
+    root,
+    false
+    )->wait();
+        
+ 
+    cudaMemcpyAsync(
+        tensor_.data<float>(),
+        parent_tensor.tensor_.data<float>() + rank_ * shard_numel,
+        shard_numel * sizeof(float),
+        cudaMemcpyDeviceToDevice,
+        stream_
+    );
+    cudaStreamSynchronize(stream_);
+    
+    // std::cout<<"\n Inside Shard default \n";
+    // std::cout<<"\n DTensor shape "<<rank_<<" ";
+    // std::cout<<" In Shard post ["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+    // std::cout<<"\n Tensor shape "<<rank_<<" ";
+    // std::cout<<" In Shard post ["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
+    // tensor_.display();
+
     parent_tensor.tensor_.release();
 
 }
@@ -401,6 +676,8 @@ void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
         OwnTensor::Dtype::Float32,
         false
     )->wait();
+
+
 
 }
 
@@ -531,22 +808,27 @@ DTensor DTensor::func(const DTensor& other) const { \
 void DTensor::matmul( DTensor& A,  DTensor& B)  {
 
     if( ( shape_[1] != A.layout_.get_global_shape()[1] ) || ( shape_[2] != B.layout_.get_global_shape()[2] ) ){
-        std:: cout<<"A"<< "["<<A.layout_.get_global_shape()[0]<<", "<<A.layout_.get_global_shape()[1]<<", "<<A.layout_.get_global_shape()[2]<<"] "<<std::endl;
-        std:: cout<<"B"<< "["<<B.layout_.get_global_shape()[0]<<", "<<B.layout_.get_global_shape()[1]<<", "<<B.layout_.get_global_shape()[2]<<"] "<<std::endl;
+        // std:: cout<<"A"<< "["<<A.layout_.get_global_shape()[0]<<", "<<A.layout_.get_global_shape()[1]<<", "<<A.layout_.get_global_shape()[2]<<"] "<<std::endl;
+        // std:: cout<<"B"<< "["<<B.layout_.get_global_shape()[0]<<", "<<B.layout_.get_global_shape()[1]<<", "<<B.layout_.get_global_shape()[2]<<"] "<<std::endl;
     
-        std:: cout<<"shape"<< "["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] "<<std::endl;
+        // std:: cout<<"shape"<< "["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] "<<std::endl;
 
         throw std::runtime_error("DTensor shape doesnt match matmul output shape ");
     }
     std:: cout<< "\n Matmul \n";
-    std:: cout<< "["<<A.layout_.get_global_shape()[0]<<", "<<A.layout_.get_global_shape()[1]<<", "<<A.layout_.get_global_shape()[2]<<"] "<<std::endl;
-    std:: cout<< "["<<B.layout_.get_global_shape()[0]<<", "<<B.layout_.get_global_shape()[1]<<", "<<B.layout_.get_global_shape()[2]<<"] "<<std::endl;
+    // std:: cout<< "["<<A.layout_.get_global_shape()[0]<<", "<<A.layout_.get_global_shape()[1]<<", "<<A.layout_.get_global_shape()[2]<<"] "<<std::endl;
+    // std:: cout<< "["<<B.layout_.get_global_shape()[0]<<", "<<B.layout_.get_global_shape()[1]<<", "<<B.layout_.get_global_shape()[2]<<"] "<<std::endl;
     
-    std:: cout<< "["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] "<<std::endl;
+    // std:: cout<< "["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] "<<std::endl;
     
     tensor_ = TensorOpsBridge::matmul(A.tensor_, B.tensor_);
 }
 
+void DTensor::Linear(  DTensor& Input,  DTensor& Weights,  DTensor& Bias) {
+
+    tensor_ = mlp_forward::linear(Input.tensor_, Weights.tensor_, Bias.tensor_);
+
+}
 
 
 // DTensor DTensor::matmul(const DTensor& other) const {
@@ -740,5 +1022,5 @@ void DTensor::rand() {
     OwnTensor::TensorOptions opts;
         opts.dtype = OwnTensor::Dtype::Float32;
         opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
-    tensor_  = OwnTensor::Tensor::rand({shape_}, opts);
+    tensor_  = OwnTensor::Tensor::rand({shape_}, opts, 0.0f, 0.1f);
 }
