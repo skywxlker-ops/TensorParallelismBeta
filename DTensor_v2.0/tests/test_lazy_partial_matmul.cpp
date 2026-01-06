@@ -67,3 +67,26 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return is_partial ? 0 : 1;
 }
+
+/*
+ * ============================================================================
+ * BUILD & RUN INSTRUCTIONS
+ * ============================================================================
+ * 
+ * This test is not currently in the Makefile. To add it:
+ * 
+ *   # Add to Makefile following the pattern for other tests, or
+ *   # compile manually:
+ *   
+ *   make lib
+ *   mpic++ -std=c++17 -O3 -fPIC -g -DWITH_CUDA \
+ *       -I. -I./tensor -I./process_group -I./memory -I./bridge \
+ *       -I./Tensor-Implementations/include -I/usr/local/cuda/include \
+ *       tests/test_lazy_partial_matmul.cpp -o tests/test_lazy_partial_matmul \
+ *       lib/unparalleled.a Tensor-Implementations/lib/libtensor.a \
+ *       -L/usr/local/cuda/lib64 -lnccl -lcudart -lcublas -lcurand
+ *   
+ *   mpirun -np 2 ./tests/test_lazy_partial_matmul
+ * 
+ * ============================================================================
+ */

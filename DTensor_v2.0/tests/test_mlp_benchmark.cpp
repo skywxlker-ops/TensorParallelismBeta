@@ -256,3 +256,17 @@ int main(int argc, char** argv) {
 // All execute together - single launch overhead
 // Total overhead: ~5-10μs (vs 20-40μs before)
 
+
+/*
+ * ============================================================================
+ * BUILD & RUN INSTRUCTIONS
+ * ============================================================================
+ * 
+ * From DTensor_v2.0 directory:
+ * 
+ *   make lib                  # Build library (if needed)
+ *   make test_mlp_benchmark   # Build this test
+ *   mpirun -np 2 ./tests/test_mlp_benchmark
+ * 
+ * ============================================================================
+ */

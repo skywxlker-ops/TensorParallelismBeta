@@ -86,3 +86,17 @@ int main(int argc, char** argv) {
  * After sync():
  * - All GPUs: all values = (0.1 + 0.2 + 0.3 + 0.4) / 4 = 0.25
  */
+
+/*
+ * ============================================================================
+ * BUILD & RUN INSTRUCTIONS
+ * ============================================================================
+ * 
+ * From DTensor_v2.0 directory:
+ * 
+ *   make lib                    # Build library (if needed)
+ *   make gradient_sync_example  # Build this example
+ *   mpirun -np 4 ./examples/gradient_sync_example
+ * 
+ * ============================================================================
+ */

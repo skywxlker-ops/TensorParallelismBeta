@@ -1,66 +1,66 @@
 # DTensor Tests
 
-This directory contains all test files for the DTensor framework.
+This directory contains test files for the Unparalleled (DTensor) framework.
 
-## Test Files
+## Prerequisites
 
-- **test_stream_pool.cpp** - Tests for async stream management (StreamPool, Work callbacks, chaining)
-- **test_process_group.cpp** - Tests for NCCL ProcessGroup operations (collectives, send/recv, barrier)
-- **test_mlp_forward.cpp** - End-to-end MLP forward pass with tensor parallelism
-- **test_redistribute.cpp** - Tests for tensor redistribution across different sharding layouts
-
-## Building Tests
-
-Build all tests:
+Before running tests, build the library first:
 
 ```bash
-make all
+cd DTensor_v2.0
+make lib    # Creates lib/unparalleled.a and lib/unparalleled.so
 ```
 
-Build a specific test:
+## Building & Running Tests
+
+All tests link against `lib/unparalleled.a` for fast compilation.
+
+### Quick Reference
+
+| Test | Build Command | Run Command |
+|------|---------------|-------------|
+| Device Mesh | `make test_device_mesh` | `mpirun -np 2 ./tests/test_device_mesh` |
+| MatMul | `make test_matmul` | `mpirun -np 2 ./tests/test_matmul` |
+| DTensor Factories | `make test_dtensor_factories` | `mpirun -np 2 ./tests/test_dtensor_factories` |
+| DTensor Creation | `make test_dtensor_creation_methods` | `mpirun -np 2 ./tests/test_dtensor_creation_methods` |
+| MLP Benchmark | `make test_mlp_benchmark` | `mpirun -np 2 ./tests/test_mlp_benchmark` |
+| Rotate3D Sharding | `make test_rotate3d_sharding` | `mpirun -np 2 ./tests/test_rotate3d_sharding` |
+
+### Example
 
 ```bash
-make test_stream_pool
-make test_process_group
-make test_mlp_forward
-make test_redistribute
+# From DTensor_v2.0 directory
+make lib                      # Build library (if not already built)
+make test_dtensor_factories   # Compile test
+mpirun -np 2 ./tests/test_dtensor_factories  # Run with 2 GPUs
 ```
 
-## Running Tests
+## Test Descriptions
 
-Run all tests:
+| File | Purpose |
+|------|---------|
+| `test_device_mesh.cpp` | Tests DeviceMesh creation and GPU assignment |
+| `test_matmul.cpp` | Tests distributed matrix multiplication |
+| `test_dtensor_factories.cpp` | Tests DTensor factory functions (zeros, ones, randn) |
+| `test_dtensor_creation_methods.cpp` | Tests DTensor creation and initialization |
+| `test_mlp_benchmark.cpp` | Benchmarks tensor-parallel MLP performance |
+| `test_rotate3d_sharding.cpp` | Tests 3D tensor rotation with sharding |
+| `test_lazy_partial_matmul.cpp` | Tests lazy partial reduction in row-parallel matmul |
+| `test_redistribute.cpp` | Tests tensor redistribution across layouts |
 
-```bash
-make run_all
-```
+## MLP Testing Suite
 
-Run individual tests:
+Additional MLP-specific tests in `mlp_testing/`:
 
-```bash
-make run_stream      # StreamPool tests (single process)
-make run_pg          # ProcessGroup tests (2 MPI ranks)
-make run_mlp         # MLP forward pass (2 MPI ranks)
-make run_redist      # Redistribute tests (2 MPI ranks)
-```
-
-## Help
-
-View all available targets:
-
-```bash
-make help
-```
+| File | Purpose |
+|------|---------|
+| `test_mlp_async_timing.cpp` | Measures async vs sync communication timing |
+| `test_mlp_arithmetic_intensity.cpp` | Analyzes compute vs communication ratio |
+| `test_mlp_interconnect_bandwidth.cpp` | Measures GPU interconnect bandwidth |
+| `test_mlp_kernel_vs_sync.cpp` | Compares kernel execution patterns |
 
 ## Cleanup
 
-Remove test executables:
-
 ```bash
-make clean
-```
-
-Remove test executables and core objects:
-
-```bash
-make clean_all
+make clean    # Removes all build artifacts including lib/objects/
 ```

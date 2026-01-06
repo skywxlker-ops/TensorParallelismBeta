@@ -233,3 +233,25 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
+
+/*
+ * ============================================================================
+ * BUILD & RUN INSTRUCTIONS
+ * ============================================================================
+ * 
+ * From DTensor_v2.0 directory:
+ * 
+ *   make lib                  # Build library (if needed)
+ *   # Add test_redistribute target to Makefile if not present, or:
+ *   
+ *   mpic++ -std=c++17 -O3 -fPIC -g -DWITH_CUDA \
+ *       -I. -I./tensor -I./process_group -I./memory -I./bridge \
+ *       -I./Tensor-Implementations/include -I/usr/local/cuda/include \
+ *       tests/test_redistribute.cpp -o tests/test_redistribute \
+ *       lib/unparalleled.a Tensor-Implementations/lib/libtensor.a \
+ *       -L/usr/local/cuda/lib64 -lnccl -lcudart -lcublas -lcurand
+ *   
+ *   mpirun -np 2 ./tests/test_redistribute
+ * 
+ * ============================================================================
+ */
