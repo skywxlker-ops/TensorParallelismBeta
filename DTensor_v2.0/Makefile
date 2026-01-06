@@ -43,6 +43,26 @@ LIBS = \
 	-lstdc++
 
 
+# ==================== UNPARALLELED LIBRARY ====================
+LIBDIR := lib
+LIB_A  := $(LIBDIR)/unparalleled.a
+LIB_SO := $(LIBDIR)/unparalleled.so
+
+# Core library sources (no main/test files)
+LIB_SRCS := \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl.cpp \
+    process_group/reverse.cu \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp
+
+# Object files go into lib/objects/
+LIB_OBJDIR := $(LIBDIR)/objects
+LIB_OBJS := $(patsubst %.cpp,$(LIB_OBJDIR)/%.o,$(filter %.cpp,$(LIB_SRCS)))
+LIB_OBJS += $(patsubst %.cu,$(LIB_OBJDIR)/%.o,$(filter %.cu,$(LIB_SRCS)))
+
+
 SRCS = \
     main.cpp \
     tensor/dtensor.cpp \
@@ -119,235 +139,168 @@ $(TENSOR_LIB_A):
 clean:
 	@echo "[CLEAN] Removing object files and executables..."
 	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
+	rm -rf $(LIB_OBJDIR) $(LIB_A) $(LIB_SO)
 	rm -f tests/*.o tests/test_device_mesh tests/test_matmul
 	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom
 	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
 
 
+# ==================== LIBRARY BUILD TARGETS ====================
+# Compilation rules for library objects (output to lib/objects/)
+$(LIB_OBJDIR)/%.o: %.cpp
+	@mkdir -p $(@D)
+	@echo "[COMPILE] $< -> $@"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+$(LIB_OBJDIR)/%.o: %.cu
+	@mkdir -p $(@D)
+	@echo "[NVCC COMPILE] $< -> $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -c $< -o $@ $(INCLUDES)
+
+# Static library
+$(LIB_A): $(LIB_OBJS)
+	@mkdir -p $(LIBDIR)
+	@echo "\n[ARCHIVE] Creating static library: $@"
+	ar rcs $@ $^
+	@echo "[SUCCESS] Static library created: $@"
+
+# Shared library
+$(LIB_SO): $(LIB_OBJS) $(TENSOR_LIB_A)
+	@mkdir -p $(LIBDIR)
+	@echo "\n[LINKING] Creating shared library: $@"
+	$(NVCC_LINKER) -shared $(NVCC_LINK_FLAGS) $(LIB_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS) -o $@
+	@echo "[SUCCESS] Shared library created: $@"
+
+# Stage 4: Convenience targets
+.PHONY: lib lib-static lib-shared
+lib: $(LIB_A) $(LIB_SO)
+	@echo "\n[SUCCESS] Both libraries built:"
+	@echo "  - $(LIB_A)"
+	@echo "  - $(LIB_SO)"
+
+lib-static: $(LIB_A)
+lib-shared: $(LIB_SO)
+
+
 
 .PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom gradient_sync_example
 
-TEST_DEVICE_MESH_SRCS = \
-	tests/test_device_mesh.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
+# ==================== TESTS (link against unparalleled.a) ====================
+# Output test objects to lib/objects/tests/
+TEST_OBJDIR := $(LIB_OBJDIR)/tests
+BENCHMARK_OBJDIR := $(LIB_OBJDIR)/benchmarks
 
-TEST_DEVICE_MESH_OBJS = $(TEST_DEVICE_MESH_SRCS:.cpp=.o)
+# Compile test files to lib/objects/tests/
+$(TEST_OBJDIR)/%.o: tests/%.cpp
+	@mkdir -p $(@D)
+	@echo "[COMPILE] $< -> $@"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-test_device_mesh: $(TEST_DEVICE_MESH_OBJS) $(TENSOR_LIB_A)
+$(BENCHMARK_OBJDIR)/%.o: benchmarks/%.cpp
+	@mkdir -p $(@D)
+	@echo "[COMPILE] $< -> $@"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+test_device_mesh: $(TEST_OBJDIR)/test_device_mesh.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DEVICE_MESH_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Test build complete."
-	@echo "\nRun : mpirun -np 2 ./tests/test_device_mesh\n"
+	@echo "\nRun: mpirun -np 2 ./tests/test_device_mesh\n"
 
-NCCL_BENCHMARK_SRCS = benchmarks/nccl_benchmark_1.cpp
-NCCL_BENCHMARK_OBJS = $(NCCL_BENCHMARK_SRCS:.cpp=.o)
-
-nccl_benchmark: $(NCCL_BENCHMARK_OBJS)
+nccl_benchmark: $(BENCHMARK_OBJDIR)/nccl_benchmark_1.o
 	@echo "\n[LINKING] Creating benchmark executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(NCCL_BENCHMARK_OBJS) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $< $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Benchmark build complete."
-	@echo "\nRun : mpirun -np 2 ./benchmarks/nccl_benchmark\n"
+	@echo "\nRun: mpirun -np 2 ./benchmarks/nccl_benchmark\n"
 
-MATMUL_BENCHMARK_SRCS = \
-	benchmarks/matmul_benchmark.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
-
-MATMUL_BENCHMARK_OBJS = $(MATMUL_BENCHMARK_SRCS:.cpp=.o)
-
-matmul_benchmark: $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A)
+matmul_benchmark: $(BENCHMARK_OBJDIR)/matmul_benchmark.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating benchmark executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(MATMUL_BENCHMARK_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] MatMul Benchmark build complete."
-	@echo "\nRun : mpirun -np 2 ./benchmarks/matmul_benchmark\n"
+	@echo "\nRun: mpirun -np 2 ./benchmarks/matmul_benchmark\n"
 
-
-ROW_BREAKDOWN_SRCS = \
-	benchmarks/row_parallel_breakdown.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
-
-ROW_BREAKDOWN_OBJS = $(ROW_BREAKDOWN_SRCS:.cpp=.o)
-
-row_parallel_breakdown: $(ROW_BREAKDOWN_OBJS) $(TENSOR_LIB_A)
+row_parallel_breakdown: $(BENCHMARK_OBJDIR)/row_parallel_breakdown.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating benchmark executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(ROW_BREAKDOWN_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Row-Parallel Breakdown build complete."
-	@echo "\nRun : mpirun -np 2 ./benchmarks/row_parallel_breakdown\n"
+	@echo "\nRun: mpirun -np 2 ./benchmarks/row_parallel_breakdown\n"
 
-
-TEST_MATMUL_SRCS = \
-	tests/test_matmul.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
-
-TEST_MATMUL_OBJS = $(TEST_MATMUL_SRCS:.cpp=.o)
-
-test_matmul: $(TEST_MATMUL_OBJS) $(TENSOR_LIB_A)
+test_matmul: $(TEST_OBJDIR)/test_matmul.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_MATMUL_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] MatMul test build complete."
-	@echo "\nRun : mpirun -np 2 ./tests/test_matmul\n"
+	@echo "\nRun: mpirun -np 2 ./tests/test_matmul\n"
 
+# Note: row_parallel_breakdown_custom uses custom dtensor_own.cpp - keep separate
 ROW_BREAKDOWN_CUSTOM_SRCS = \
 	benchmarks/row_parallel_breakdown.cpp \
 	tensor/dtensor_own.cpp \
 	tensor/device_mesh.cpp \
 	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge_own.cpp \
-	ckpt/ckpt.cpp
+	bridge/tensor_ops_bridge_own.cpp
 
-ROW_BREAKDOWN_CUSTOM_OBJS = $(ROW_BREAKDOWN_CUSTOM_SRCS:.cpp=.o)
+ROW_BREAKDOWN_CUSTOM_OBJS = $(patsubst %.cpp,$(LIB_OBJDIR)/%.o,$(ROW_BREAKDOWN_CUSTOM_SRCS))
+
+$(LIB_OBJDIR)/tensor/dtensor_own.o: tensor/dtensor_own.cpp
+	@mkdir -p $(@D)
+	@echo "[COMPILE] $< -> $@"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+$(LIB_OBJDIR)/bridge/tensor_ops_bridge_own.o: bridge/tensor_ops_bridge_own.cpp
+	@mkdir -p $(@D)
+	@echo "[COMPILE] $< -> $@"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 row_parallel_breakdown_custom: $(ROW_BREAKDOWN_CUSTOM_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating custom benchmark executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/$@ $(ROW_BREAKDOWN_CUSTOM_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Custom Row-Parallel Breakdown build complete."
-	@echo "\nRun : mpirun -np 2 ./benchmarks/row_parallel_breakdown_custom\n"
+	@echo "\nRun: mpirun -np 2 ./benchmarks/row_parallel_breakdown_custom\n"
 
-GRADIENT_SYNC_SRCS = \
-	examples/gradient_sync_example.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
+# ==================== EXAMPLES ====================
+EXAMPLE_OBJDIR := $(LIB_OBJDIR)/examples
 
-GRADIENT_SYNC_OBJS = $(GRADIENT_SYNC_SRCS:.cpp=.o)
-
-examples/%.o: examples/%.cpp
-	@echo "[COMPILE] $<"
+$(EXAMPLE_OBJDIR)/%.o: examples/%.cpp
+	@mkdir -p $(@D)
+	@echo "[COMPILE] $< -> $@"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-gradient_sync_example: $(GRADIENT_SYNC_OBJS) $(TENSOR_LIB_A)
+gradient_sync_example: $(EXAMPLE_OBJDIR)/gradient_sync_example.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(GRADIENT_SYNC_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Gradient Sync Example build complete."
-	@echo "\nRun with 4 GPUs: mpirun -np 4 ./examples/gradient_sync_example\n"
+	@echo "\nRun: mpirun -np 4 ./examples/gradient_sync_example\n"
 
-# Tensor Parallel MLP Example
-TP_MLP_SRCS = \
-	examples/tensor_parallel_mlp.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
-
-TP_MLP_OBJS = $(TP_MLP_SRCS:.cpp=.o)
-
-tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
+tensor_parallel_mlp: $(EXAMPLE_OBJDIR)/tensor_parallel_mlp.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
-	@echo "\nRun with 2 GPUs: mpirun -np 2 ./examples/tensor_parallel_mlp\n"
+	@echo "\nRun: mpirun -np 2 ./examples/tensor_parallel_mlp\n"
 
-# MLP Benchmark Test
-TEST_MLP_BENCHMARK_SRCS = \
-	tests/test_mlp_benchmark.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
+# ==================== MORE TESTS ====================
+.PHONY: test_mlp_benchmark test_dtensor_factories test_dtensor_creation_methods test_rotate3d_sharding
 
-TEST_MLP_BENCHMARK_OBJS = $(TEST_MLP_BENCHMARK_SRCS:.cpp=.o)
-TEST_MLP_BENCHMARK_OBJS := $(TEST_MLP_BENCHMARK_OBJS:.cu=.o)
-
-.PHONY: test_mlp_benchmark
-
-test_mlp_benchmark: $(TEST_MLP_BENCHMARK_OBJS) $(TENSOR_LIB_A)
+test_mlp_benchmark: $(TEST_OBJDIR)/test_mlp_benchmark.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_MLP_BENCHMARK_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] MLP Benchmark build complete."
-	@echo "\nRun single GPU: ./tests/test_mlp_benchmark"
-	@echo "Run 2 GPUs: mpirun -np 2 --allow-run-as-root ./tests/test_mlp_benchmark\n"
+	@echo "\nRun: mpirun -np 2 ./tests/test_mlp_benchmark\n"
 
-# DTensor Factory Functions Test
-TEST_DTENSOR_FACTORY_SRCS = \
-	tests/test_dtensor_factories.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
-
-TEST_DTENSOR_FACTORY_OBJS = $(TEST_DTENSOR_FACTORY_SRCS:.cpp=.o)
-TEST_DTENSOR_FACTORY_OBJS := $(TEST_DTENSOR_FACTORY_OBJS:.cu=.o)
-
-.PHONY: test_dtensor_factories
-
-test_dtensor_factories: $(TEST_DTENSOR_FACTORY_OBJS) $(TENSOR_LIB_A)
+test_dtensor_factories: $(TEST_OBJDIR)/test_dtensor_factories.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DTENSOR_FACTORY_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] DTensor Factory test build complete."
-	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./tests/test_dtensor_factories\n"
+	@echo "\nRun: mpirun -np 2 ./tests/test_dtensor_factories\n"
 
-# DTensor Creation Methods Demo Test
-TEST_DTENSOR_CREATION_SRCS = \
-	tests/test_dtensor_creation_methods.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
-
-TEST_DTENSOR_CREATION_OBJS = $(TEST_DTENSOR_CREATION_SRCS:.cpp=.o)
-TEST_DTENSOR_CREATION_OBJS := $(TEST_DTENSOR_CREATION_OBJS:.cu=.o)
-
-.PHONY: test_dtensor_creation_methods
-
-test_dtensor_creation_methods: $(TEST_DTENSOR_CREATION_OBJS) $(TENSOR_LIB_A)
+test_dtensor_creation_methods: $(TEST_OBJDIR)/test_dtensor_creation_methods.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_DTENSOR_CREATION_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] DTensor Creation Methods test build complete."
-	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./tests/test_dtensor_creation_methods\n"
+	@echo "\nRun: mpirun -np 2 ./tests/test_dtensor_creation_methods\n"
 
-# Rotate3D Sharding Test
-TEST_ROTATE3D_SRCS = \
-	tests/test_rotate3d_sharding.cpp \
-	tensor/dtensor.cpp \
-	tensor/device_mesh.cpp \
-	process_group/processGroupNccl.cpp \
-	process_group/reverse.cu \
-	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp \
-	ckpt/ckpt.cpp
-
-TEST_ROTATE3D_OBJS = $(TEST_ROTATE3D_SRCS:.cpp=.o)
-TEST_ROTATE3D_OBJS := $(TEST_ROTATE3D_OBJS:.cu=.o)
-
-.PHONY: test_rotate3d_sharding
-
-process_group/reverse.o: process_group/reverse.cu
-	@echo "[NVCC COMPILE] $<"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -c $< -o $@ $(INCLUDES)
-
-test_rotate3d_sharding: $(TEST_ROTATE3D_OBJS) $(TENSOR_LIB_A)
+test_rotate3d_sharding: $(TEST_OBJDIR)/test_rotate3d_sharding.o $(LIB_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating test executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $(TEST_ROTATE3D_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o tests/$@ $< $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Rotate3D Sharding test build complete."
-	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./tests/test_rotate3d_sharding\n"
+	@echo "\nRun: mpirun -np 2 ./tests/test_rotate3d_sharding\n"

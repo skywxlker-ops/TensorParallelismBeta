@@ -108,3 +108,17 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
+
+/*
+ * ============================================================================
+ * BUILD & RUN INSTRUCTIONS
+ * ============================================================================
+ * 
+ * From DTensor_v2.0 directory:
+ * 
+ *   make lib                           # Build library (if needed)
+ *   make test_dtensor_creation_methods # Build this test
+ *   mpirun -np 2 ./tests/test_dtensor_creation_methods
+ * 
+ * ============================================================================
+ */

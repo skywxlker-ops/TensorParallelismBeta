@@ -80,18 +80,42 @@ DTensor (Distributed Tensor Layer)
 git clone https://github.com/skywxlker-ops/TensorParallelismBeta.git
 cd DTensor_v2.0
 
-# Build TensorLib (required)
+# Build TensorLib (required dependency)
 cd Tensor-Implementations
 make
 cd ..
 
-# Build DTensor
-make
+# Build Unparalleled library (static + shared)
+make lib
 
-# Run tests
-make test_mlp_forward
-mpirun -np 2 ./test_mlp_forward
+# Output:
+#   lib/unparalleled.a   (8.7 MB static library)
+#   lib/unparalleled.so  (28 MB shared library)
 ```
+
+### Building Tests
+
+```bash
+# Build a specific test (links against unparalleled.a)
+make test_dtensor_factories
+
+# Run with MPI
+mpirun -np 2 ./tests/test_dtensor_factories
+```
+
+### Available Targets
+
+| Target | Description |
+|--------|-------------|
+| `make lib` | Build both `unparalleled.a` and `unparalleled.so` |
+| `make lib-static` | Build only static library |
+| `make lib-shared` | Build only shared library |
+| `make test_device_mesh` | Build device mesh test |
+| `make test_matmul` | Build matmul test |
+| `make test_dtensor_factories` | Build DTensor factory test |
+| `make test_mlp_benchmark` | Build MLP benchmark |
+| `make tensor_parallel_mlp` | Build tensor parallel MLP example |
+| `make clean` | Remove all build artifacts |
 
 ## Usage
 

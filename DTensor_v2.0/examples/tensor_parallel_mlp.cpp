@@ -151,3 +151,17 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
+
+/*
+ * ============================================================================
+ * BUILD & RUN INSTRUCTIONS
+ * ============================================================================
+ * 
+ * From DTensor_v2.0 directory:
+ * 
+ *   make lib                  # Build library (if needed)
+ *   make tensor_parallel_mlp  # Build this example
+ *   mpirun -np 2 ./examples/tensor_parallel_mlp
+ * 
+ * ============================================================================
+ */

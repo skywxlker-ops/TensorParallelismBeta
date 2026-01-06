@@ -259,3 +259,22 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
+
+/*
+ * ============================================================================
+ * BUILD & RUN INSTRUCTIONS
+ * ============================================================================
+ * 
+ * From DTensor_v2.0 directory:
+ * 
+ *   # Build library first (if not already built)
+ *   make lib
+ * 
+ *   # Build this test
+ *   make test_dtensor_factories
+ * 
+ *   # Run with 2 GPUs
+ *   mpirun -np 2 ./tests/test_dtensor_factories
+ * 
+ * ============================================================================
+ */
