@@ -5,7 +5,10 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "/home/blu-bridge005/Desktop/Anuj@BluBridge/Parallelism/Tensor Parallelism/beta/DTensor_v2.0/Tensor-Implementations/include",
-                "/home/blu-bridge005/Desktop/Anuj@BluBridge/Parallelism/Tensor Parallelism/beta/DTensor_v2.0"
+                "/home/blu-bridge005/Desktop/Anuj@BluBridge/Parallelism/Tensor Parallelism/beta/DTensor_v2.0",
+                "/home/blu-bridge005/Desktop/Anuj@BluBridge/Parallelism/Tensor Parallelism/beta/DTensor_v2.0/include",
+                "/usr/include/x86_64-linux-gnu/mpich/mpi",
+                "/usr/include/x86_64-linux-gnu/mpich/mpi.h"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/g++",
