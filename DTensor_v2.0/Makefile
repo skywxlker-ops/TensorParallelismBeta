@@ -89,7 +89,7 @@ help:
 	@echo "  make lib-shared  - Build only shared library"
 	@echo "  make clean       - Remove all build artifacts"
 	@echo ""
-	@echo "For tests, use: cd tests && make"
+	@echo "For tests: cd tests && make"
 
 # =============================================================================
 # COMPILATION RULES
