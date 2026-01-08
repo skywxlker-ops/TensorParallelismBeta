@@ -67,7 +67,9 @@ TESTS = \
     test_pipelined_init \
     test_architecture_benchmark \
     test_benchmark_layouts \
-    test_fault_tolerance
+    test_fault_tolerance \
+    test_memory_pool_efficiency \
+    test_caching_allocator
 
 # =============================================================================
 # Build Rules
