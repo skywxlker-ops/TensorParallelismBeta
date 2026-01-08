@@ -1,11 +1,14 @@
 /**
- * Test: Verify public headers work correctly
- * 
- * This test includes only the umbrella header to verify the public API.
+ * Test: Public API Test Suite
  */
 
 #include <unparalleled/unparalleled.h>
 #include <iostream>
+#include <cmath>
+
+bool float_eq(float a, float b, float eps = 1e-5) {
+    return std::fabs(a - b) < eps;
+}
 
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
@@ -16,42 +19,69 @@ int main(int argc, char** argv) {
     
     cudaSetDevice(rank);
     
-    // Test DeviceMesh
+    int passed = 0, total = 0;
+    
     auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-    
-    // Test ProcessGroupNCCL
     auto pg = init_process_group(world_size, rank);
-    
-    // Test Layout
     std::vector<int> shape = {4, 8};
     Layout layout(mesh, shape, ShardingType::SHARDED, 0);
     
-    // Test DTensor factory
-    auto tensor = DTensor::zeros(shape, mesh, pg, layout);
+    // Factory: zeros
+    {
+        auto t = DTensor::zeros(shape, mesh, pg, layout);
+        auto d = t.getData();
+        bool ok = !d.empty() && float_eq(d[0], 0.0f);
+        if (ok) passed++; total++;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    // Factory: ones
+    {
+        auto t = DTensor::ones(shape, mesh, pg, layout);
+        auto d = t.getData();
+        bool ok = !d.empty() && float_eq(d[0], 1.0f);
+        if (ok) passed++; total++;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    // Factory: full
+    {
+        auto t = DTensor::full(shape, 3.14f, mesh, pg, layout);
+        auto d = t.getData();
+        bool ok = !d.empty() && float_eq(d[0], 3.14f);
+        if (ok) passed++; total++;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    // Arithmetic: add
+    {
+        auto a = DTensor::full(shape, 2.0f, mesh, pg, layout);
+        auto b = DTensor::full(shape, 3.0f, mesh, pg, layout);
+        auto c = a.add(b);
+        auto d = c.getData();
+        bool ok = !d.empty() && float_eq(d[0], 5.0f);
+        if (ok) passed++; total++;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    // Arithmetic: mul
+    {
+        auto a = DTensor::full(shape, 2.0f, mesh, pg, layout);
+        auto b = DTensor::full(shape, 3.0f, mesh, pg, layout);
+        auto c = a.mul(b);
+        auto d = c.getData();
+        bool ok = !d.empty() && float_eq(d[0], 6.0f);
+        if (ok) passed++; total++;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
     
     if (rank == 0) {
-        std::cout << "Public headers test PASSED" << std::endl;
-        std::cout << "  - DeviceMesh: created" << std::endl;
-        std::cout << "  - ProcessGroupNCCL: initialized" << std::endl;
-        std::cout << "  - Layout: SHARDED on dim 0" << std::endl;
-        std::cout << "  - DTensor::zeros: created" << std::endl;
+        std::cout << "PublicAPI: " << passed << "/" << total << " tests passed" << std::endl;
     }
     
     MPI_Finalize();
-    return 0;
+    return (passed == total) ? 0 : 1;
 }
 
-/*
- * ============================================================================
- * BUILD & RUN INSTRUCTIONS
- * ============================================================================
- * 
- * From DTensor_v2.0 directory:
- * 
- *   make lib
- *   make test_public_headers
- *   mpirun -np 2 ./tests/test_public_headers
- * 
- * ============================================================================
- */
-
+// Build: cd tests && make test_public_headers
+// Run:   mpirun -np 2 ./test_public_headers
