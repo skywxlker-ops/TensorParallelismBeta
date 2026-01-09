@@ -7,20 +7,21 @@
 #include <memory>
 #include <thread>
 
-
-
-
 class Work{
 
 public:
 
     //will only get the stream as argument. 
-    explicit Work(cudaStream_t stream, ncclComm_t comm = nullptr) : stream_(stream), comm_(comm), completed_(true), success_(false), event_(nullptr) {
-		// Store current device for later use - event will be created lazily
-		cudaGetDevice(&device_id_);
-	}
+    explicit Work(cudaStream_t stream, ncclComm_t comm = nullptr) : stream_(stream), comm_(comm), completed_(true), success_(false) {
+        // create event with disable timing (fast)
+        cudaError_t err = cudaEventCreateWithFlags(&event_, cudaEventDisableTiming);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("cudaEventCreateWithFlags failed: ") +
+            cudaGetErrorString(err));
+        }
+    }
 
-    ~Work() {
+    ~Work() {   
         // event may be destroyed after use; ignore errors in destructor
         cudaEventDestroy(event_);
     }
@@ -151,4 +152,3 @@ private:
 
  
 };
-

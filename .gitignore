@@ -1,0 +1,28 @@
+# Compiled Object files
+*.o
+*.obj
+
+# Static Libraries
+*.a
+*.lib
+
+# Shared Libraries
+*.so
+*.dylib
+*.dll
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Specific Binaries
+DTensor_v2.0/examples/tensor_parallel_mlp
+DTensor_v2.0/benchmarks/rotate_benchmarking
+DTensor_v2.0/benchmarks/shard_benchmarking
+
+# Build directories
+build/
+
+# VSCode
+.vscode/

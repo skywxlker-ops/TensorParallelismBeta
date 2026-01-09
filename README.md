@@ -78,7 +78,7 @@ git clone https://github.com/skywxlker-ops/TensorParallelismBeta.git
 cd DTensor_v2.0
 
 # Build TensorLib (required)
-cd Tensor-Implementations
+cd /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations
 make
 cd ..
 

@@ -5,6 +5,8 @@
 #include <vector>
 #include <nccl.h>
 
+
+
 #define CUDA_CHECK(cmd) do {                         \
   cudaError_t e = cmd;                              \
   if( e != cudaSuccess ) {                          \
@@ -40,28 +42,31 @@ int main(int argc, char** argv) {
 
     auto pg = device_mesh.get_process_group(0);
     
-    // const int64_t B = 3;      // batch size
-    // const int64_t C = 2;      // input features
-    // const int64_t T = 4;      // token length
-    // const int64_t F = 2*2;     // hidden dim (will be sharded: F / P per GPU
+    const int64_t B = 8 ;      // batch size
+    const int64_t C = 2 * 499 ;      // input features
+    const int64_t T = 2 * 499 ;      // token length
+    const int64_t F = 4 * 499 ;     // hidden dim (will be sharded: F / P per GPU
 
-    const int64_t B = 8;      // batch size
-    const int64_t C = 768;      // input features
-    const int64_t T = 1024;      // token length
-    const int64_t F = 768*4;     // hidden dim (will be sharded: F / P per GPU)
-
-    for (int i = 0; i < 20; i++ ){
+    // const int64_t B = 8;      // batch size
+    // const int64_t C = 768;      // input features
+    // const int64_t T = 1024;      // token length
+    // const int64_t F = 768*4;     // hidden dim (will be sharded: F / P per GPU)
 
 
     cudaEventRecord(start,comm_stream);
+
+    for (int i = 0; i < 1; i++ ){
+
     
     Layout x_layout( device_mesh,  { B, T, C });
     
     // Layout wqkv_layout(device_mesh, {B, C, 3 * C }, 2);
 
-    if(rank == 0 ) std::cout << "\n x - dtensor : \n";
+    // if(rank == 0 ) std::cout << "\n x - dtensor : \n";
 
     DTensor X(device_mesh, pg, x_layout);
+
+    // X.s
 
     // DTensor WQKV(device_mesh, pg, wqkv_layout);
 
@@ -71,10 +76,12 @@ int main(int argc, char** argv) {
 
     X.rand();
 
-    if (rank == 0)  X.display();
+    // if (rank == 0)  X.display();
 
     X.replicate(0);  // root = 0
+    // X.enable_grad();
 
+    // X.display();
 
     // WQKV.shard(2, 0 ); // shard dim = 2, root = 0
 
@@ -90,7 +97,7 @@ int main(int argc, char** argv) {
 
     Layout w1_layout(device_mesh, {B ,C ,F }, 2);
 
-    if(rank == 0 ) std::cout << "\n w1 - dtensor : \n";
+    // if(rank == 0 ) std::cout << "\n w1 - dtensor : \n";
 
     DTensor W1(device_mesh, pg, w1_layout);
 
@@ -98,7 +105,7 @@ int main(int argc, char** argv) {
         
     W1.rand();
 
-    if (rank == 0)  W1.display();
+    // if (rank == 0)  W1.display();
 
     //  W1.rotate3D( 1, 0 );
     
@@ -112,11 +119,11 @@ int main(int argc, char** argv) {
     
     // W1_Shard.rotate3D( 1, 0 );
     
-    W1_Shard.shard(2, 0, W1);  
+    W1_Shard.shard_transpose_fused(2, 0, W1);  
 
-    if (rank == 0) {std::cout << "\n w1 shard - dtensor : \n";} 
+    // if (rank == 0) {std::cout << "\n w1 shard - dtensor : \n";} 
 
-    if (rank == 0){ W1_Shard.display(); }
+    // if (rank == 0){ W1_Shard.display(); }
 
     // W1_Shard.rotate3D( 1, 1 );
 
@@ -131,14 +138,19 @@ int main(int argc, char** argv) {
     DTensor B1 (device_mesh, pg, H_layout);
 
     B1.rand();
-    if(rank == 0 ) std::cout << "\n b1 - dtensor : \n";
-    if (rank == 0)  B1.display();
+    
+    // if(rank == 0 ) std::cout << "\n b1 - dtensor : \n";
+    // if (rank == 0)  B1.display();
+    
+    // W1_Shard.enable_grad();
+    // B1.enable_grad();
 
     H.Linear(X,W1_Shard,B1);
-
-    if(rank == 0 ) std::cout << "\n h - dtensor : \n";
     
-    H.display(); 
+    H.get_value()  = ag::linear(X.get_value(), W1_Shard.get_value(), B1.get_value());
+    // if(rank == 0 ) std::cout << "\n h - dtensor : \n";
+    
+    // H.display(); 
 
     Layout w2_layout(device_mesh, {B, F, C }, 1);
 
@@ -148,9 +160,9 @@ int main(int argc, char** argv) {
     
     W2.rand();
 
-    if(rank == 0 ) std::cout << " \n w2 - dtensor : \n";
+    // if(rank == 0 ) std::cout << " \n w2 - dtensor : \n";
 
-    if (rank == 0)  W2.display();
+    // if (rank == 0)  W2.display();
 
     // W2.rotate3D( 2, 0 );
 
@@ -164,11 +176,11 @@ int main(int argc, char** argv) {
   
     // W2_Shard.rotate3D( 2, 0 );
     
-    W2_Shard.shard_default(1, 0, W2);  // shard on dim 1, root = 0, parentTensor W2
+    W2_Shard.shard_transpose_fused(1, 0, W2);  // shard on dim 1, root = 0, parentTensor W2
 
-    if (rank == 0) {std::cout << "\n w1 shard - dtensor: \n";} 
+    // if (rank == 0) {std::cout << "\n w1 shard - dtensor: \n";} 
 
-    if (rank == 0){ W2_Shard.display(); }
+    // if (rank == 0){ W2_Shard.display(); }
 
     // W2_Shard.rotate3D( 2, 1 );
     
@@ -177,41 +189,56 @@ int main(int argc, char** argv) {
     // if (rank == 0){ W2_Shard.display(); }
 
     DTensor Y(device_mesh, pg, x_layout);
-
+    
     DTensor B2(device_mesh, pg, x_layout);
     
     B2.rand();
   
-    if(rank == 0 ) std::cout << "\n b2 - dtensor : \n";
-    if (rank == 0)  B2.display();
+    // if(rank == 0 ) std::cout << "\n b2 - dtensor : \n";
+    // if (rank == 0)  B2.display();
     
+    // W2_Shard.enable_grad();
+    // B2.enable_grad();
+
     Y.Linear(H,W2_Shard,B2);
 
-    if(rank == 0 ) std::cout << "\n y - dtensor : \n";
+    Y.get_value()  = ag::linear(H.get_value(), W2_Shard.get_value(), B2.get_value());
+
+    // if(rank == 0 ) std::cout << "\n y - dtensor : \n";
 
   
-    if(rank == 0 )  std::cout<<"\n Y before sync \n"; 
+    // if(rank == 0 )  std::cout<<"\n Y before sync \n"; 
 
-    if (rank == 0) { Y.display(); }
+    // if (rank == 0) { Y.display(); }
     
     Y.sync();
 
-    if (rank == 0) { std::cout<<"\n Y after sync \n"; }
+    // Y.display();
 
-    if (rank == 0) {  Y.display(); }
+    ag::backward(Y.get_value());
+    // std::cout<<"\n 6 xxxxxxx 7 \n";
+    // ag::debug::print_all_grads((Y.get_value()));
+    // ag::debug::print_all_values((Y.get_value()));
+    
+    // std::cout<<"\n 7 xxxxxxx 6 \n";
+    // // Y.display();
 
-    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
-       
-    cudaEventRecord(stop,comm_stream);
+    // if (rank == 0) { std::cout<<"\n Y after sync \n"; }
 
-    cudaEventElapsedTime(&duration, start, stop);
+    // if (rank == 0) {  Y.display(); }
 
-    avgduration += duration;
 
     }
+
+    cudaEventRecord(stop,comm_stream);
     
-    avgduration /= 20;
+    CUDA_CHECK(cudaEventSynchronize(stop));
+
+    cudaEventElapsedTime(&duration, start, stop);  
+
+    duration /= 1;                               
     
+
     
     cudaEventDestroy(start);
     cudaEventDestroy(stop);

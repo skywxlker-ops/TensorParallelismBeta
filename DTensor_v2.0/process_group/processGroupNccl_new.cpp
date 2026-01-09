@@ -24,14 +24,19 @@ ProcessGroupNCCL::ProcessGroupNCCL(int world_size, int rank, ncclUniqueId id, st
 {
     //no_of_gpus per node for initialization.
 
+    // Auto-detect GPUs per node, can be overridden by NO_GPUS_PER_NODE env var
+    cudaGetDeviceCount(&gpus_per_node_);
     const char* env = std::getenv("NO_GPUS_PER_NODE");
     if (env) {
         int parsed = std::atoi(env);
         if (parsed > 0) gpus_per_node_ = parsed;
     }
 
-
-    local_rank_ = rank % gpus_per_node_;
+    // CRITICAL: Use GLOBAL MPI rank for device selection, not the process group rank
+    // The group rank is for NCCL operations, but cudaSetDevice needs the physical GPU index
+    int global_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &global_rank);
+    local_rank_ = global_rank % gpus_per_node_;
     CUDACHECK(cudaSetDevice(local_rank_));
 
     NCCLCHECK(ncclCommInitRank(&comm_, world_size_, id_, rank_));
@@ -96,7 +101,9 @@ std::shared_ptr<ProcessGroupNCCL> init_process_group(int world_size, int rank, c
     int global_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &global_rank);
 
+    // Auto-detect GPUs per node, can be overridden by NO_GPUS_PER_NODE env var
     int gpus_per_node = 1;
+    cudaGetDeviceCount(&gpus_per_node);
     const char* env = std::getenv("NO_GPUS_PER_NODE");
     if (env) {
         int parsed = std::atoi(env);

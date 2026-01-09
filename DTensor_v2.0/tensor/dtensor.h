@@ -17,6 +17,8 @@
 #include "tensor/placement.h"
 #include "reverse.cuh"
 
+#include "ad/ag_all.hpp"  
+
 using namespace OwnTensor;
 
 
@@ -48,16 +50,26 @@ public:
     void replicate(int root = 0);
 
 
-    void rotate3D( int dim, bool direction);
 
+    void rotate3D( int dim, bool direction);
+    void rotate3D_mem( int dim, bool direction);  // Memory-optimized version
+    
     void shard(int dim, int root , DTensor &parent_tensor );
+
+    void shard_transpose(int dim, int root, DTensor &parent_tensor);
+    // void shard_transpose_fused(int dim, int root, DTensor &parent_tensor);  // Fused transpose+contiguous
+
     void shard_default(int dim, int root, DTensor &parent_tensor);
+    void shard_fused_transpose(int dim, int root, DTensor &parent_tensor);  // Uses custom kernel for reordering
+    // void shard_own_transpose(int dim, int root, DTensor &parent_tensor);    // Uses OwnTensor transpose
 
     void sync();
 
     void assemble(int dim, int root, DTensor &sharded_tensor ); 
 
     void permute_striped(int dim = 0);
+
+
 
     // void DTensor::qkvsplit( DTensor &q, DTensor &k,DTensor &v);
     void unpermute_striped(int dim = 0);
@@ -69,6 +81,10 @@ public:
     void rand() ;
 
     void print() const;
+
+    ag::Value& get_value();
+    // void enable_grad();
+    // void get_tensor(){ return tensor_; }
     
     void setShape(std::vector<int64_t>newShape){ shape_ = newShape ; }
     const Layout& get_layout()  { return layout_; }
@@ -94,6 +110,7 @@ private:
     const DeviceMesh& device_mesh_;
     std::shared_ptr<ProcessGroupNCCL> pg_;
     cudaStream_t stream_;
+    ag::Value value_ ;
 
     Layout layout_;
     
@@ -107,7 +124,8 @@ private:
     Block* data_block_;
     Block* temp_block_;
 
-    
+
+
     void printRecursive(const std::vector<float>& data,
                         const std::vector<int64_t>& dims,
                         int dim,

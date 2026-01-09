@@ -39,25 +39,24 @@ int main(int argc, char** argv) {
     float avgduration;
     
 
+    // const int64_t B = 8;      // batch size
+    // const int64_t C = 768;      // input features
+    // const int64_t T = 1024;      // token length
+    // const int64_t F = 768*4;     // hidden dim (will be sharded: F / P per GPU)
+
+
     const int64_t B = 8;      // batch size
-    const int64_t C = 768;      // input features
-    const int64_t T = 1024;      // token length
-    const int64_t F = 768*4;     // hidden dim (will be sharded: F / P per GPU)
-
-
-    // const int64_t B = 3;      // batch size
-    // const int64_t C = 2;      // input features
-    // const int64_t T = 4;      // token length
-    // const int64_t F = 2*2;     // hidden dim (will be sharded: F / P per GPU
+    const int64_t C = 20;      // input features
+    const int64_t T = 4;      // token length
+    const int64_t F = 2*2;     // hidden dim (will be sharded: F / P per GPU
 
     auto pg = device_mesh.get_process_group(0);
 
-    for (int i = 0; i < 1; i++ ){
-
     cudaEventRecord(start,comm_stream);
     
-    
+    for (int i = 0; i < 10; i++ ){
 
+  
     Layout x_layout( device_mesh,  { B, T, C });
     
     // Layout wqkv_layout(device_mesh, {B, C, 3 * C }, 2);
@@ -203,14 +202,16 @@ int main(int argc, char** argv) {
 
     if (rank == 0) {  Y.display(); }
 
-    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
-       
-    cudaEventRecord(stop,comm_stream);
-    
     }
     
-    avgduration /= 1;
+    cudaEventRecord(stop,comm_stream);
     
+    CUDA_CHECK(cudaEventSynchronize(stop));
+    
+    
+    cudaEventElapsedTime(&duration, start, stop);
+    
+    duration /= 10;
     
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
@@ -218,7 +219,7 @@ int main(int argc, char** argv) {
     if(rank == 0){
       std::cout<<"\n\n ========= BENCHMARKS ========= \n\n"<<std::endl;
 
-      std::cout<<" DURATION : "<< avgduration <<std::endl;
+      std::cout<<" DURATION : "<< duration <<std::endl;
       std::cout<<" B : "<< B <<std::endl;
       std::cout<<" T : "<< T <<std::endl;
       std::cout<<" C : "<< C <<std::endl;

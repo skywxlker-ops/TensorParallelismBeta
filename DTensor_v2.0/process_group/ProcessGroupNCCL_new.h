@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <atomic>
-#include "CpuSync.hpp"
+#include "CpuSync_fixed.hpp"
 #include "TensorLib.h"
 
 

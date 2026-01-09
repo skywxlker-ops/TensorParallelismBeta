@@ -8,7 +8,7 @@
 #include <iostream>
 #include <vector>
 
-enum class Device { CPU, CUDA };
+enum class AllocatorDevice { CPU, CUDA };
 enum class PoolType { SMALL, LARGE };
 
 struct Block {
@@ -63,7 +63,7 @@ public:
     Block* allocateMemory(size_t size, cudaStream_t stream);
     void freeMemory(Block* block);
     Block* requestMemory(size_t size, PoolType pool_type, cudaStream_t stream);
-    void emptyCache(Device device = Device::CPU);
+    void emptyCache(AllocatorDevice device = AllocatorDevice::CPU);
 
     size_t memoryAllocated() const;
     size_t memoryFree() const;

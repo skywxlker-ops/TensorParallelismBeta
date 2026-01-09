@@ -174,7 +174,9 @@ void DeviceMesh::initialize_process_groups() {
 
         // CRITICAL: Set CUDA device BEFORE creating any CUDA resources (streams, events)
         // CUDA streams and events are device-specific and must be created on the correct device
+        // Auto-detect GPUs per node, can be overridden by NO_GPUS_PER_NODE env var
         int gpus_per_node = 1;
+        cudaGetDeviceCount(&gpus_per_node);
         const char* env = std::getenv("NO_GPUS_PER_NODE");
         if (env) {
             int parsed = std::atoi(env);
