@@ -62,11 +62,11 @@ bool compare_vectors(const std::vector<float>& a, const std::vector<float>& b, i
 
 void test_replicated_init(int rank, int world_size, 
                            std::shared_ptr<DeviceMesh> mesh, 
-                           std::shared_ptr<ProcessGroup> pg) {
+                           std::shared_ptr<ProcessGroupNCCL> pg) {
     print_test(rank, "Replicated");
     
-    std::vector<int> global_shape = {4, 4};
-    Layout layout_replicated(mesh, global_shape, ShardingType::REPLICATED);
+    std::vector<int64_t> global_shape = {4, 4};
+    Layout layout_replicated = Layout::replicated(*mesh, global_shape);
     
     std::vector<float> full_data;
     if (rank == 0) {
@@ -96,11 +96,11 @@ void test_replicated_init(int rank, int world_size,
 
 void test_row_sharded_init(int rank, int world_size, 
                             std::shared_ptr<DeviceMesh> mesh, 
-                            std::shared_ptr<ProcessGroup> pg) {
+                            std::shared_ptr<ProcessGroupNCCL> pg) {
     print_test(rank, "Row-Sharded");
     
-    std::vector<int> global_shape = {8, 4};
-    Layout layout_row_sharded(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {8, 4};
+    Layout layout_row_sharded(*mesh, global_shape, 0);
     
     std::vector<float> full_data;
     if (rank == 0) {
@@ -132,11 +132,11 @@ void test_row_sharded_init(int rank, int world_size,
 
 void test_col_sharded_init(int rank, int world_size, 
                             std::shared_ptr<DeviceMesh> mesh, 
-                            std::shared_ptr<ProcessGroup> pg) {
+                            std::shared_ptr<ProcessGroupNCCL> pg) {
     print_test(rank, "Column-Sharded");
     
-    std::vector<int> global_shape = {4, 8};
-    Layout layout_col_sharded(mesh, global_shape, ShardingType::SHARDED, 1);
+    std::vector<int64_t> global_shape = {4, 8};
+    Layout layout_col_sharded(*mesh, global_shape, 1);
     
     std::vector<float> full_data;
     if (rank == 0) {
@@ -168,12 +168,12 @@ void test_col_sharded_init(int rank, int world_size,
 
 void test_memory_benchmark(int rank, int world_size,
                             std::shared_ptr<DeviceMesh> mesh,
-                            std::shared_ptr<ProcessGroup> pg) {
+                            std::shared_ptr<ProcessGroupNCCL> pg) {
     if (rank == 0) std::cout << "\n[Memory Benchmark]" << std::endl;
     
     // Use larger tensor for visible memory difference
-    std::vector<int> global_shape = {1024, 1024};  // 1M floats = 4MB
-    Layout layout_row_sharded(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {1024, 1024};  // 1M floats = 4MB
+    Layout layout_row_sharded(*mesh, global_shape, 0);
     
     size_t before = get_gpu_memory_used();
     
@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
     // Create DeviceMesh and ProcessGroup
     std::vector<int> mesh_shape = {world_size};
     auto mesh = std::make_shared<DeviceMesh>(mesh_shape);
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
 
     CUDA_CHECK(cudaSetDevice(rank));
 

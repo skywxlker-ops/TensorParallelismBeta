@@ -53,9 +53,14 @@ CORE_SRCS = \
     $(PARENT_DIR)/tensor/device_mesh.cpp \
     $(PARENT_DIR)/process_group/processGroupNccl.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
-    $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp
+    $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp \
+    $(PARENT_DIR)/tensor/placement.cpp
 
-CORE_OBJS = $(CORE_SRCS:.cpp=.o)
+CORE_CUDA_SRCS = \
+    $(PARENT_DIR)/tensor/fused_shard_kernel.cu \
+    $(PARENT_DIR)/process_group/reverse.cu
+
+CORE_OBJS = $(CORE_SRCS:.cpp=.o) $(CORE_CUDA_SRCS:.cu=.o)
 
 # --- Test Executables ---
 TESTS = test_mlp_interconnect_bandwidth test_mlp_kernel_vs_sync test_mlp_async_timing test_mlp_arithmetic_intensity
@@ -148,6 +153,10 @@ run_all: run_bandwidth run_kernel run_intensity
 $(PARENT_DIR)/%.o: $(PARENT_DIR)/%.cpp
 	@echo "[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+$(PARENT_DIR)/%.o: $(PARENT_DIR)/%.cu
+	@echo "[COMPILE] $<"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(INCLUDES) -c $< -o $@
 
 # --- Library Check ---
 

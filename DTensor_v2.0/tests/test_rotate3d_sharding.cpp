@@ -27,10 +27,10 @@ struct TestCase {
 bool run_test(std::shared_ptr<DeviceMesh> mesh,
               std::shared_ptr<ProcessGroupNCCL> pg,
               const TestCase& tc) {
-    std::vector<int> shape = {4, 4, 4};
-    Layout layout(mesh, shape, ShardingType::SHARDED, tc.init_shard);
+    std::vector<int64_t> shape = {4, 4, 4};
+    Layout layout(*mesh, shape, tc.init_shard);
     
-    DTensor tensor = DTensor::ones(shape, mesh, pg, layout);
+    DTensor tensor = DTensor::ones({4, 4, 4}, mesh, pg, layout);
     tensor.rotate3D(tc.rotate_dim, true);
     
     return tensor.get_layout().get_shard_dim() == tc.expect_shard;
@@ -86,4 +86,4 @@ int main(int argc, char** argv) {
 }
 
 // make test_rotate3d_sharding
-// mpirun -np 2 --allow-run-as-root ./test_rotate3d_sharding
+// mpirun -np 2 --allow-run-as-root ./tests/test_rotate3d_sharding

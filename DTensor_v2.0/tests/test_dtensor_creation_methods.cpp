@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     ncclUniqueId nccl_id;
     if (rank == 0) ncclGetUniqueId(&nccl_id);
     MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, 0, MPI_COMM_WORLD);
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
     
     if (rank == 0) {
         std::cout << "\n=== DTensor Creation Methods (" << world_size << " GPUs) ===" << std::endl;
@@ -40,9 +40,9 @@ int main(int argc, char** argv) {
     // METHOD 1: from_local() - Create from existing local tensor
     // =========================================================================
     {
-        std::vector<int> global_shape = {4, 8};
-        Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
-        std::vector<int> local_shape = layout.get_local_shape(rank);
+        std::vector<int64_t> global_shape = {4, 8};
+        Layout layout(*mesh, global_shape, 0);
+        std::vector<int64_t> local_shape = layout.get_local_shape(rank);
         
         OwnTensor::Shape shape_obj;
         shape_obj.dims.assign(local_shape.begin(), local_shape.end());
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     // METHOD 2: distribute_tensor() - Distribute existing GPU tensor
     // =========================================================================
     {
-        std::vector<int> global_shape = {4, 8};
+        std::vector<int64_t> global_shape = {4, 8};
         
         OwnTensor::Shape shape_obj;
         shape_obj.dims.assign(global_shape.begin(), global_shape.end());
@@ -71,12 +71,12 @@ int main(int argc, char** argv) {
         OwnTensor::Tensor global_tensor = OwnTensor::Tensor::full(shape_obj, opts, 99.0f);
         
         // Sharded
-        Layout sharded_layout(mesh, global_shape, ShardingType::SHARDED, 0);
+        Layout sharded_layout(*mesh, global_shape, 0);
         auto dt_sharded = DTensor::distribute_tensor(global_tensor, mesh, pg, sharded_layout, 0);
         std::cout << "[Rank " << rank << "] distribute(SHARDED) -> size: " << dt_sharded.getData().size() << std::endl;
         
         // Replicated
-        Layout rep_layout = Layout::replicated(mesh, global_shape);
+        Layout rep_layout = Layout::replicated(*mesh, global_shape);
         auto dt_rep = DTensor::distribute_tensor(global_tensor, mesh, pg, rep_layout, 0);
         std::cout << "[Rank " << rank << "] distribute(REPLICATED) -> size: " << dt_rep.getData().size() << std::endl;
     }
@@ -86,8 +86,8 @@ int main(int argc, char** argv) {
     // METHOD 3: setDataFromRoot() - Load from host vector
     // =========================================================================
     {
-        std::vector<int> global_shape = {4, 8};
-        Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
+        std::vector<int64_t> global_shape = {4, 8};
+        Layout layout(*mesh, global_shape, 0);
         
         std::vector<float> host_data;
         if (rank == 0) {

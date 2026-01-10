@@ -25,8 +25,8 @@ int main(int argc, char** argv) {
     auto pg = init_process_group(world_size, rank);
     
     // Tensor creation benchmark
-    std::vector<int> shape = {1024, 1024};
-    Layout layout(mesh, shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> shape = {1024, 1024};
+    Layout layout(*mesh, shape, 0);
     
     auto start = Clock::now();
     for (int i = 0; i < 10; ++i) {
@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
     
     // Arithmetic benchmark
     shape = {512, 512};
-    Layout l2(mesh, shape, ShardingType::SHARDED, 0);
+    Layout l2(*mesh, shape, 0);
     auto a = DTensor::rand(shape, mesh, pg, l2);
     auto b = DTensor::rand(shape, mesh, pg, l2);
     

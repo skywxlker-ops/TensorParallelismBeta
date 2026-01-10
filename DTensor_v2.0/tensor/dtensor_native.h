@@ -25,7 +25,7 @@ namespace OwnTensor {
 // Eliminates TensorOpsBridge indirection for benchmarking
 class DTensorNative {
 public:
-    DTensorNative(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg);
+    DTensorNative(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroupNCCL> pg);
     ~DTensorNative();
 
     void setData(const std::vector<float>& host_data, const Layout& layout);
@@ -37,13 +37,13 @@ public:
     // Getters
     const Layout& get_layout() const { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
-    std::shared_ptr<ProcessGroup> get_pg() const { return pg_; }
+    std::shared_ptr<ProcessGroupNCCL> get_pg() const { return pg_; }
     std::shared_ptr<DeviceMesh> get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
 
 private:
     DTensorNative(std::shared_ptr<DeviceMesh> device_mesh,
-                  std::shared_ptr<ProcessGroup> pg,
+                  std::shared_ptr<ProcessGroupNCCL> pg,
                   const OwnTensor::Tensor& local_tensor,
                   const Layout& layout);
 
@@ -53,7 +53,7 @@ private:
     int rank_;
     int world_size_;
     std::shared_ptr<DeviceMesh> device_mesh_;
-    std::shared_ptr<ProcessGroup> pg_;
+    std::shared_ptr<ProcessGroupNCCL> pg_;
     cudaStream_t stream_;
 
     Layout layout_;
@@ -61,7 +61,7 @@ private:
     OwnTensor::Tensor temp_tensor_;
 
     int size_;
-    std::vector<int> shape_;
+    std::vector<int64_t> shape_;
     std::string dtype_ = "float32";
     Block* data_block_;
     Block* temp_block_;

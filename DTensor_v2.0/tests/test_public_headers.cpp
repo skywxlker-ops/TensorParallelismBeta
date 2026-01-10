@@ -23,8 +23,8 @@ int main(int argc, char** argv) {
     
     auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
     auto pg = init_process_group(world_size, rank);
-    std::vector<int> shape = {4, 8};
-    Layout layout(mesh, shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> shape = {4, 8};
+    Layout layout(*mesh, shape, 0);
     
     // Factory: zeros
     {

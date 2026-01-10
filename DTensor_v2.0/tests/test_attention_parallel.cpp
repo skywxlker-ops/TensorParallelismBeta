@@ -52,7 +52,7 @@ void print_section(int rank, const std::string& section) {
 // =============================================================================
 // Test 1: MLP Forward Pass (Baseline)
 // =============================================================================
-void test_mlp_forward(int rank, int world_size, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
+void test_mlp_forward(int rank, int world_size, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     
     print_separator(rank, "TEST 1: MLP Forward Pass");
     
@@ -66,18 +66,18 @@ void test_mlp_forward(int rank, int world_size, std::shared_ptr<DeviceMesh> mesh
     }
     
     // Input X (Replicated) [BATCH, SEQ_LEN, HIDDEN]
-    std::vector<int> shape_X = {BATCH, SEQ_LEN, HIDDEN};
-    Layout layout_X(mesh, shape_X, ShardingType::REPLICATED);
+    std::vector<int64_t> shape_X = {BATCH, SEQ_LEN, HIDDEN};
+    Layout layout_X = Layout::replicated(*mesh, shape_X);
     
     std::vector<float> data_X(BATCH * SEQ_LEN * HIDDEN, 1.0f);
     DTensor X(mesh, pg);
     X.setData(data_X, layout_X);
     
     // Weight W1 (Column-Sharded) [HIDDEN, INTERMEDIATE]
-    std::vector<int> shape_W1 = {HIDDEN, INTERMEDIATE};
-    Layout layout_W1(mesh, shape_W1, ShardingType::SHARDED, 1);
+    std::vector<int64_t> shape_W1 = {HIDDEN, INTERMEDIATE};
+    Layout layout_W1(*mesh, shape_W1, 1);
     
-    std::vector<int> local_shape_W1 = layout_W1.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W1 = layout_W1.get_local_shape(rank);
     int size_W1 = local_shape_W1[0] * local_shape_W1[1];
     
     std::vector<float> data_W1(size_W1, (rank + 1) * 0.5f);
@@ -92,10 +92,10 @@ void test_mlp_forward(int rank, int world_size, std::shared_ptr<DeviceMesh> mesh
     }
     
     // Weight W2 (Row-Sharded) [INTERMEDIATE, HIDDEN]
-    std::vector<int> shape_W2 = {INTERMEDIATE, HIDDEN};
-    Layout layout_W2(mesh, shape_W2, ShardingType::SHARDED, 0);
+    std::vector<int64_t> shape_W2 = {INTERMEDIATE, HIDDEN};
+    Layout layout_W2(*mesh, shape_W2, 0);
     
-    std::vector<int> local_shape_W2 = layout_W2.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W2 = layout_W2.get_local_shape(rank);
     int size_W2 = local_shape_W2[0] * local_shape_W2[1];
     
     std::vector<float> data_W2(size_W2, 1.0f);
@@ -115,7 +115,7 @@ void test_mlp_forward(int rank, int world_size, std::shared_ptr<DeviceMesh> mesh
 // =============================================================================
 // Test 2: Attention Layer with Tensor Parallelism
 // =============================================================================
-void test_attention_layer(int rank, int world_size,std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
+void test_attention_layer(int rank, int world_size,std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     
     print_separator(rank, "TEST 2: Attention Layer");
     
@@ -130,18 +130,18 @@ void test_attention_layer(int rank, int world_size,std::shared_ptr<DeviceMesh> m
     }
     
     // Input X (Replicated)
-    std::vector<int> shape_X = {BATCH, SEQ_LEN, HIDDEN};
-    Layout layout_X(mesh, shape_X, ShardingType::REPLICATED);
+    std::vector<int64_t> shape_X = {BATCH, SEQ_LEN, HIDDEN};
+    Layout layout_X = Layout::replicated(*mesh, shape_X);
     
     std::vector<float> data_X(BATCH * SEQ_LEN * HIDDEN, 1.0f);
     DTensor X(mesh, pg);
     X.setData(data_X, layout_X);
     
     // W_qkv (Column-Sharded)
-    std::vector<int> shape_W_qkv = {HIDDEN, 3 * HIDDEN};
-    Layout layout_W_qkv(mesh, shape_W_qkv, ShardingType::SHARDED, 1);
+    std::vector<int64_t> shape_W_qkv = {HIDDEN, 3 * HIDDEN};
+    Layout layout_W_qkv(*mesh, shape_W_qkv, 1);
     
-    std::vector<int> local_shape_W_qkv = layout_W_qkv.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W_qkv = layout_W_qkv.get_local_shape(rank);
     int size_W_qkv = local_shape_W_qkv[0] * local_shape_W_qkv[1];
     
     std::vector<float> data_W_qkv(size_W_qkv);
@@ -164,10 +164,10 @@ void test_attention_layer(int rank, int world_size,std::shared_ptr<DeviceMesh> m
     
     // Output Projection (Row-Parallel) - using 2D tensors
     const int BT = BATCH * SEQ_LEN;
-    std::vector<int> shape_attn_2d = {BT, HIDDEN};
-    Layout layout_attn_2d(mesh, shape_attn_2d, ShardingType::SHARDED, 1);
+    std::vector<int64_t> shape_attn_2d = {BT, HIDDEN};
+    Layout layout_attn_2d(*mesh, shape_attn_2d, 1);
     
-    std::vector<int> local_shape_attn_2d = layout_attn_2d.get_local_shape(rank);
+    std::vector<int64_t> local_shape_attn_2d = layout_attn_2d.get_local_shape(rank);
     int size_attn_2d = local_shape_attn_2d[0] * local_shape_attn_2d[1];
     
     std::vector<float> data_attn_2d(size_attn_2d, 2.0f * (rank + 1));
@@ -175,10 +175,10 @@ void test_attention_layer(int rank, int world_size,std::shared_ptr<DeviceMesh> m
     attn_reshaped.setData(data_attn_2d, layout_attn_2d);
     
     // W_o (Row-Sharded)
-    std::vector<int> shape_W_o_2d = {HIDDEN, HIDDEN};
-    Layout layout_W_o_2d(mesh, shape_W_o_2d, ShardingType::SHARDED, 0);
+    std::vector<int64_t> shape_W_o_2d = {HIDDEN, HIDDEN};
+    Layout layout_W_o_2d(*mesh, shape_W_o_2d, 0);
     
-    std::vector<int> local_shape_W_o_2d = layout_W_o_2d.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W_o_2d = layout_W_o_2d.get_local_shape(rank);
     int size_W_o_2d = local_shape_W_o_2d[0] * local_shape_W_o_2d[1];
     
     std::vector<float> data_W_o_2d(size_W_o_2d, 1.0f);
@@ -198,7 +198,7 @@ void test_attention_layer(int rank, int world_size,std::shared_ptr<DeviceMesh> m
 // =============================================================================
 // Test 3: Combined Transformer Block (Attention + MLP)
 // =============================================================================
-void test_transformer_block(int rank, int world_size, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup> pg) {
+void test_transformer_block(int rank, int world_size, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     
     print_separator(rank, "TEST 3: Transformer Block");
     
@@ -212,18 +212,18 @@ void test_transformer_block(int rank, int world_size, std::shared_ptr<DeviceMesh
     }
     
     // Input
-    std::vector<int> shape_X = {BATCH, SEQ_LEN, HIDDEN};
-    Layout layout_X(mesh, shape_X, ShardingType::REPLICATED);
+    std::vector<int64_t> shape_X = {BATCH, SEQ_LEN, HIDDEN};
+    Layout layout_X = Layout::replicated(*mesh, shape_X);
     
     std::vector<float> data_X(BATCH * SEQ_LEN * HIDDEN, 1.0f);
     DTensor X(mesh, pg);
     X.setData(data_X, layout_X);
     
     // Attention QKV projection
-    std::vector<int> shape_W_qkv = {HIDDEN, 3 * HIDDEN};
-    Layout layout_W_qkv(mesh, shape_W_qkv, ShardingType::SHARDED, 1);
+    std::vector<int64_t> shape_W_qkv = {HIDDEN, 3 * HIDDEN};
+    Layout layout_W_qkv(*mesh, shape_W_qkv, 1);
     
-    std::vector<int> local_shape_qkv = layout_W_qkv.get_local_shape(rank);
+    std::vector<int64_t> local_shape_qkv = layout_W_qkv.get_local_shape(rank);
     std::vector<float> data_W_qkv(local_shape_qkv[0] * local_shape_qkv[1], 0.1f);
     DTensor W_qkv(mesh, pg);
     W_qkv.setData(data_W_qkv, layout_W_qkv);
@@ -233,18 +233,18 @@ void test_transformer_block(int rank, int world_size, std::shared_ptr<DeviceMesh
     // Attention output projection (row-parallel)
     // Use 2D tensors to avoid 3D sharding limitations
     const int BT = BATCH * SEQ_LEN;
-    std::vector<int> shape_attn_2d = {BT, HIDDEN};
-    Layout layout_attn_2d(mesh, shape_attn_2d, ShardingType::SHARDED, 1);  // Column-sharded
+    std::vector<int64_t> shape_attn_2d = {BT, HIDDEN};
+    Layout layout_attn_2d(*mesh, shape_attn_2d, 1);  // Column-sharded
     
-    std::vector<int> local_shape_attn_2d = layout_attn_2d.get_local_shape(rank);
+    std::vector<int64_t> local_shape_attn_2d = layout_attn_2d.get_local_shape(rank);
     std::vector<float> data_attn_2d(local_shape_attn_2d[0] * local_shape_attn_2d[1], 1.0f);
     DTensor attn_out(mesh, pg);
     attn_out.setData(data_attn_2d, layout_attn_2d);
     
-    std::vector<int> shape_W_o = {HIDDEN, HIDDEN};
-    Layout layout_W_o(mesh, shape_W_o, ShardingType::SHARDED, 0);  // Row-sharded
+    std::vector<int64_t> shape_W_o = {HIDDEN, HIDDEN};
+    Layout layout_W_o(*mesh, shape_W_o, 0);  // Row-sharded
     
-    std::vector<int> local_shape_W_o = layout_W_o.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W_o = layout_W_o.get_local_shape(rank);
     std::vector<float> data_W_o(local_shape_W_o[0] * local_shape_W_o[1], 1.0f);
     DTensor W_o(mesh, pg);
     W_o.setData(data_W_o, layout_W_o);
@@ -252,10 +252,10 @@ void test_transformer_block(int rank, int world_size, std::shared_ptr<DeviceMesh
     DTensor attn_final = attn_out.matmul(W_o);
     
     // MLP Layer 1 (column-parallel)
-    std::vector<int> shape_W1 = {HIDDEN, INTERMEDIATE};
-    Layout layout_W1(mesh, shape_W1, ShardingType::SHARDED, 1);
+    std::vector<int64_t> shape_W1 = {HIDDEN, INTERMEDIATE};
+    Layout layout_W1(*mesh, shape_W1, 1);
     
-    std::vector<int> local_shape_W1 = layout_W1.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W1 = layout_W1.get_local_shape(rank);
     std::vector<float> data_W1(local_shape_W1[0] * local_shape_W1[1], 0.5f);
     DTensor W1(mesh, pg);
     W1.setData(data_W1, layout_W1);
@@ -263,10 +263,10 @@ void test_transformer_block(int rank, int world_size, std::shared_ptr<DeviceMesh
     DTensor mlp_hidden = attn_final.matmul(W1);
     
     // MLP Layer 2 (row-parallel)
-    std::vector<int> shape_W2 = {INTERMEDIATE, HIDDEN};
-    Layout layout_W2(mesh, shape_W2, ShardingType::SHARDED, 0);
+    std::vector<int64_t> shape_W2 = {INTERMEDIATE, HIDDEN};
+    Layout layout_W2(*mesh, shape_W2, 0);
     
-    std::vector<int> local_shape_W2 = layout_W2.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W2 = layout_W2.get_local_shape(rank);
     std::vector<float> data_W2(local_shape_W2[0] * local_shape_W2[1], 1.0f);
     DTensor W2(mesh, pg);
     W2.setData(data_W2, layout_W2);
@@ -326,7 +326,7 @@ int main(int argc, char** argv) {
     
     try {
         std::shared_ptr<DeviceMesh> mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-        std::shared_ptr<ProcessGroup> pg = std::make_shared<ProcessGroup>(rank, world_size, device_id, id);
+        std::shared_ptr<ProcessGroupNCCL> pg = init_process_group(world_size, rank);
         
         // Run all tests
         test_mlp_forward(rank, world_size, mesh, pg);

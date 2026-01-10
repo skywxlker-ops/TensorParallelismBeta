@@ -45,7 +45,7 @@ size_t get_gpu_memory_used() {
 }
 
 BenchmarkResult benchmark_old_method(int rank, std::shared_ptr<DeviceMesh> mesh,
-                                      std::shared_ptr<ProcessGroup> pg,
+                                      std::shared_ptr<ProcessGroupNCCL> pg,
                                       const Layout& layout,
                                       const std::vector<float>& local_data) {
     size_t mem_before = get_gpu_memory_used();
@@ -66,7 +66,7 @@ BenchmarkResult benchmark_old_method(int rank, std::shared_ptr<DeviceMesh> mesh,
 }
 
 BenchmarkResult benchmark_new_method(int rank, std::shared_ptr<DeviceMesh> mesh,
-                                      std::shared_ptr<ProcessGroup> pg,
+                                      std::shared_ptr<ProcessGroupNCCL> pg,
                                       const Layout& layout,
                                       const std::vector<float>& full_data) {
     size_t mem_before = get_gpu_memory_used();
@@ -88,7 +88,7 @@ BenchmarkResult benchmark_new_method(int rank, std::shared_ptr<DeviceMesh> mesh,
 
 void run_benchmark(int rank, int world_size,
                    std::shared_ptr<DeviceMesh> mesh,
-                   std::shared_ptr<ProcessGroup> pg,
+                   std::shared_ptr<ProcessGroupNCCL> pg,
                    int rows, int cols) {
     
     if (rank == 0) {
@@ -96,8 +96,8 @@ void run_benchmark(int rank, int world_size,
         std::cout << "\n[" << rows << "x" << cols << " = " << size_mb << "MB]" << std::endl;
     }
     
-    std::vector<int> global_shape = {rows, cols};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {rows, cols};
+    Layout layout(*mesh, global_shape, 0);
     
     int local_rows = rows / world_size;
     int local_size = local_rows * cols;
@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
     MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
     auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
 
     CUDA_CHECK(cudaSetDevice(rank));
 

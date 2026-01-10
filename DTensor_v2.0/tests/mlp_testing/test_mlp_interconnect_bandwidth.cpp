@@ -9,7 +9,7 @@
  *   - Bandwidth efficiency vs theoretical max
  *   - Small-message vs large-message performance
  * 
- * Run: mpirun -np 2 --allow-run-as-root ./test_mlp_interconnect_bandwidth
+ * Run: mpirun -np 2 ./benchmarks/interconnect_benchmarks
  * ============================================================================
  */
 
@@ -18,19 +18,11 @@
 #include <cuda_runtime.h>
 #include <iostream>
 #include <vector>
-#include <memory>
 #include <chrono>
 #include <iomanip>
 #include <cmath>
 
 #include "tensor/dtensor.h"
-#include "process_group/ProcessGroupNCCL.h"
-#include "tensor/device_mesh.h"
-#include "tensor/layout.h"
-#include "bridge/tensor_ops_bridge.h"
-#include "memory/cachingAllocator.hpp"
-
-using namespace OwnTensor;
 
 // =============================================================================
 // CUDA Error Checking
@@ -98,19 +90,20 @@ std::string formatBytes(size_t bytes) {
 BandwidthResult benchmark_allreduce_bandwidth(
     size_t size_bytes,
     int rank,
-    std::shared_ptr<DeviceMesh> mesh,
+    DeviceMesh& mesh,
     std::shared_ptr<ProcessGroupNCCL> pg,
     const BandwidthTestConfig& config) {
     
     // Calculate tensor dimensions (use 1D tensor for simplicity)
     size_t num_elements = size_bytes / sizeof(float);
-    std::vector<int> shape = {static_cast<int>(num_elements)};
+    std::vector<int64_t> shape = {static_cast<int64_t>(num_elements)};
     
-    // Create replicated layout (each rank has full tensor - AllReduce scenario)
-    Layout replicated_layout(mesh, shape, ShardingType::REPLICATED);
+    // Create replicated layout (no sharding dim = replicated)
+    Layout replicated_layout(mesh, shape);
     
     // Create DTensor with random data
-    DTensor tensor = DTensor::randn(shape, mesh, pg, replicated_layout);
+    DTensor tensor(mesh, pg, replicated_layout);
+    tensor.rand();
     
     // Create CUDA events for precise timing
     cudaEvent_t start_event, end_event;
@@ -119,7 +112,7 @@ BandwidthResult benchmark_allreduce_bandwidth(
     
     // Warmup iterations
     for (int i = 0; i < config.warmup_iters; i++) {
-        tensor.allReduce();
+        tensor.sync();
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     MPI_Barrier(MPI_COMM_WORLD);
@@ -130,7 +123,7 @@ BandwidthResult benchmark_allreduce_bandwidth(
     
     for (int i = 0; i < config.measure_iters; i++) {
         CUDA_CHECK(cudaEventRecord(start_event));
-        tensor.allReduce();
+        tensor.sync();
         CUDA_CHECK(cudaEventRecord(end_event));
         CUDA_CHECK(cudaEventSynchronize(end_event));
         
@@ -177,7 +170,7 @@ BandwidthResult benchmark_allreduce_bandwidth(
 
 // =============================================================================
 // Benchmark MLP Layer Communication (realistic workload)
-// Uses AllReduce with MLP-sized activation tensors (avoids matmul debug output)
+// Uses sync() with MLP-sized activation tensors
 // =============================================================================
 struct MLPBandwidthResult {
     int batch_size;
@@ -191,21 +184,22 @@ MLPBandwidthResult benchmark_mlp_sync_bandwidth(
     int batch_size,
     int hidden_dim,
     int rank,
-    std::shared_ptr<DeviceMesh> mesh,
+    DeviceMesh& mesh,
     std::shared_ptr<ProcessGroupNCCL> pg,
     int warmup_iters,
     int measure_iters) {
     
-    const int BT = batch_size * 512;  // batch * seq_len
-    const int C = hidden_dim;
+    const int64_t BT = batch_size * 512;  // batch * seq_len
+    const int64_t C = hidden_dim;
     
     // Create activation tensor [BT, C] - this represents Y after row-parallel matmul
     // In real MLP, this would need AllReduce after row-parallel layer
-    std::vector<int> shape = {BT, C};
-    Layout replicated_layout(mesh, shape, ShardingType::REPLICATED);
+    std::vector<int64_t> shape = {BT, C};
+    Layout replicated_layout(mesh, shape);  // Replicated layout
     
     // Create tensor with random data (simulating MLP output)
-    DTensor Y = DTensor::randn(shape, mesh, pg, replicated_layout);
+    DTensor Y(mesh, pg, replicated_layout);
+    Y.rand();
     
     // CUDA events for timing
     cudaEvent_t start_event, end_event;
@@ -214,7 +208,7 @@ MLPBandwidthResult benchmark_mlp_sync_bandwidth(
     
     // Warmup
     for (int i = 0; i < warmup_iters; i++) {
-        Y.allReduce();
+        Y.sync();
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     MPI_Barrier(MPI_COMM_WORLD);
@@ -225,7 +219,7 @@ MLPBandwidthResult benchmark_mlp_sync_bandwidth(
     
     for (int i = 0; i < measure_iters; i++) {
         CUDA_CHECK(cudaEventRecord(start_event));
-        Y.allReduce();
+        Y.sync();
         CUDA_CHECK(cudaEventRecord(end_event));
         CUDA_CHECK(cudaEventSynchronize(end_event));
         
@@ -277,13 +271,13 @@ int main(int argc, char** argv) {
     if (world_size != 2) {
         if (rank == 0) {
             std::cerr << "This test requires exactly 2 MPI processes (TP=2)." << std::endl;
-            std::cerr << "Run with: mpirun -np 2 --allow-run-as-root ./test_mlp_interconnect_bandwidth" << std::endl;
+            std::cerr << "Run with: mpirun -np 2 ./benchmarks/interconnect_benchmarks" << std::endl;
         }
         MPI_Finalize();
         return 1;
     }
     
-    // Setup CUDA device
+    // Setup CUDA device FIRST before any CUDA/NCCL operations
     int device_count;
     CUDA_CHECK(cudaGetDeviceCount(&device_count));
     int device_id = rank % device_count;
@@ -294,10 +288,9 @@ int main(int argc, char** argv) {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device_id));
     
-    // Create mesh and process group using helper function
-    auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-    auto pg = init_process_group(world_size, rank);
-
+    // Create mesh and process group
+    DeviceMesh mesh({world_size}, {0, 1});
+    auto pg = mesh.get_process_group(0);
     
     if (rank == 0) {
         std::cout << "\n=== Interconnect Bandwidth Test (TP=2, " << prop.name << ") ===\n";
@@ -386,4 +379,3 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
-

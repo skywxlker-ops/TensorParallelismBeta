@@ -1,22 +1,573 @@
-📊 CUDA GPU Kernel Summary
-Kernel	Time %	Total Time	Instances	Avg Time
-batched_matmul_kernel	93.3%	1.19s	420	2.84ms
-ncclDevKernel_AllReduce	6.7%	85.5ms	210	0.41ms
-🔑 Key Findings
-1. Compute-Dominated Workload (93% MatMul)
-The batched_matmul_kernel dominates execution time
-420 kernel calls = 210 per GPU × 2 matmuls × 100 iterations ✓
-Average: 2.84ms per matmul (could be optimized with cuBLAS)
-2. Communication Overhead is Low (6.7%)
-NCCL AllReduce only takes 6.7% of GPU time
-This is a good compute-to-communication ratio for tensor parallelism
-3. Memory Operations
-Operation	Total	Count	Avg Size
-Host-to-Device Copy	538 MB	2,566	0.21 MB
-Memset	868 MB	464	1.87 MB
-💡 Optimization Opportunities
-Use cuBLAS GEMM instead of custom matmul kernel for better performance
-Reduce H2D transfers - the 2,566 small copies suggest inefficient data handling
-Batch operations to reduce kernel launch overhead
-Throughput achieved: ~1.39 TFLOPS
-Theoretical peak on 2 GPUs: Much higher - indicates room for optimization!
+Makefile - 
+
+SHARD_BENCH_SRCS = \
+    benchmarks/shard_benchmarking.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+SHARD_BENCH_OBJS = $(SHARD_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+shard_benchmarking: $(SHARD_BENCH_OBJS) $(TENSOR_LIB_A) $(CGADIMPL_LIB)
+    @echo "\n[LINKING] Creating benchmark executable: $@"
+    $(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(SHARD_BENCH_OBJS) -Xlinker --start-group $(CGADIMPL_LIB) $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+    @echo "[SUCCESS] Shard Benchmarking build complete."
+    @echo "\nRun with: mpirun -np 2 ./benchmarks/shard_benchmarking\n"
+
+
+shard_benchmarking - 
+    
+    #include "tensor/dtensor.h"
+#include <iostream>
+#include <vector>
+#include <nccl.h>
+#include <nvtx3/nvtx3.hpp>
+#include <nvtx3/nvToolsExt.h>
+#include <nvtx3/nvToolsExtCuda.h>
+
+
+#define CUDA_CHECK(cmd) do {                         \
+  cudaError_t e = cmd;                              \
+  if( e != cudaSuccess ) {                          \
+    printf("Failed: Cuda error %s:%d '%s'\n",       \
+        __FILE__,__LINE__,cudaGetErrorString(e));   \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
+
+int main(int argc, char** argv) {
+    MPI_Init(&argc, &argv);
+
+    int rank, world_size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    std::shared_ptr<Work> work_obj;
+   
+    DeviceMesh device_mesh ({2}, {0,1});
+
+    auto pg = device_mesh.get_process_group(0);
+
+    int num_devices = 0;
+    cudaGetDeviceCount(&num_devices);
+    if (num_devices > 0) {
+        CUDA_CHECK(cudaSetDevice(rank % num_devices));
+    }
+
+    cudaStream_t comm_stream;
+    cudaStreamCreate(&comm_stream);
+
+    for (int t = 499; t < 500; t++){
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    float duration;
+    float avgduration;
+    
+    const int64_t B = 8;      // batch size
+    const int64_t C = 2 * t;      // input features
+    const int64_t F = 4 * t;      // token length
+    
+    // auto pg = device_mesh.get_process_group(0);
+
+ 
+
+    // Allocate tensors BEFORE timing starts
+    
+    Layout w1_layout(device_mesh, { B , C , F }, 1);
+    DTensor W1(device_mesh, pg, w1_layout);
+    
+    // Only root initializes with random data
+    if (rank == 0) {
+        W1.rand();
+        W1.display();
+    }
+    
+    Layout W1_asS_layout(device_mesh,{ B , C/2 , F });
+    DTensor W1_Shard(device_mesh, pg, W1_asS_layout);
+    
+    // Warmup run (not timed)
+     for (int i = 0; i < 100; i++ ){
+      std::string message = "Start of iteration: ";
+    nvtxRangePush(message.c_str());  
+    W1_Shard.shard_transpose_fused( 2 , 0 , W1 );
+    nvtxRangePop();
+    } 
+
+    cudaDeviceSynchronize();
+    cudaEventRecord(start,comm_stream);
+
+    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+    for (int i = 0; i < 100; i++ ){
+        W1_Shard.shard_transpose_fused( 1 , 0 , W1 );
+    }
+
+    cudaEventRecord(stop,comm_stream);
+
+    CUDA_CHECK(cudaEventSynchronize(stop));
+    
+    W1_Shard.display();
+
+    cudaEventElapsedTime(&duration, start, stop);
+
+    duration /= 100;
+
+    cudaDeviceSynchronize();
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    int64_t size = ( B * C * F * 4 ) / ( 1024 * 1024 );
+    int64_t throughput = size / (duration / 1000) ;
+
+    if(rank == 0){
+      std::cout<<"\n\n ========= BENCHMARKS "<< t <<" ========= \n\n"<<std::endl;
+
+      std::cout<<" DURATION : "<< duration <<std::endl;
+      std::cout<<" SIZE : "<< size <<std::endl;
+      std::cout<<" THROUGHPUT : "<< throughput <<std::endl;    
+      
+      std::cout<<" B : "<< B <<std::endl;
+      // std::cout<<" T : "<< T <<std::endl;
+      std::cout<<" C : "<< C <<std::endl;
+      std::cout<<" F : "<< F <<std::endl;
+    }
+
+  }
+  MPI_Finalize();
+  return 0;
+}
+
+display function - 
+
+void DTensor::display(){
+    tensor_.to_cpu().display();
+}
+
+layout.h - 
+
+#pragma once
+
+#include <vector>
+#include <string>
+#include <sstream>
+#include <numeric>
+#include <stdexcept>
+#include <memory>
+#include "tensor/device_mesh.h"
+#include "tensor/placement.h"
+
+
+// enum class ShardingType {
+//     REPLICATED, // Tensor is fully replicated on all devices
+//     SHARDED     // Tensor is sharded along a specific dimension
+// };
+
+class Layout {
+
+    std::shared_ptr<Placement> placement_;
+    std::vector<int64_t> global_shape_;
+
+public: 
+    Layout(const DeviceMesh& mesh, const std::vector<int64_t> global_shape) : mesh_(&mesh), global_shape_(global_shape), placement_(std::make_shared<Replicate>()) {}
+
+    // Constructor for a new layout
+    Layout(const DeviceMesh& mesh, const std::vector<int64_t> global_shape, int dim)
+        : mesh_(&mesh), global_shape_(global_shape), placement_(std::make_shared<Shard>(dim)) {
+        //std::cout<< "Dimensions"<<std::endl;
+        // for(auto i: global_shape){
+
+        // }
+        if ( (placement_->dim() < 0 || (size_t)placement_->dim() >= global_shape.size())) {
+            throw std::runtime_error("Invalid shard_dim for SHARDED layout.");
+        }
+       
+    }
+
+
+    bool is_replicated() const {
+        return placement_->type() == PlacementType::REPLICATE;
+    }
+
+    bool is_sharded() const {
+        return placement_->type() == PlacementType::SHARD;
+    }
+
+    // Check if sharded along a specific dimension
+    bool is_sharded_by_dim(int dim) const {
+        return is_sharded() && placement_->dim() == dim;
+    }
+
+    int get_shard_dim() const {
+        if (placement_->type() == PlacementType::SHARD) {
+        return placement_->dim();
+        }
+        return -1; 
+    }
+    
+    void set_shard_dim( int d)  {
+
+        placement_->setDim(d);       
+        
+    }
+
+    const std::vector<int64_t>& get_global_shape() const {
+        return global_shape_;
+    }
+
+    void set_global_shape(std::vector<int64_t> new_shape)  {
+        global_shape_ = new_shape;
+    }
+
+    const DeviceMesh& get_mesh() const {
+        return *mesh_;
+    }
+
+    // --- Core Logic ---
+
+    // Calculates the shape of the local shard for a given rank
+
+    std::vector<int64_t> get_local_shape(int rank) const {
+         if (placement_->type() == PlacementType::REPLICATE) {
+             return global_shape_; // No sharding, return full shape
+         }
+     
+         int d = placement_->dim();
+         // Ensure d is valid before indexing global_shape_
+         if (d < 0 || (size_t)d >= global_shape_.size()) {
+             return global_shape_;
+         }
+
+
+        int world_size = mesh_->world_size();
+        // 2. SAFETY: Prevent division by zero if mesh is uninitialized
+        if (world_size <= 0) return global_shape_;
+
+        std::vector<int64_t> local_shape = global_shape_;
+
+        // 3. SAFETY: Check the shard dimension
+        int shard_dim = placement_->dim();
+        if (shard_dim < 0 || (size_t)shard_dim >= global_shape_.size()) {
+            // If this is -1, global_shape_[shard_dim] will trigger bad_array_new_length
+            return global_shape_; 
+        }
+
+        int64_t global_dim_size = global_shape_[shard_dim];
+        int64_t base_size = global_dim_size / world_size;
+        int64_t remainder = global_dim_size % world_size;
+
+        int64_t local_dim_size = (rank < remainder) ? (base_size + 1) : base_size;
+
+        local_shape[shard_dim] = local_dim_size;
+
+        return local_shape;
+    }
+
+
+    // Helper to get total number of elements in the global tensor
+    int64_t global_numel() const {
+        if (global_shape_.empty()) return 0;
+        return std::accumulate(global_shape_.begin(), global_shape_.end(), 1LL, std::multiplies<int64_t>());
+    }
+
+    // Creates a new layout for a reshaped tensor (simplified)
+    Layout reshape(const std::vector<int64_t>& new_global_shape) const {
+        // A simple check: if sharding dim is preserved and size is same, keep it.
+        if (is_sharded() && placement_->dim() < (int64_t)new_global_shape.size() && new_global_shape[placement_->dim()] == global_shape_[placement_->dim()]) {
+             return Layout(*mesh_, new_global_shape, placement_->dim());
+        }
+        
+        // Default: fall back to replicated
+        return Layout(*mesh_, new_global_shape);
+    }
+
+    // Check for element-wise op compatibility
+    bool is_compatible(const Layout& other) const {
+        // Simple check: are global shapes and sharding identical?
+        return global_shape_ == other.global_shape_ &&
+                placement_->type() == other.placement_->type() &&
+                placement_->dim() == other.placement_->dim();
+    }
+
+    bool operator==(const Layout& other) const {
+        return is_compatible(other);
+    }
+
+    bool operator!=(const Layout& other) const {
+        return !is_compatible(other);
+    }
+
+    
+  
+    // static Layout replicated(std::shared_ptr<DeviceMesh> mesh, 
+    //                         const std::vector<int64_t>& global_shape) {
+    //     return Layout(mesh, global_shape, PlacementType::REPLICATE);
+    // }
+
+    //  static Layout sharded(std::shared_ptr<DeviceMesh> mesh, 
+    //                         const std::vector<int64_t>& global_shape) {
+    //     return Layout(mesh, global_shape, PlacementType::SHARD);
+    // }
+
+    std::string describe(int rank) const {
+        std::ostringstream oss;
+
+        oss << "[Layout] Rank " << rank <<" | ";
+        oss << "Global Shape: [";
+        for (size_t i = 0; i < global_shape_.size(); ++i) {
+            oss << global_shape_[i] << (i == global_shape_.size() - 1 ? "" : ", ");
+        }
+        oss << "] | ";
+
+        if (is_replicated()) {
+            oss << "REPLICATED";
+        } else {
+            oss << "SHARDED (Dim: " << placement_->dim() << ")";
+        }
+        
+        std::vector<int64_t> local_shape = get_local_shape(rank);
+        oss << " | Local Shape: [";
+        for (size_t i = 0; i < local_shape.size(); ++i) {
+            oss << local_shape[i] << (i == local_shape.size() - 1 ? "" : ", ");
+        }
+        oss << "]";
+        return oss.str();
+    }
+
+    
+    // Constructor taking placements 
+    // Layout(std::shared_ptr<DeviceMesh> mesh, 
+    //        const std::vector<int64_t>& global_shape,
+    //        const std::vector<std::shared_ptr<Placement>>& placements)
+    //     : mesh_(mesh), global_shape_(global_shape), placements_(placements) {
+        
+    //     placement_->type() = PlacementType::REPLICATE;
+    //     placement_->dim() = -1;
+        
+    //     if (!placements.empty()) {
+    //         // Simple logic: look at first placement
+    //         if (placements[0]->type() == PlacementType::SHARD) {
+    //             placement_->type() = PlacementType::SHARD;
+    //             placement_->dim() = static_cast<Shard*>(placements[0].get())->dim();
+    //         }
+    //     }
+    // }
+
+    // std::shared_ptr<Placement> get_placement(int index) const {
+    //     if (index < 0 || index ) {
+    //         // Fallback if placements are not set but simple sharding is
+    //         if (placements_.empty()) {
+    //             if (placement_->type() == PlacementType::REPLICATE) {
+    //                 return std::make_shared<Replicate>();
+    //             } else {
+    //                 return std::make_shared<Shard>(placement_->dim());
+    //             }
+    //         }
+    //         throw std::out_of_range("Placement index out of range");
+    //     }
+    //     return placements_[index];
+    // }
+
+    private:
+        const DeviceMesh* mesh_;
+        // std::vector<int64_t> global_shape_;
+
+        // Placement* placement_;
+        // std::vector<std::shared_ptr<Placement>> placements_;
+
+
+    };
+
+
+placement.h
+
+#pragma once
+#include <string>
+#include <memory>
+#include <sstream>
+
+enum class PlacementType {
+    SHARD,      
+    REPLICATE    
+};
+
+class Placement {
+public:
+    Placement() = default;
+    virtual ~Placement(); // Declaration only, no '= default' here
+
+    virtual PlacementType type() const = 0;
+    virtual int dim() const { return -1; } 
+    virtual void setDim(int dim) { } 
+};
+
+
+class Shard : public Placement {
+public:
+
+    Shard() = default;
+    
+    explicit Shard(int dim) : dim_(dim) {}
+    
+    PlacementType type() const override { 
+        return PlacementType::SHARD; 
+    }
+    
+    int dim() const override { return dim_; }
+    void setDim(int dim) override { dim_ = dim; }
+    
+private:
+
+    int dim_ = 0;  
+};
+
+
+class Replicate : public Placement {
+public:
+    Replicate() = default;
+    
+    
+    PlacementType type() const override { 
+        return PlacementType::REPLICATE; 
+    }
+    
+};
+
+placement.cpp -
+
+#include "placement.h"
+
+Placement::~Placement() = default;
+
+
+fused_transpose_kernel.cu
+
+#include <iostream>
+#include <cuda_runtime.h>
+#include "fused_rotate_kernel.cuh"
+
+// Kernel for dim 1 sharding: [D0, D1, D2] -> [D0, D1_local, D2]
+__global__ void shard_dim1_kernel(
+    float* src,
+    float* dst,
+    int64_t D0, int64_t D1, int64_t D2,
+    int64_t D1_local,
+    int rank,
+    int64_t total_elements
+) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < total_elements) {
+        // Destination coordinates [d0, d1_local, d2] in output [D0, D1_local, D2]
+        int64_t d2 = idx % D2;
+        int64_t temp = idx / D2;
+        int64_t d1_local = temp % D1_local;
+        int64_t d0 = temp / D1_local;
+        
+        // Global d1 coordinate
+        int64_t d1_global = rank * D1_local + d1_local;
+        
+        // Source index in [D0, D1, D2] layout
+        int64_t src_idx = d0 * (D1 * D2) + d1_global * D2 + d2;
+        
+        dst[idx] = src[src_idx];
+    }
+}
+
+// Kernel for dim 2 sharding: [D0, D1, D2] -> [D0, D1, D2_local]
+__global__ void shard_dim2_kernel(
+    float* src,
+    float* dst,
+    int64_t D0, int64_t D1, int64_t D2,
+    int64_t D2_local,
+    int rank,
+    int64_t total_elements
+) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < total_elements) {
+        // Destination coordinates [d0, d1, d2_local] in output [D0, D1, D2_local]
+        int64_t d2_local = idx % D2_local;
+        int64_t temp = idx / D2_local;
+        int64_t d1 = temp % D1;
+        int64_t d0 = temp / D1;
+        
+        // Global d2 coordinate
+        int64_t d2_global = rank * D2_local + d2_local;
+        
+        // Source index in [D0, D1, D2] layout
+        int64_t src_idx = d0 * (D1 * D2) + d1 * D2 + d2_global;
+        
+        dst[idx] = src[src_idx];
+    }
+}
+
+void launch_shard_dim1_kernel(
+    float* d_src,
+    float* d_dst,
+    int64_t D0, int64_t D1, int64_t D2,
+    int64_t D1_local,
+    int rank,
+    int64_t total_elements,
+    cudaStream_t stream
+) {
+    int blockSize = 256;
+    int numBlocks = (total_elements + blockSize - 1) / blockSize;
+    
+    shard_dim1_kernel<<<numBlocks, blockSize, 0, stream>>>(
+        d_src, d_dst, D0, D1, D2, D1_local, rank, total_elements
+    );
+}
+
+void launch_shard_dim2_kernel(
+    float* d_src,
+    float* d_dst,
+    int64_t D0, int64_t D1, int64_t D2,
+    int64_t D2_local,
+    int rank,
+    int64_t total_elements,
+    cudaStream_t stream
+) {
+    int blockSize = 256;
+    int numBlocks = (total_elements + blockSize - 1) / blockSize;
+    
+    shard_dim2_kernel<<<numBlocks, blockSize, 0, stream>>>(
+        d_src, d_dst, D0, D1, D2, D2_local, rank, total_elements
+    );
+}
+
+
+
+fused_transpose_kernel.cuh - 
+
+#pragma once
+#include <cuda_runtime.h>
+#include <cstdint>
+
+// Launch kernel for dim 1 sharding: [D0, D1, D2] -> [D0, D1_local, D2]
+void launch_shard_dim1_kernel(
+    float* d_src,           // Source data (full tensor)
+    float* d_dst,           // Destination (sharded tensor)
+    int64_t D0, int64_t D1, int64_t D2,
+    int64_t D1_local,       // D1 / world_size
+    int rank,
+    int64_t total_elements,
+    cudaStream_t stream
+);
+
+// Launch kernel for dim 2 sharding: [D0, D1, D2] -> [D0, D1, D2_local]
+void launch_shard_dim2_kernel(
+    float* d_src,           // Source data (full tensor)
+    float* d_dst,           // Destination (sharded tensor)
+    int64_t D0, int64_t D1, int64_t D2,
+    int64_t D2_local,       // D2 / world_size
+    int rank,
+    int64_t total_elements,
+    cudaStream_t stream
+);
+
+

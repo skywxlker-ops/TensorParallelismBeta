@@ -13,12 +13,12 @@
 
 void test_empty(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {4, 8};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);  // Shard on dim 0
+    std::vector<int64_t> global_shape = {4, 8};
+    Layout layout(*mesh, global_shape, 0);  // Shard on dim 0
     
     auto dt = DTensor::empty(global_shape, mesh, pg, layout);
     
-    std::vector<int> expected_local_shape = {2, 8};  // 4/2 = 2 rows per rank
+    std::vector<int64_t> expected_local_shape = {2, 8};  // 4/2 = 2 rows per rank
     auto local_shape = layout.get_local_shape(rank);
     
     bool pass = (local_shape == expected_local_shape);
@@ -29,8 +29,8 @@ void test_empty(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNC
 
 void test_zeros(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {4, 6};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 1);  // Shard on dim 1
+    std::vector<int64_t> global_shape = {4, 6};
+    Layout layout(*mesh, global_shape, 1);  // Shard on dim 1
     
     auto dt = DTensor::zeros(global_shape, mesh, pg, layout);
     
@@ -46,8 +46,8 @@ void test_zeros(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNC
 
 void test_ones(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {4, 4};
-    Layout layout = Layout::replicated(mesh, global_shape);  // Replicated
+    std::vector<int64_t> global_shape = {4, 4};
+    Layout layout = Layout::replicated(*mesh, global_shape);  // Replicated
     
     auto dt = DTensor::ones(global_shape, mesh, pg, layout);
     
@@ -63,8 +63,8 @@ void test_ones(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCC
 
 void test_full(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {2, 4};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {2, 4};
+    Layout layout(*mesh, global_shape, 0);
     float fill_value = 3.14f;
     
     auto dt = DTensor::full(global_shape, fill_value, mesh, pg, layout);
@@ -81,8 +81,8 @@ void test_full(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCC
 
 void test_rand(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {100, 100};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {100, 100};
+    Layout layout(*mesh, global_shape, 0);
     
     auto dt = DTensor::rand(global_shape, mesh, pg, layout);
     
@@ -104,8 +104,8 @@ void test_rand(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCC
 
 void test_randn(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {100, 100};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {100, 100};
+    Layout layout(*mesh, global_shape, 0);
     
     auto dt = DTensor::randn(global_shape, mesh, pg, layout);
     
@@ -129,8 +129,8 @@ void test_randn(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNC
 
 void test_randint(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {4, 4};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {4, 4};
+    Layout layout(*mesh, global_shape, 0);
     int64_t low = 0, high = 10;
     
     auto dt = DTensor::randint(low, high, global_shape, mesh, pg, layout);
@@ -148,11 +148,11 @@ void test_randint(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroup
 
 void test_from_local(std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
     int rank = pg->get_rank();
-    std::vector<int> global_shape = {4, 4};
-    Layout layout(mesh, global_shape, ShardingType::SHARDED, 0);
+    std::vector<int64_t> global_shape = {4, 4};
+    Layout layout(*mesh, global_shape, 0);
     
     // Create local tensor manually
-    std::vector<int> local_shape = layout.get_local_shape(rank);
+    std::vector<int64_t> local_shape = layout.get_local_shape(rank);
     OwnTensor::Shape shape_obj;
     shape_obj.dims.assign(local_shape.begin(), local_shape.end());
     OwnTensor::TensorOptions opts;
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
     // Test distribute_tensor (new)
     {
         int rank = pg->get_rank();
-        std::vector<int> global_shape = {4, 8};
+        std::vector<int64_t> global_shape = {4, 8};
         
         // Create global tensor on root
         OwnTensor::Shape shape_obj;
@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
         OwnTensor::Tensor global_tensor = OwnTensor::Tensor::full(shape_obj, opts, 42.0f);
         
         // Test 1: Distribute as sharded (dim 0)
-        Layout sharded_layout(mesh, global_shape, ShardingType::SHARDED, 0);
+        Layout sharded_layout(*mesh, global_shape, 0);
         auto dt_sharded = DTensor::distribute_tensor(global_tensor, mesh, pg, sharded_layout, 0);
         
         auto sharded_data = dt_sharded.getData();
@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
         }
         
         // Test 2: Distribute as replicated
-        Layout rep_layout = Layout::replicated(mesh, global_shape);
+        Layout rep_layout = Layout::replicated(*mesh, global_shape);
         auto dt_rep = DTensor::distribute_tensor(global_tensor, mesh, pg, rep_layout, 0);
         
         auto rep_data = dt_rep.getData();

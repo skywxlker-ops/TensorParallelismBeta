@@ -18,16 +18,16 @@ int main(int argc, char** argv) {
     auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
 
     // 2D tensor: [[2, 4], [6, 8]]
-    std::vector<int> shape = {2, 2};
+    std::vector<int64_t> shape = {2, 2};
     std::vector<float> original = {2, 4, 6, 8};
 
     // Create replicated tensor
-    Layout rep_layout(mesh, shape, ShardingType::REPLICATED);
+    Layout rep_layout = Layout::replicated(*mesh, shape);
     DTensor rep(mesh, pg);
     rep.setData(original, rep_layout);
 
     // Redistribute to Partial
-    Layout partial_layout(mesh, shape, ShardingType::PARTIAL, -1, "sum");
+    // TODO: PARTIAL removed - Layout partial_layout(*mesh, shape, ShardingType::PARTIAL, -1, "sum");
     DTensor partial = rep.redistribute(partial_layout);
     std::vector<float> p_data = partial.getData();
 

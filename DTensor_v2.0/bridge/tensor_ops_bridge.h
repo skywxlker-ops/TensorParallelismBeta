@@ -23,7 +23,7 @@ OwnTensor::Tensor div(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
 
 DTensor from_data(
     const std::vector<float>& host_data,
-    const std::vector<int>& shape,
+    const std::vector<int64_t>& shape,
     std::shared_ptr<DeviceMesh> device_mesh,
     std::shared_ptr<ProcessGroupNCCL> pg);
 
