@@ -17,7 +17,7 @@
     } \
 } while(0)
 
-void test_send_recv(int rank, std::shared_ptr<ProcessGroup> pg) {
+void test_send_recv(int rank, std::shared_ptr<ProcessGroupNCCL> pg) {
     if (rank == 0) std::cout << "\n[Send/Recv Test]" << std::endl;
     
     float *data;
@@ -44,7 +44,7 @@ void test_send_recv(int rank, std::shared_ptr<ProcessGroup> pg) {
     MPI_Barrier(MPI_COMM_WORLD);
 }
 
-void test_scatter(int rank, int world_size, std::shared_ptr<ProcessGroup> pg) {
+void test_scatter(int rank, int world_size, std::shared_ptr<ProcessGroupNCCL> pg) {
     if (rank == 0) std::cout << "\n[Scatter Test]" << std::endl;
     
     float *send_buf = nullptr;
@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
     }
     MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
     CUDA_CHECK(cudaSetDevice(rank));
 
     if (rank == 0) {

@@ -42,7 +42,7 @@ size_t get_gpu_memory_used() {
 
 // Benchmark Case 1: Current wrapper architecture
 BenchmarkResult benchmark_wrapper(int rank, std::shared_ptr<DeviceMesh> mesh,
-                                    std::shared_ptr<ProcessGroup> pg,
+                                    std::shared_ptr<ProcessGroupNCCL> pg,
                                     int M, int K, int N) {
     const int outer_iterations = 100;
     double total_init_time = 0.0;
@@ -57,11 +57,11 @@ BenchmarkResult benchmark_wrapper(int rank, std::shared_ptr<DeviceMesh> mesh,
         DTensor W(mesh, pg);
         
         // Create replicated X [M, K] and column-sharded W [K, N/2]
-        std::vector<int> X_shape = {M, K};
-        std::vector<int> W_shape = {K, N};
+        std::vector<int64_t> X_shape = {M, K};
+        std::vector<int64_t> W_shape = {K, N};
         
-        Layout X_layout = Layout::replicated(mesh, X_shape);
-        Layout W_layout(mesh, W_shape, ShardingType::SHARDED, 1);
+        Layout X_layout = Layout::replicated(*mesh, X_shape);
+        Layout W_layout(*mesh, W_shape, 1);
         
         // Prepare data
         std::vector<float> X_data(M * K, 1.0f);
@@ -105,7 +105,7 @@ BenchmarkResult benchmark_wrapper(int rank, std::shared_ptr<DeviceMesh> mesh,
 
 // Benchmark Case 2: Native OwnTensor architecture
 BenchmarkResult benchmark_native(int rank, std::shared_ptr<DeviceMesh> mesh,
-                                   std::shared_ptr<ProcessGroup> pg,
+                                   std::shared_ptr<ProcessGroupNCCL> pg,
                                    int M, int K, int N) {
     const int outer_iterations = 100;
     double total_init_time = 0.0;
@@ -120,11 +120,11 @@ BenchmarkResult benchmark_native(int rank, std::shared_ptr<DeviceMesh> mesh,
         OwnTensor::DTensorNative W(mesh, pg);
         
         // Create replicated X [M, K] and column-sharded W [K, N/2]
-        std::vector<int> X_shape = {M, K};
-        std::vector<int> W_shape = {K, N};
+        std::vector<int64_t> X_shape = {M, K};
+        std::vector<int64_t> W_shape = {K, N};
         
-        Layout X_layout = Layout::replicated(mesh, X_shape);
-        Layout W_layout(mesh, W_shape, ShardingType::SHARDED, 1);
+        Layout X_layout = Layout::replicated(*mesh, X_shape);
+        Layout W_layout(*mesh, W_shape, 1);
         
         // Prepare data
         std::vector<float> X_data(M * K, 1.0f);
@@ -167,7 +167,7 @@ BenchmarkResult benchmark_native(int rank, std::shared_ptr<DeviceMesh> mesh,
 }
 
 void run_benchmark(int rank, std::shared_ptr<DeviceMesh> mesh,
-                    std::shared_ptr<ProcessGroup> pg,
+                    std::shared_ptr<ProcessGroupNCCL> pg,
                     int M, int K, int N) {
     if (rank == 0) {
         std::cout << "\n[Matrix size: " << M << "x" << K << " @ " << K << "x" << N << "]" << std::endl;
@@ -233,7 +233,7 @@ int main(int argc, char** argv) {
 
     std::vector<int> mesh_shape = {world_size};
     auto mesh = std::make_shared<DeviceMesh>(mesh_shape);
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
 
     CUDA_CHECK(cudaSetDevice(rank));
 

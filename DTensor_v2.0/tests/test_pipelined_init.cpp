@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     MPI_Bcast((void*)&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
     auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
 
     CUDA_CHECK(cudaSetDevice(rank));
 
@@ -80,9 +80,9 @@ int main(int argc, char** argv) {
     }
     
     // Create layouts
-    layouts.push_back(Layout(mesh, {4, 4}, ShardingType::SHARDED, 0));  // Row-sharded
-    layouts.push_back(Layout(mesh, {8, 4}, ShardingType::SHARDED, 0));  // Row-sharded
-    layouts.push_back(Layout(mesh, {4, 4}, ShardingType::REPLICATED));   // Replicated
+    layouts.push_back(Layout(*mesh, {4, 4}, 0));  // Row-sharded
+    layouts.push_back(Layout(*mesh, {8, 4}, 0));  // Row-sharded
+    layouts.push_back(Layout::replicated(*mesh, {4, 4}));   // Replicated
     
     // Test pipelined loading
     std::vector<DTensor> tensors;

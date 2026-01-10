@@ -43,7 +43,7 @@ size_t get_gpu_memory_used() {
 // Benchmark: Replicated → Row-sharded
 LayoutBenchmarkResult benchmark_replicate_to_row_shard(
     int rank, std::shared_ptr<DeviceMesh> mesh,
-    std::shared_ptr<ProcessGroup> pg,
+    std::shared_ptr<ProcessGroupNCCL> pg,
     int M, int N) {
     
     const int warmup_iters = 100;
@@ -56,8 +56,8 @@ LayoutBenchmarkResult benchmark_replicate_to_row_shard(
         
         // Create replicated tensor
         DTensor X(mesh, pg);
-        std::vector<int> shape = {M, N};
-        Layout replicated_layout = Layout::replicated(mesh, shape);
+        std::vector<int64_t> shape = {M, N};
+        Layout replicated_layout = Layout::replicated(*mesh, shape);
         
         std::vector<float> data(M * N, 1.0f);
         X.setData(data, replicated_layout);
@@ -103,7 +103,7 @@ LayoutBenchmarkResult benchmark_replicate_to_row_shard(
 // Benchmark: Replicated → Column-sharded
 LayoutBenchmarkResult benchmark_replicate_to_col_shard(
     int rank, std::shared_ptr<DeviceMesh> mesh,
-    std::shared_ptr<ProcessGroup> pg,
+    std::shared_ptr<ProcessGroupNCCL> pg,
     int M, int N) {
     
     const int warmup_iters = 100;
@@ -116,8 +116,8 @@ LayoutBenchmarkResult benchmark_replicate_to_col_shard(
         
         // Create replicated tensor
         DTensor X(mesh, pg);
-        std::vector<int> shape = {M, N};
-        Layout replicated_layout = Layout::replicated(mesh, shape);
+        std::vector<int64_t> shape = {M, N};
+        Layout replicated_layout = Layout::replicated(*mesh, shape);
         
         std::vector<float> data(M * N, 1.0f);
         X.setData(data, replicated_layout);
@@ -160,7 +160,7 @@ LayoutBenchmarkResult benchmark_replicate_to_col_shard(
 // Benchmark: Row-sharded → Column-sharded (redistribute)
 LayoutBenchmarkResult benchmark_row_to_col_shard(
     int rank, std::shared_ptr<DeviceMesh> mesh,
-    std::shared_ptr<ProcessGroup> pg,
+    std::shared_ptr<ProcessGroupNCCL> pg,
     int M, int N) {
     
     const int warmup_iters = 100;
@@ -171,8 +171,8 @@ LayoutBenchmarkResult benchmark_row_to_col_shard(
     for (int iter = 0; iter < warmup_iters + measure_iters; ++iter) {
         // Start with row-sharded tensor
         DTensor X(mesh, pg);
-        std::vector<int> shape = {M, N};
-        Layout row_sharded_layout(mesh, shape, ShardingType::SHARDED, 0);
+        std::vector<int64_t> shape = {M, N};
+        Layout row_sharded_layout(*mesh, shape, 0);
         
         // Each rank has M/world_size rows
         int world_size = mesh->size();
@@ -226,7 +226,7 @@ LayoutBenchmarkResult benchmark_row_to_col_shard(
 // Benchmark: Sharded → Replicated (via allGather)
 LayoutBenchmarkResult benchmark_shard_to_replicated(
     int rank, std::shared_ptr<DeviceMesh> mesh,
-    std::shared_ptr<ProcessGroup> pg,
+    std::shared_ptr<ProcessGroupNCCL> pg,
     int M, int N) {
     
     const int warmup_iters = 100;
@@ -237,8 +237,8 @@ LayoutBenchmarkResult benchmark_shard_to_replicated(
     for (int iter = 0; iter < warmup_iters + measure_iters; ++iter) {
         // Start with column-sharded tensor
         DTensor X(mesh, pg);
-        std::vector<int> shape = {M, N};
-        Layout col_sharded_layout(mesh, shape, ShardingType::SHARDED, 1);
+        std::vector<int64_t> shape = {M, N};
+        Layout col_sharded_layout(*mesh, shape, 1);
         
         // Each rank has N/world_size columns
         int world_size = mesh->size();
@@ -296,7 +296,7 @@ void print_result(int rank, const LayoutBenchmarkResult& result, int M, int N) {
 }
 
 void run_benchmark_suite(int rank, std::shared_ptr<DeviceMesh> mesh,
-                         std::shared_ptr<ProcessGroup> pg,
+                         std::shared_ptr<ProcessGroupNCCL> pg,
                          int M, int N) {
     if (rank == 0) {
         std::cout << "\n[Matrix size: " << M << "x" << N << "]" << std::endl;
@@ -345,7 +345,7 @@ int main(int argc, char** argv) {
 
     std::vector<int> mesh_shape = {world_size};
     auto mesh = std::make_shared<DeviceMesh>(mesh_shape);
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
 
     CUDA_CHECK(cudaSetDevice(rank));
 

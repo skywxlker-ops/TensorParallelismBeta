@@ -10,7 +10,7 @@
 
 // === DTensor Core ===
 #include "tensor/dtensor.h"
-#include "DTensor_v2.0/process_group/ProcessGroupNCCL.h
+#include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 
@@ -51,7 +51,7 @@ void print_section(int rank, const std::string& section) {
 
 void test_mlp_forward(int rank, int world_size, 
                       std::shared_ptr<DeviceMesh> mesh, 
-                      std::shared_ptr<ProcessGroup> pg) {
+                      std::shared_ptr<ProcessGroupNCCL> pg) {
     
     print_separator(rank, "MLP Forward Pass Test (Tensor Parallelism)");
     
@@ -80,8 +80,8 @@ void test_mlp_forward(int rank, int world_size,
     print_section(rank, "LAYER 1: Column-Parallel MatMul");
     
     // --- Input X (Replicated) ---
-    std::vector<int> shape_X = {BATCH, HIDDEN};
-    Layout layout_X(mesh, shape_X, ShardingType::REPLICATED);
+    std::vector<int64_t> shape_X = {BATCH, HIDDEN};
+    Layout layout_X = Layout::replicated(*mesh, shape_X);
     
     // Initialize X with all 1s for easy verification
     std::vector<float> data_X(BATCH * HIDDEN, 1.0f);
@@ -95,10 +95,10 @@ void test_mlp_forward(int rank, int world_size,
     MPI_Barrier(MPI_COMM_WORLD);
     
     // --- Weight W1 (Column-Sharded) ---
-    std::vector<int> shape_W1 = {HIDDEN, INTERMEDIATE};
-    Layout layout_W1(mesh, shape_W1, ShardingType::SHARDED, 1);  // Shard on dim 1 (columns)
+    std::vector<int64_t> shape_W1 = {HIDDEN, INTERMEDIATE};
+    Layout layout_W1(*mesh, shape_W1, 1);  // Shard on dim 1 (columns)
     
-    std::vector<int> local_shape_W1 = layout_W1.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W1 = layout_W1.get_local_shape(rank);
     int size_W1 = local_shape_W1[0] * local_shape_W1[1];
     
     // Rank 0 gets 0.5, Rank 1 gets 1.0 (for easy verification)
@@ -142,10 +142,10 @@ void test_mlp_forward(int rank, int world_size,
     print_section(rank, "LAYER 2: Row-Parallel MatMul");
     
     // --- Weight W2 (Row-Sharded) ---
-    std::vector<int> shape_W2 = {INTERMEDIATE, HIDDEN};
-    Layout layout_W2(mesh, shape_W2, ShardingType::SHARDED, 0);  // Shard on dim 0 (rows)
+    std::vector<int64_t> shape_W2 = {INTERMEDIATE, HIDDEN};
+    Layout layout_W2(*mesh, shape_W2, 0);  // Shard on dim 0 (rows)
     
-    std::vector<int> local_shape_W2 = layout_W2.get_local_shape(rank);
+    std::vector<int64_t> local_shape_W2 = layout_W2.get_local_shape(rank);
     int size_W2 = local_shape_W2[0] * local_shape_W2[1];
     
     // Both ranks get 1.0 for easy verification
@@ -272,9 +272,7 @@ int main(int argc, char** argv) {
     try {
         // Create mesh and process group
         std::shared_ptr<DeviceMesh> mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-        std::shared_ptr<ProcessGroup> pg = std::make_shared<ProcessGroup>(
-            rank, world_size, device_id, id
-        );
+        std::shared_ptr<ProcessGroupNCCL> pg = init_process_group(world_size, rank);
         
         if (rank == 0) {
             std::cout << "[OK] MPI initialized\n";

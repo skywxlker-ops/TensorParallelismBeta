@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
     try {
         // Create mesh and process group
         auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
-        auto pg = std::make_shared<ProcessGroup>(rank, world_size, device_id, id);
+        auto pg = init_process_group(world_size, rank);
         
         if (rank == 0) {
             std::cout << "[OK] MPI initialized\n";
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
         print_separator(rank, "Creating Layer 1 (Column-Parallel)");
         
         // W1: [INPUT_DIM, HIDDEN_DIM] column-sharded
-        Layout W1_layout(mesh, {INPUT_DIM, HIDDEN_DIM}, ShardingType::SHARDED, 1);
+        Layout W1_layout(*mesh, {INPUT_DIM, HIDDEN_DIM}, 1);
         std::vector<int> W1_local_shape = W1_layout.get_local_shape(rank);
         int W1_local_size = W1_local_shape[0] * W1_local_shape[1];
         
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
         print_separator(rank, "Creating Layer 2 (Row-Parallel)");
         
         // W2: [HIDDEN_DIM, OUTPUT_DIM] row-sharded
-        Layout W2_layout(mesh, {HIDDEN_DIM, OUTPUT_DIM}, ShardingType::SHARDED, 0);
+        Layout W2_layout(*mesh, {HIDDEN_DIM, OUTPUT_DIM}, 0);
         std::vector<int> W2_local_shape = W2_layout.get_local_shape(rank);
         int W2_local_size = W2_local_shape[0] * W2_local_shape[1];
         
@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
         // =============================================================
         print_separator(rank, "Creating Input");
         
-        Layout X_layout(mesh, {BATCH, INPUT_DIM}, ShardingType::REPLICATED);
+        Layout X_layout = Layout::replicated(*mesh, std::vector<int64_t>{BATCH, INPUT_DIM});
         std::vector<float> X_data(BATCH * INPUT_DIM, 1.0f);
         auto X = create_parameter(X_data, X_layout, mesh, pg);
         

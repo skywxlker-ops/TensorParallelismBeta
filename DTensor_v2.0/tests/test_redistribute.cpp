@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
 
     // Global tensor shape and data
-    std::vector<int> global_shape = {4, 8};
+    std::vector<int64_t> global_shape = {4, 8};
     size_t global_numel = global_shape[0] * global_shape[1];
     std::vector<float> global_data(global_numel);
     std::iota(global_data.begin(), global_data.end(), 0);
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         std::cout << "\n--- Test 1: Sharded -> Replicated ---" << std::endl;
     }
 
-    Layout layout_sharded_col(mesh, global_shape, ShardingType::SHARDED, 1);
+    Layout layout_sharded_col(*mesh, global_shape, 1);
     
     // Manually calculate the local shard for each rank (column sharding)
     std::vector<float> local_data_shard_col;
@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
     DTensor tensor_sharded(mesh, pg);
     tensor_sharded.setData(local_data_shard_col, layout_sharded_col);
 
-    Layout layout_replicated(mesh, global_shape, ShardingType::REPLICATED);
+    Layout layout_replicated = Layout::replicated(*mesh, global_shape);
     DTensor tensor_replicated = tensor_sharded.redistribute(layout_replicated);
 
     // Verification
@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
         std::cout << "\n--- Test 3: Sharded -> Sharded (different dim) ---" << std::endl;
     }
     
-    Layout layout_sharded_row(mesh, global_shape, ShardingType::SHARDED, 0);
+    Layout layout_sharded_row(*mesh, global_shape, 0);
     
     // Manually calculate the new expected local shard (row sharding)
     std::vector<float> local_data_shard_row;
@@ -140,19 +140,21 @@ int main(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     // =================================================================
-    // Test 4: Partial to Replicated (AllReduce)
+    // Test 4: Partial to Replicated (AllReduce) -> REMOVED (PARTIAL layout deprecated)
     // =================================================================
+    /*
     if (rank == 0) {
         std::cout << "\n--- Test 4: Partial -> Replicated (AllReduce) ---" << std::endl;
     }
     
     // Create a PARTIAL layout - each rank has a portion of the sum
-    Layout layout_partial(mesh, global_shape, ShardingType::PARTIAL, -1, "sum");
+    // TODO: PARTIAL removed - Layout layout_partial(*mesh, global_shape, ShardingType::PARTIAL, -1, "sum");
 
     DTensor tensor_partial(mesh, pg);
     tensor_partial.setData(global_data, layout_partial);
 
     DTensor tensor_from_partial = tensor_partial.redistribute(layout_replicated);
+    
     
 
     std::vector<float> expected_sum(global_numel);
@@ -228,6 +230,11 @@ int main(int argc, char** argv) {
     if (rank == 0) {
         std::cout << "PASSED: Partial -> Shard (ReduceScatter)" << std::endl;
         std::cout << "\n--- All Redistribute Tests PASSED! ---" << std::endl;
+    }
+    */
+    if (rank == 0) {
+         std::cout << "\n--- Test 4, 5, 6 (Partial Layout) SKIPPED (Deprecated) ---" << std::endl;
+         std::cout << "\n--- All Supported Redistribute Tests PASSED! ---" << std::endl;
     }
 
     MPI_Finalize();

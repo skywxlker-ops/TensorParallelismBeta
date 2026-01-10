@@ -27,6 +27,13 @@ class DTensor {
 public:
 
     DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroupNCCL> pg);
+    
+    /**
+     * Constructor with layout - matches friend's API.
+     * DTensor W1(device_mesh, pg, layout);
+     */
+    DTensor(DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, const Layout& layout);
+    
     ~DTensor();
 
     // Collective Communication Operations
@@ -59,7 +66,7 @@ public:
     DTensor div(const DTensor& other) const;
     DTensor matmul(const DTensor& other) const;
 
-    DTensor reshape(const std::vector<int>& new_global_shape) const;
+    DTensor reshape(const std::vector<int64_t>& new_global_shape) const;
 
     /**
      * Redistribute tensor to a new layout.
@@ -113,6 +120,25 @@ public:
 
     void print() const;
     
+    /**
+     * Display tensor values (debugging helper)
+     */
+    void display() const;
+    
+    /**
+     * Initialize tensor with random values (in-place)
+     */
+    void rand();
+    
+    /**
+     * Fused shard and transpose operation.
+     * Shards source tensor along specified dimension and stores in this tensor.
+     * @param shard_dim Dimension along which to shard the source
+     * @param root Root rank for scatter operation
+     * @param source Source DTensor to shard
+     */
+    void shard_fused_transpose(int shard_dim, int root, const DTensor& source);
+
 
     const Layout& get_layout() const { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
@@ -121,7 +147,7 @@ public:
     int rank() const { return rank_; }
 
 
-    static DTensor empty(const std::vector<int>& global_shape,
+    static DTensor empty(const std::vector<int64_t>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
                          std::shared_ptr<ProcessGroupNCCL> pg,
                          const Layout& layout);
@@ -129,7 +155,7 @@ public:
     /**
      * Create a DTensor filled with zeros.
      */
-    static DTensor zeros(const std::vector<int>& global_shape,
+    static DTensor zeros(const std::vector<int64_t>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
                          std::shared_ptr<ProcessGroupNCCL> pg,
                          const Layout& layout);
@@ -137,7 +163,7 @@ public:
     /**
      * Create a DTensor filled with ones.
      */
-    static DTensor ones(const std::vector<int>& global_shape,
+    static DTensor ones(const std::vector<int64_t>& global_shape,
                         std::shared_ptr<DeviceMesh> mesh,
                         std::shared_ptr<ProcessGroupNCCL> pg,
                         const Layout& layout);
@@ -145,7 +171,7 @@ public:
     /**
      * Create a DTensor filled with a constant value.
      */
-    static DTensor full(const std::vector<int>& global_shape,
+    static DTensor full(const std::vector<int64_t>& global_shape,
                         float value,
                         std::shared_ptr<DeviceMesh> mesh,
                         std::shared_ptr<ProcessGroupNCCL> pg,
@@ -154,7 +180,7 @@ public:
     /**
      * Create a DTensor with uniform random values in [0, 1).
      */
-    static DTensor rand(const std::vector<int>& global_shape,
+    static DTensor rand(const std::vector<int64_t>& global_shape,
                         std::shared_ptr<DeviceMesh> mesh,
                         std::shared_ptr<ProcessGroupNCCL> pg,
                         const Layout& layout);
@@ -162,7 +188,7 @@ public:
     /**
      * Create a DTensor with normal random values (mean=0, std=1).
      */
-    static DTensor randn(const std::vector<int>& global_shape,
+    static DTensor randn(const std::vector<int64_t>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
                          std::shared_ptr<ProcessGroupNCCL> pg,
                          const Layout& layout);
@@ -171,7 +197,7 @@ public:
      * Create a DTensor with random integers in [low, high).
      */
     static DTensor randint(int64_t low, int64_t high,
-                           const std::vector<int>& global_shape,
+                           const std::vector<int64_t>& global_shape,
                            std::shared_ptr<DeviceMesh> mesh,
                            std::shared_ptr<ProcessGroupNCCL> pg,
                            const Layout& layout);
@@ -219,7 +245,7 @@ private:
     void _extract_local_shard(const OwnTensor::Tensor& full_tensor, const Layout& layout);
     
     // Lazy allocation helper - only reallocate temp_tensor_ if size changed
-    void ensureTempTensor(const std::vector<int>& shape);
+    void ensureTempTensor(const std::vector<int64_t>& shape);
     
     // Stream synchronization helpers for overlap
     void recordComputeDone();   // Record event on compute stream
@@ -252,13 +278,13 @@ private:
     OwnTensor::Tensor temp_tensor_;  // TEMPORARY: Restored for debugging
 
     int size_;
-    std::vector<int> shape_; 
+    std::vector<int64_t> shape_; 
     std::string dtype_ = "float32";
 
 
 
     void printRecursive(const std::vector<float>& data,
-                        const std::vector<int>& dims,
+                        const std::vector<int64_t>& dims,
                         int dim,
                         int offset) const;
 };

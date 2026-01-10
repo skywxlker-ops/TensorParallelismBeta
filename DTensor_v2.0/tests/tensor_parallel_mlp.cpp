@@ -18,7 +18,7 @@ int main(int argc, char** argv) {
     if (rank == 0) ncclGetUniqueId(&nccl_id);
     MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, 0, MPI_COMM_WORLD);
     
-    auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
+    auto pg = init_process_group(world_size, rank);
     
     const int B = 8;      // batch size
     const int C = 768;      // input features

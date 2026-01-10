@@ -57,8 +57,8 @@ public:
         int world_size = mesh_->world_size();
         
         // W1: [hidden, intermediate] - column sharded
-        std::vector<int> shape_W1 = {config_.hidden_dim, config_.intermediate_dim};
-        Layout layout_W1(mesh_, shape_W1, ShardingType::SHARDED, 1);
+        std::vector<int64_t> shape_W1 = {config_.hidden_dim, config_.intermediate_dim};
+        Layout layout_W1(mesh_, shape_W1, 1);
         auto local_W1 = layout_W1.get_local_shape(rank_);
         int size_W1 = local_W1[0] * local_W1[1];
         std::vector<float> data_W1(size_W1, 0.01f);
@@ -66,8 +66,8 @@ public:
         W1_->setData(data_W1, layout_W1);
         
         // W2: [intermediate, hidden] - row sharded
-        std::vector<int> shape_W2 = {config_.intermediate_dim, config_.hidden_dim};
-        Layout layout_W2(mesh_, shape_W2, ShardingType::SHARDED, 0);
+        std::vector<int64_t> shape_W2 = {config_.intermediate_dim, config_.hidden_dim};
+        Layout layout_W2(mesh_, shape_W2, 0);
         auto local_W2 = layout_W2.get_local_shape(rank_);
         int size_W2 = local_W2[0] * local_W2[1];
         std::vector<float> data_W2(size_W2, 0.01f);
@@ -126,8 +126,8 @@ int main(int argc, char** argv) {
     TensorParallelMLP mlp(config, mesh, pg, rank);
     
     // Create input tensor (replicated)
-    std::vector<int> shape_X = {config.batch_size, config.hidden_dim};
-    Layout layout_X(mesh, shape_X, ShardingType::REPLICATED);
+    std::vector<int64_t> shape_X = {config.batch_size, config.hidden_dim};
+    Layout layout_X = Layout::replicated(*mesh, shape_X);
     std::vector<float> data_X(config.batch_size * config.hidden_dim, 1.0f);
     DTensor input(mesh, pg);
     input.setData(data_X, layout_X);
