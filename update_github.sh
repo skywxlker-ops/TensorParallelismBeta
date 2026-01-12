@@ -45,18 +45,18 @@ if [ -f .gitmodules ]; then
 
                 # Commit changes
                 # simple check if there are changes to commit
-                if git diff-index --quiet HEAD --; then
-                    echo "  No changes to commit in $submodule_path."
-                else
+                if ! git diff-index --quiet HEAD --; then
                     git commit -m "$COMMIT_MSG"
                     echo "  Changes committed in $submodule_path."
+                else
+                    echo "  No new changes to commit in $submodule_path."
+                fi
                     
                 # Push to GitHub
                 # Determine current branch
                 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
                 git push origin "$CURRENT_BRANCH"
                 echo "  Pushed $submodule_path to origin/$CURRENT_BRANCH."
-                fi
             )
             echo "Leave submodule: $submodule_path"
             echo "--------------------------------------------------"
