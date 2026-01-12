@@ -56,7 +56,7 @@ LIB_SRCS := \
     process_group/processGroupNccl.cpp \
     process_group/reverse.cu \
     memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
+    bridge/bridge.cpp \
     tensor/dtensor_native.cpp
 
 # Object files go into lib/objects/
@@ -114,12 +114,17 @@ $(LIB_OBJDIR)/%.o: %.cu
 # LIBRARY BUILD RULES
 # =============================================================================
 
-# Static library
-$(LIB_A): $(LIB_OBJS)
+# Static library (includes TensorLib with autograd)
+$(LIB_A): $(LIB_OBJS) $(TENSOR_LIB_A)
 	@mkdir -p $(LIBDIR)
 	@echo "\n[ARCHIVE] Creating static library: $@"
-	ar rcs $@ $^
-	@echo "[SUCCESS] Static library created: $@"
+	@echo "  - Extracting TensorLib objects..."
+	@mkdir -p $(LIBDIR)/temp_tensorlib
+	@cd $(LIBDIR)/temp_tensorlib && ar x "$(CURDIR)/$(TENSOR_LIB_A)"
+	@echo "  - Merging DTensor + TensorLib objects..."
+	ar rcs $@ $(LIB_OBJS) $(LIBDIR)/temp_tensorlib/*.o
+	@rm -rf $(LIBDIR)/temp_tensorlib
+	@echo "[SUCCESS] Static library created: $@ (includes autograd)"
 
 # Shared library
 $(LIB_SO): $(LIB_OBJS) $(TENSOR_LIB_A)
@@ -163,11 +168,20 @@ shard_benchmarking2: $(LIB_A) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] Benchmark built: benchmarks/shard_benchmarking2"
 	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./benchmarks/shard_benchmarking2\n"
 
+shard_benchmarking_vary: $(LIB_A) $(TENSOR_LIB_A)
+	@mkdir -p benchmarks
+	@echo "\n[COMPILE] benchmarks/shard_benchmarking_vary.cpp"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c benchmarks/shard_benchmarking_vary.cpp -o benchmarks/shard_benchmarking_vary.o
+	@echo "[LINKING] shard_benchmarking_vary"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o benchmarks/shard_benchmarking_vary benchmarks/shard_benchmarking_vary.o $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Benchmark built: benchmarks/shard_benchmarking_vary"
+	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./benchmarks/shard_benchmarking_vary\n"
+
 # =============================================================================
 # CLEANUP
 # =============================================================================
 
 clean:
 	@echo "[CLEAN] Removing build artifacts..."
-	rm -rf $(LIB_OBJDIR) $(LIB_A) $(LIB_SO) benchmarks/*.o benchmarks/shard_benchmarking
+	rm -rf $(LIB_OBJDIR) $(LIB_A) $(LIB_SO) benchmarks/*.o benchmarks/shard_benchmarking benchmarks/shard_benchmarking2 benchmarks/shard_benchmarking_vary
 	@echo "[CLEAN] Done"

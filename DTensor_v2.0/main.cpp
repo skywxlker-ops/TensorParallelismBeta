@@ -11,7 +11,7 @@
 #include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
-#include "bridge/tensor_ops_bridge.h"
+#include "bridge/bridge.h"
 #include "memory/cachingAllocator.hpp"
 
 // Helper function to compare vectors

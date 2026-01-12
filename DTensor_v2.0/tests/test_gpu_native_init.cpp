@@ -16,7 +16,7 @@
 #include "tensor/layout.h"
 
 // === TensorLib (for ops) ===
-#include "bridge/tensor_ops_bridge.h"
+#include "bridge/bridge.h"
 #include "memory/cachingAllocator.hpp"
 
 using namespace OwnTensor;

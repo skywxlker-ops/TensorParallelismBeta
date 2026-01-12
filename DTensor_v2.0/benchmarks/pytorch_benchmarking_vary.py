@@ -1,14 +1,17 @@
 """
 Benchmark DTensor sharding speed for (batch, time, channels) tensors with varying sizes.
+Outputs results to CSV file for comparison.
 
 Usage:
-    torchrun --nproc_per_node=2 benchmark_dtensor_sharding_vary.py
+    torchrun --nproc_per_node=2 pytorch_benchmarking_vary.py
 """
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor, Shard, Replicate, distribute_tensor
 from torch.distributed.device_mesh import DeviceMesh
 import time
+import csv
+import os
 
 def benchmark_sharding(b, t, c, mesh, shard_dim=0, num_iterations=100):
     """Measure sharding speed for a (b, t, c) tensor."""
@@ -35,9 +38,14 @@ def benchmark_sharding(b, t, c, mesh, shard_dim=0, num_iterations=100):
     
     avg_time_ms = (end - start) / num_iterations * 1000
     tensor_size_mb = tensor.numel() * tensor.element_size() / (1024 * 1024)
+    throughput = tensor_size_mb / (avg_time_ms / 1000)
     
-    if rank == 0:
-        print(f"Shape: ({b}, {t}, {c}) | Size: {tensor_size_mb:.2f} MB | Time: {avg_time_ms:.3f} ms | Throughput: {tensor_size_mb / (avg_time_ms / 1000):.2f} MB/s")
+    return {
+        'b': b, 't': t, 'c': c,
+        'size_mb': tensor_size_mb,
+        'time_ms': avg_time_ms,
+        'throughput_mbs': throughput
+    }
 
 def main():
     dist.init_process_group(backend="nccl")
@@ -48,7 +56,7 @@ def main():
     
     if rank == 0:
         print(f"\n{'='*60}")
-        print(f"DTensor Sharding Benchmark (Varying Sizes)")
+        print(f"PyTorch DTensor Sharding Benchmark (Varying Sizes)")
         print(f"{'='*60}")
         print(f"World size: {world_size}")
         print(f"Fixed Batch (b): 8")
@@ -56,18 +64,31 @@ def main():
 
     # Varying parameters
     b = 8
-    # Varying c (channels) and t (time/sequence length)
-    # Using a mix of sizes to simulate different model scales
     t_values = [128, 512, 1024, 2048]
     c_values = [768, 1024, 2048, 4096]
+    
+    results = []
     
     # Iterate through all combinations
     for t in t_values:
         for c in c_values:
-            # We use shard_dim=2 (channels) as typically done in the original benchmark example
-            benchmark_sharding(b, t, c, mesh, shard_dim=2, num_iterations=1000)
+            result = benchmark_sharding(b, t, c, mesh, shard_dim=2, num_iterations=1000)
+            results.append(result)
             
+            if rank == 0:
+                print(f"Shape: ({result['b']}, {result['t']}, {result['c']}) | "
+                      f"Size: {result['size_mb']:.2f} MB | "
+                      f"Time: {result['time_ms']:.3f} ms | "
+                      f"Throughput: {result['throughput_mbs']:.2f} MB/s")
+    
+    # Write CSV on rank 0 only
     if rank == 0:
+        csv_path = os.path.join(os.path.dirname(__file__), 'pytorch_benchmark_results.csv')
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['b', 't', 'c', 'size_mb', 'time_ms', 'throughput_mbs'])
+            writer.writeheader()
+            writer.writerows(results)
+        print(f"\nResults saved to: {csv_path}")
         print(f"{'='*60}\n")
     
     dist.destroy_process_group()

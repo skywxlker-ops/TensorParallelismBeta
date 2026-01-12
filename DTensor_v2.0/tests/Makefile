@@ -69,7 +69,8 @@ TESTS = \
     test_benchmark_layouts \
     test_fault_tolerance \
     test_memory_pool_efficiency \
-    test_caching_allocator
+    test_caching_allocator \
+    test_dtensor_autograd
 
 # =============================================================================
 # Build Rules
