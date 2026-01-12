@@ -440,7 +440,7 @@ void DTensor::shard(int dim, int root) {
 }
 
 void DTensor::scale(float factor) {
-    OwnTensor::Tensor scaled = TensorOpsBridge::mul(tensor_, factor);
+    OwnTensor::Tensor scaled = Bridge::mul(tensor_, factor);
     tensor_ = std::move(scaled);
 }
 
@@ -453,7 +453,7 @@ DTensor DTensor::func(const DTensor& other) const { \
     if (!layout_.is_compatible(other.get_layout())) { \
         throw std::runtime_error("Incompatible layouts for operation " #op_name); \
     } \
-    OwnTensor::Tensor result = TensorOpsBridge::op_name(tensor_, other.tensor_); \
+    OwnTensor::Tensor result = Bridge::op_name(tensor_, other.tensor_); \
     return DTensor(device_mesh_, pg_, result, layout_); \
 }
 
@@ -499,7 +499,7 @@ DTensor DTensor::matmul(const DTensor& other) const {
 
 DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
     // Column-Parallel: X [M, K] @ W1 [K, N/P] -> H [M, N/P]
-    OwnTensor::Tensor Y_shard = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
+    OwnTensor::Tensor Y_shard = Bridge::autograd::matmul(this->tensor_, other.local_tensor());
 
     std::vector<int64_t> Y_global_shape = {
         this->layout_.get_global_shape()[0],
@@ -512,7 +512,7 @@ DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
 
 DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
     // Row-Parallel: H [M, N/P] @ W2 [N/P, K] -> Y_partial [M, K]
-    OwnTensor::Tensor Y_partial = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
+    OwnTensor::Tensor Y_partial = Bridge::autograd::matmul(this->tensor_, other.local_tensor());
 
     std::vector<int64_t> Y_global_shape = {
         this->layout_.get_global_shape()[0],
@@ -592,7 +592,7 @@ DTensor DTensor::rand(const std::vector<int64_t>& global_shape,
                       const Layout& layout) {
     int rank = pg->get_rank();
     std::vector<int64_t> local_shape = layout.get_local_shape(rank);
-    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::rand(toShape(local_shape), getOpts(rank));
+    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::rand<float>(toShape(local_shape), getOpts(rank));
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
@@ -602,7 +602,7 @@ DTensor DTensor::randn(const std::vector<int64_t>& global_shape,
                        const Layout& layout) {
     int rank = pg->get_rank();
     std::vector<int64_t> local_shape = layout.get_local_shape(rank);
-    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::randn(toShape(local_shape), getOpts(rank));
+    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::randn<float>(toShape(local_shape), getOpts(rank));
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
@@ -614,7 +614,7 @@ DTensor DTensor::randint(int64_t low, int64_t high,
     int rank = pg->get_rank();
     std::vector<int64_t> local_shape = layout.get_local_shape(rank);
     
-    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::rand(toShape(local_shape), getOpts(rank));
+    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::rand<float>(toShape(local_shape), getOpts(rank));
     size_t numel = numelFromShape(local_shape);
     
     std::vector<float> data(numel);
@@ -850,7 +850,7 @@ void DTensor::display() const {
 
 void DTensor::rand() {
     // Generate random tensor on device
-    tensor_ = OwnTensor::Tensor::rand(tensor_.shape(), 
+    tensor_ = OwnTensor::Tensor::rand<float>(tensor_.shape(), 
         OwnTensor::TensorOptions()
             .with_device(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_))
             .with_dtype(OwnTensor::Dtype::Float32));
@@ -1053,4 +1053,35 @@ void DTensor::waitForCompute() {
 
 void DTensor::waitForComm() {
     cudaStreamWaitEvent(compute_stream_, comm_event_, 0);
+}
+
+// ============================================================================
+// Autograd Interface
+// ============================================================================
+
+void DTensor::set_requires_grad(bool requires) {
+    requires_grad_ = requires;
+    tensor_.set_requires_grad(requires);
+}
+
+OwnTensor::Tensor DTensor::grad() const {
+    return tensor_.grad_view();
+}
+
+void DTensor::backward(const DTensor* grad_output) {
+    if (!requires_grad_) {
+        throw std::runtime_error("backward() called on DTensor that doesn't require grad");
+    }
+    
+    if (grad_output) {
+        Bridge::autograd::backward(tensor_, &grad_output->local_tensor());
+    } else {
+        Bridge::autograd::backward(tensor_, nullptr);
+    }
+}
+
+void DTensor::zero_grad() {
+    if (tensor_.requires_grad()) {
+        tensor_.fill_grad<float>(0.0f);
+    }
 }

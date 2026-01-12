@@ -51,10 +51,11 @@ if [ -f .gitmodules ]; then
                     git commit -m "$COMMIT_MSG"
                     echo "  Changes committed in $submodule_path."
                     
-                    # Push to GitHub
-                    # We assume 'main' is the target branch. 
-                    git push origin main
-                    echo "  Pushed $submodule_path to origin/main."
+                # Push to GitHub
+                # Determine current branch
+                CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+                git push origin "$CURRENT_BRANCH"
+                echo "  Pushed $submodule_path to origin/$CURRENT_BRANCH."
                 fi
             )
             echo "Leave submodule: $submodule_path"
@@ -66,8 +67,11 @@ fi
 echo "Processing Main Repository..."
 echo "--------------------------------------------------"
 
+# Determine current branch
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
 # Pull remote changes and allow unrelated histories (for first-time merges)
-git pull origin main --allow-unrelated-histories || true
+git pull origin "$CURRENT_BRANCH" --allow-unrelated-histories || true
 
 # Stage all changes
 git add .
@@ -76,6 +80,6 @@ git add .
 git commit -m "$COMMIT_MSG" || echo "Nothing to commit."
 
 # Push to GitHub
-git push origin main
+git push origin "$CURRENT_BRANCH"
 
 echo "Update pushed to GitHub successfully!"

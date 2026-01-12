@@ -6,8 +6,8 @@
 extern "C" void __force_link_dtensor_symbols() {
     std::cerr << "[DTensor] Forcing symbol linkage (no runtime init)..." << std::endl;
 
-    // Reference TensorOpsBridge::add (returns Tensor, not void)
-    auto bridge_fn = &TensorOpsBridge::add;
+    // Reference Bridge::add (returns Tensor, not void)
+    auto bridge_fn = &Bridge::add;
     auto pg_fn = &ProcessGroup::getRank;
 
     (void)bridge_fn;

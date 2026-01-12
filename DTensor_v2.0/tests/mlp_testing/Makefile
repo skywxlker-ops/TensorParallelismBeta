@@ -53,7 +53,7 @@ CORE_SRCS = \
     $(PARENT_DIR)/tensor/device_mesh.cpp \
     $(PARENT_DIR)/process_group/processGroupNccl.cpp \
     $(PARENT_DIR)/memory/cachingAllocator.cpp \
-    $(PARENT_DIR)/bridge/tensor_ops_bridge.cpp \
+    $(PARENT_DIR)/bridge/bridge.cpp \
     $(PARENT_DIR)/tensor/placement.cpp
 
 CORE_CUDA_SRCS = \

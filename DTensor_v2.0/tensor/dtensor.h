@@ -8,7 +8,7 @@
 #include "memory/cachingAllocator.hpp"
 
 
-#include "bridge/tensor_ops_bridge.h"
+#include "bridge/bridge.h"
 #include "device/Device.h"
 #include "dtype/Dtype.h"
 
@@ -146,6 +146,37 @@ public:
     std::shared_ptr<DeviceMesh> get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
 
+    // =========================================
+    // AUTOGRAD INTERFACE
+    // =========================================
+    
+    /**
+     * Check if this DTensor requires gradient tracking.
+     */
+    bool requires_grad() const { return requires_grad_; }
+    
+    /**
+     * Enable/disable gradient tracking.
+     */
+    void set_requires_grad(bool requires);
+    
+    /**
+     * Get the gradient tensor (after backward).
+     * Returns the local shard of the gradient.
+     */
+    OwnTensor::Tensor grad() const;
+    
+    /**
+     * Compute gradients via backpropagation.
+     * @param grad_output Initial gradient (default: ones like this tensor)
+     */
+    void backward(const DTensor* grad_output = nullptr);
+    
+    /**
+     * Zero out gradients (for training loops).
+     */
+    void zero_grad();
+
 
     static DTensor empty(const std::vector<int64_t>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
@@ -280,6 +311,7 @@ private:
     int size_;
     std::vector<int64_t> shape_; 
     std::string dtype_ = "float32";
+    bool requires_grad_ = false;
 
 
 

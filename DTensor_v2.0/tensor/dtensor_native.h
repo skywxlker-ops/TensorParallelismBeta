@@ -22,7 +22,7 @@ extern CachingAllocator gAllocator;
 namespace OwnTensor {
 
 // Native DTensor integrated directly into OwnTensor namespace
-// Eliminates TensorOpsBridge indirection for benchmarking
+// Eliminates Bridge indirection for benchmarking
 class DTensorNative {
 public:
     DTensorNative(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroupNCCL> pg);

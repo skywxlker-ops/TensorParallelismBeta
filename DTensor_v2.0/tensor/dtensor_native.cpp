@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include <sstream>
 
-// Use TensorOpsBridge for ops (still more direct than going through DTensor wrapper)
-#include "bridge/tensor_ops_bridge.h"
+// Use Bridge for ops (more direct than going through DTensor wrapper)
+#include "bridge/bridge.h"
 
 namespace OwnTensor {
 
@@ -135,7 +135,7 @@ DTensorNative DTensorNative::matmul(const DTensorNative& other) const {
 
 DTensorNative DTensorNative::_column_parallel_matmul(const DTensorNative& other) const {
     // Direct TensorOps call (no DTensor layer)
-    Tensor Y_shard = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
+    Tensor Y_shard = Bridge::matmul(this->tensor_, other.local_tensor());
 
     std::vector<int64_t> Y_global_shape = {
         this->layout_.get_global_shape()[0],
@@ -148,7 +148,7 @@ DTensorNative DTensorNative::_column_parallel_matmul(const DTensorNative& other)
 
 DTensorNative DTensorNative::_row_parallel_matmul(const DTensorNative& other) const {
     // Direct TensorOps call (no DTensor layer)
-    Tensor Y_partial = TensorOpsBridge::matmul(this->tensor_, other.local_tensor());
+    Tensor Y_partial = Bridge::matmul(this->tensor_, other.local_tensor());
 
     std::vector<int64_t> Y_global_shape = {
         this->layout_.get_global_shape()[0],

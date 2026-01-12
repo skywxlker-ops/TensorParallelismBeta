@@ -67,16 +67,16 @@ void benchmark_single_gpu(const BenchmarkConfig& config, int rank) {
     
     // Warmup iterations
     for (int i = 0; i < config.warmup_iters; i++) {
-        OwnTensor::Tensor H = TensorOpsBridge::matmul(X, W1);   // [BT, C] x [C, F] = [BT, F]
-        OwnTensor::Tensor Y = TensorOpsBridge::matmul(H, W2);   // [BT, F] x [F, C] = [BT, C]
+        OwnTensor::Tensor H = Bridge::matmul(X, W1);   // [BT, C] x [C, F] = [BT, F]
+        OwnTensor::Tensor Y = Bridge::matmul(H, W2);   // [BT, F] x [F, C] = [BT, C]
     }
     cudaDeviceSynchronize();
     
     // Benchmark iterations
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < config.bench_iters; i++) {
-        OwnTensor::Tensor H = TensorOpsBridge::matmul(X, W1);
-        OwnTensor::Tensor Y = TensorOpsBridge::matmul(H, W2);
+        OwnTensor::Tensor H = Bridge::matmul(X, W1);
+        OwnTensor::Tensor Y = Bridge::matmul(H, W2);
     }
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
