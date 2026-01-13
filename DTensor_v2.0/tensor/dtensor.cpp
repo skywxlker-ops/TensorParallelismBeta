@@ -100,8 +100,10 @@ DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh,
       device_mesh_(device_mesh),
       pg_(pg),
       layout_(layout),
-      tensor_(local_tensor),
-      temp_tensor_(local_tensor)
+      tensor_(),
+
+    //   tensor_(local_tensor),
+    //   temp_tensor_(local_tensor)
 {
     cudaSetDevice(rank_);
     
@@ -116,6 +118,9 @@ DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh,
     // Create events for stream synchronization
     cudaEventCreateWithFlags(&compute_event_, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&comm_event_, cudaEventDisableTiming);
+    // Initialize requires_grad_ from the local tensor
+    requires_grad_ = tensor_.requires_grad();
+
 }
 
 // Constructor matching friend's API: DTensor(device_mesh, pg, layout)
@@ -272,6 +277,7 @@ void DTensor::allReduce() {
                     size_, OwnTensor::Dtype::Float32, sum, true);
 }
 
+
 void DTensor::reduceScatter() {
     size_t count_per_shard = size_ / world_size_;
     
@@ -330,13 +336,13 @@ void DTensor::allReduce_async() {
     recordCommDone();
 }
 
-void DTensor::sync_async() {
-    recordComputeDone();
-    waitForCompute();
-    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(),
-                          size_, OwnTensor::Dtype::Float32, sum);
-    recordCommDone();
-}
+// void DTensor::sync_async() {
+//     recordComputeDone();
+//     waitForCompute();
+//     pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(),
+//                           size_, OwnTensor::Dtype::Float32, sum);
+//     recordCommDone();
+// }
 
 void DTensor::reduceScatter_async() {
     size_t count_per_shard = size_ / world_size_;
@@ -461,6 +467,22 @@ DEFINE_TENSOR_OP(add, add)
 DEFINE_TENSOR_OP(sub, sub)
 DEFINE_TENSOR_OP(mul, mul)
 DEFINE_TENSOR_OP(div, div)
+
+DTensor DTensor::relu() const {
+    OwnTensor::Tensor result = Bridge::autograd::relu(tensor_);
+    return DTensor(device_mesh_, pg_, result, layout_);
+}
+
+DTensor DTensor::mse_loss(const DTensor& target) const {
+    if (!layout_.is_compatible(target.get_layout())) {
+        throw std::runtime_error("Incompatible layouts for mse_loss");
+    }
+    OwnTensor::Tensor result = Bridge::autograd::mse_loss(tensor_, target.tensor_);
+    // Loss is typically a scalar or reduced, but here it's on local shard.
+    // However, MSE loss in OwnTensor::autograd returns a scalar (reduce_mean).
+    // So the result is replicated (scalar).
+    return DTensor(device_mesh_, pg_, result, Layout::replicated(*device_mesh_, {1}));
+}
 
 #undef DEFINE_TENSOR_OP
 

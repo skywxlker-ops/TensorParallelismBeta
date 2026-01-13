@@ -56,6 +56,16 @@ OwnTensor::Tensor mul(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
 OwnTensor::Tensor div(const OwnTensor::Tensor& A, const OwnTensor::Tensor& B);
 
 /**
+ * Autograd-aware activations.
+ */
+OwnTensor::Tensor relu(const OwnTensor::Tensor& x);
+
+/**
+ * Autograd-aware loss functions.
+ */
+OwnTensor::Tensor mse_loss(const OwnTensor::Tensor& predictions, const OwnTensor::Tensor& targets);
+
+/**
  * Execute backward pass on a tensor.
  */
 void backward(OwnTensor::Tensor& output, const OwnTensor::Tensor* grad_output = nullptr);
