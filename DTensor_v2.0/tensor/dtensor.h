@@ -48,7 +48,7 @@ public:
     void allReduce_async();     // Queue AllReduce, don't wait
     void reduceScatter_async(); // Queue ReduceScatter, don't wait
     void allGather_async();     // Queue AllGather, don't wait
-    void sync_async();          // Queue sync (AllReduce SUM), don't wait
+    // void sync_async();          // Queue sync (AllReduce SUM), don't wait
 
     void setData(const std::vector<float>& host_data, const Layout& layout);
     
@@ -65,6 +65,8 @@ public:
     DTensor mul(const DTensor& other) const;
     DTensor div(const DTensor& other) const;
     DTensor matmul(const DTensor& other) const;
+    DTensor relu() const;
+    DTensor mse_loss(const DTensor& target) const;
 
     DTensor reshape(const std::vector<int64_t>& new_global_shape) const;
 
@@ -285,8 +287,8 @@ private:
     void waitForComm();         // Make compute stream wait for comm
     
     // Memory pool helper - get temporary buffer from caching allocator
-    void* getTempBuffer(size_t bytes);
-    void freeTempBuffer(void* ptr);
+    // void* getTempBuffer(size_t bytes);
+    // void freeTempBuffer(void* ptr);
 
 
     int rank_;

@@ -9,6 +9,8 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <nccl.h>
+#include "../Tensor-Implementations/include/autograd/operations/ActivationOps.h"
+#include "../Tensor-Implementations/include/autograd/operations/LossOps.h"
 
 #pragma GCC visibility push(default)
 
@@ -135,6 +137,14 @@ Tensor div(const Tensor& A, const Tensor& B) {
         return OwnTensor::autograd::div(A, B);
     }
     return A / B;
+}
+
+Tensor relu(const Tensor& x) {
+    return OwnTensor::autograd::relu(x);
+}
+
+Tensor mse_loss(const Tensor& predictions, const Tensor& targets) {
+    return OwnTensor::autograd::mse_loss(predictions, targets);
 }
 
 void backward(Tensor& output, const Tensor* grad_output) {

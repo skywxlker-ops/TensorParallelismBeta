@@ -114,17 +114,11 @@ $(LIB_OBJDIR)/%.o: %.cu
 # LIBRARY BUILD RULES
 # =============================================================================
 
-# Static library (includes TensorLib with autograd)
 $(LIB_A): $(LIB_OBJS) $(TENSOR_LIB_A)
 	@mkdir -p $(LIBDIR)
 	@echo "\n[ARCHIVE] Creating static library: $@"
-	@echo "  - Extracting TensorLib objects..."
-	@mkdir -p $(LIBDIR)/temp_tensorlib
-	@cd $(LIBDIR)/temp_tensorlib && ar x "$(CURDIR)/$(TENSOR_LIB_A)"
-	@echo "  - Merging DTensor + TensorLib objects..."
-	ar rcs $@ $(LIB_OBJS) $(LIBDIR)/temp_tensorlib/*.o
-	@rm -rf $(LIBDIR)/temp_tensorlib
-	@echo "[SUCCESS] Static library created: $@ (includes autograd)"
+	@ar rcs $@ $(LIB_OBJS)
+	@echo "[SUCCESS] Static library created: $@"
 
 # Shared library
 $(LIB_SO): $(LIB_OBJS) $(TENSOR_LIB_A)
