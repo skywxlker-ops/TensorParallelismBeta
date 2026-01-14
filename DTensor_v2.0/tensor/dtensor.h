@@ -141,9 +141,9 @@ public:
      */
     void shard_fused_transpose(int shard_dim, int root, const DTensor& source);
 
-
     const Layout& get_layout() const { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
+    OwnTensor::Tensor& local_tensor() { return tensor_; }  // Non-const for weight updates
     std::shared_ptr<ProcessGroupNCCL> get_pg() const { return pg_; }
     std::shared_ptr<DeviceMesh> get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
