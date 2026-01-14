@@ -22,7 +22,7 @@ def plot_loss(csv_path="training_log.csv", output_path="loss_vs_step.png"):
     ax.set_yscale('log')
     
     # Labels and title
-    ax.set_title('DTensor GPT Training: Loss vs Step (Log Scale)', fontsize=14, fontweight='bold')
+    ax.set_title('DTensor GPT Training: Loss vs Step ', fontsize=14, fontweight='bold')
     ax.set_xlabel('Training Step', fontsize=12)
     ax.set_ylabel('Loss (log scale)', fontsize=12)
     
