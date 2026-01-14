@@ -1,18 +1,19 @@
 /**
  * @file gpt_train_dtensor.cpp
- * @brief Simplified Language Model Training with DTensor Tensor Parallelism
+ * @brief Language Model Training with DTensor Tensor Parallelism
  * 
- * Demonstrates:
- * - Token embedding lookup
- * - 2-layer MLP with Column/Row parallelism
- * - Output projection + cross-entropy loss
- * - Training loop with gradient verification
+ * Features:
+ * - DMLP class with Column/Row parallelism
+ * - SGD optimizer with weight updates
+ * - Learning rate scheduling (warmup + cosine decay)
+ * - Text generation from prompts
  * - CSV logging of training metrics
  * 
  * Run with: mpirun -np 2 ./gpt_train_dtensor
  */
 
 #include <unparalleled/unparalleled.h>
+#include "nn/nn.hpp"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -21,7 +22,38 @@
 #include <chrono>
 #include <cstring>
 
-// Load .npy file (assumes uint16, 1D array)
+// =============================================================================
+// Learning Rate Scheduler (Warmup + Cosine Decay)
+// =============================================================================
+
+class LRScheduler {
+public:
+    LRScheduler(float max_lr, float min_lr, int warmup_steps, int max_steps)
+        : max_lr_(max_lr), min_lr_(min_lr), 
+          warmup_steps_(warmup_steps), max_steps_(max_steps) {}
+    
+    float get_lr(int step) const {
+        if (step < warmup_steps_) {
+            // Linear warmup
+            return max_lr_ * (static_cast<float>(step + 1) / warmup_steps_);
+        } else {
+            // Cosine decay
+            float decay_ratio = static_cast<float>(step - warmup_steps_) / 
+                               (max_steps_ - warmup_steps_);
+            float coeff = 0.5f * (1.0f + std::cos(M_PI * decay_ratio));
+            return min_lr_ + coeff * (max_lr_ - min_lr_);
+        }
+    }
+
+private:
+    float max_lr_, min_lr_;
+    int warmup_steps_, max_steps_;
+};
+
+// =============================================================================
+// Load .npy file (uint16, 1D array)
+// =============================================================================
+
 std::vector<uint16_t> load_npy_uint16(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
     if (!file.is_open()) {
@@ -61,6 +93,25 @@ std::vector<uint16_t> load_npy_uint16(const std::string& filename) {
     return data;
 }
 
+// =============================================================================
+// Calculate gradient norm for a DTensor
+// =============================================================================
+
+float compute_grad_norm(DTensor& param) {
+    auto grad = param.grad();
+    auto grad_cpu = grad.to_cpu();
+    const float* ptr = grad_cpu.data<float>();
+    float norm = 0.0f;
+    for (size_t i = 0; i < grad_cpu.numel(); ++i) {
+        norm += ptr[i] * ptr[i];
+    }
+    return std::sqrt(norm);
+}
+
+// =============================================================================
+// Main
+// =============================================================================
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     
@@ -78,21 +129,29 @@ int main(int argc, char** argv) {
         std::cout << "World size: " << world_size << std::endl;
     }
     
+    // =========================================================================
     // Hyperparameters
-    const int B = 4;           // Batch size
-    const int T = 64;          // Sequence length
+    // =========================================================================
+    const int B = 4;              // Batch size
+    const int T = 64;             // Sequence length
     const int vocab_size = 50257;
-    const int n_embd = 256;    // Embedding dimension
-    const int hidden_dim = 512; // MLP hidden dimension
-    const int max_steps = 100;
-    const float lr = 1e-3f;
+    const int n_embd = 256;       // Embedding dimension
+    const int hidden_dim = 512;   // MLP hidden dimension
+    const int max_steps = 1000;   // Training steps
+    const int warmup_steps = 100; // LR warmup steps
+    const float max_lr = 6e-4f;   // Max learning rate
+    const float min_lr = 6e-5f;   // Min learning rate (10% of max)
     
     if (rank == 0) {
         std::cout << "Config: B=" << B << ", T=" << T << ", n_embd=" << n_embd 
                   << ", hidden=" << hidden_dim << std::endl;
+        std::cout << "Training: " << max_steps << " steps, warmup=" << warmup_steps
+                  << ", lr=" << max_lr << " -> " << min_lr << std::endl;
     }
     
-    // Load dataset (path relative to DTensor_v2.0/mlp/)
+    // =========================================================================
+    // Load Dataset
+    // =========================================================================
     std::string data_path = "../../edufineweb_train_000001.npy";
     std::vector<uint16_t> tokens;
     try {
@@ -106,24 +165,21 @@ int main(int argc, char** argv) {
         return 1;
     }
     
-    // Model weights (simplified: embedding + 2-layer MLP + output projection)
-    // Embedding: [vocab_size, n_embd] - replicated (too large to shard effectively)
-    // W1: [n_embd, hidden_dim] - Column parallel (shard hidden_dim)
-    // W2: [hidden_dim, n_embd] - Row parallel (shard hidden_dim)
-    // W_out: [n_embd, vocab_size] - Column parallel (shard vocab_size)
+    // =========================================================================
+    // Model: DMLP with Tensor Parallelism
+    // =========================================================================
+    DMLP mlp(n_embd, hidden_dim, n_embd, mesh, pg);
+    mlp.set_requires_grad(true);
     
-    // Layouts
-    Layout w1_layout(*mesh, {n_embd, hidden_dim}, 1);  // Column shard
-    Layout w2_layout(*mesh, {hidden_dim, n_embd}, 0);  // Row shard
+    // Learning rate scheduler
+    LRScheduler lr_scheduler(max_lr, min_lr, warmup_steps, max_steps);
     
-    // Initialize weights
-    auto W1 = DTensor::randn({n_embd, hidden_dim}, mesh, pg, w1_layout);
-    auto W2 = DTensor::randn({hidden_dim, n_embd}, mesh, pg, w2_layout);
+    // SGD optimizer
+    SGD optimizer(max_lr);
     
-    W1.set_requires_grad(true);
-    W2.set_requires_grad(true);
-    
-    // CSV output file
+    // =========================================================================
+    // CSV Logging
+    // =========================================================================
     std::ofstream csv_file;
     if (rank == 0) {
         csv_file.open("training_log.csv");
@@ -136,15 +192,22 @@ int main(int argc, char** argv) {
         std::cout << "\nStarting training for " << max_steps << " steps..." << std::endl;
     }
     
+    // =========================================================================
+    // Training Loop
+    // =========================================================================
     for (int step = 0; step < max_steps; ++step) {
         auto t0 = std::chrono::high_resolution_clock::now();
         
-        // Get batch of tokens
+        // Update learning rate
+        float current_lr = lr_scheduler.get_lr(step);
+        optimizer.set_lr(current_lr);
+        
+        // ---------------------------------------------------------------------
+        // Get batch of tokens and create embeddings
+        // ---------------------------------------------------------------------
         std::vector<float> input_embeddings(B * T * n_embd, 0.0f);
         std::vector<int> target_tokens(B * T);
         
-        // Simple embedding: just use token ID as index into a random embedding
-        // (In reality, we'd have a proper embedding matrix lookup)
         for (int b = 0; b < B; ++b) {
             for (int t = 0; t < T; ++t) {
                 size_t idx = data_pos + b * (T + 1) + t;
@@ -157,9 +220,9 @@ int main(int argc, char** argv) {
                 float token_f = static_cast<float>(tokens[idx]) / vocab_size;
                 for (int e = 0; e < n_embd; ++e) {
                     input_embeddings[(b * T + t) * n_embd + e] = 
-                        std::sin(token_f * (e + 1) * 0.1f);  // Deterministic pseudo-embedding
+                        std::sin(token_f * (e + 1) * 0.1f);
                 }
-                target_tokens[b * T + t] = tokens[idx + 1] % n_embd;  // Simplified target
+                target_tokens[b * T + t] = tokens[idx + 1] % n_embd;
             }
         }
         
@@ -173,74 +236,58 @@ int main(int argc, char** argv) {
         auto X = DTensor::zeros({B * T, n_embd}, mesh, pg, input_layout);
         X.setData(input_embeddings, input_layout);
         
-        // Create target DTensor [B*T, n_embd] - for MSE loss
+        // Create target DTensor [B*T, n_embd] - for MSE loss (one-hot)
         Layout target_layout = Layout::replicated(*mesh, {B * T, n_embd});
         std::vector<float> target_emb(B * T * n_embd, 0.0f);
         for (int i = 0; i < B * T; ++i) {
-            target_emb[i * n_embd + target_tokens[i]] = 1.0f;  // One-hot (simplified)
+            target_emb[i * n_embd + target_tokens[i]] = 1.0f;
         }
         auto Target = DTensor::zeros({B * T, n_embd}, mesh, pg, target_layout);
         Target.setData(target_emb, target_layout);
         
-        // Forward pass
-        // H = X @ W1  [B*T, n_embd] @ [n_embd, hidden_dim/P] -> [B*T, hidden_dim/P]
-        auto H = X.matmul(W1);
+        // ---------------------------------------------------------------------
+        // Forward Pass
+        // ---------------------------------------------------------------------
+        auto Y = mlp.forward(X);
         
-        // H_act = ReLU(H)
-        auto H_act = H.relu();
-        
-        // Y = H_act @ W2  [B*T, hidden_dim/P] @ [hidden_dim/P, n_embd] -> [B*T, n_embd]
-        auto Y = H_act.matmul(W2);
-        
-        // Loss: MSE between Y and target one-hot (simplified cross-entropy proxy)
+        // Loss: MSE between Y and target one-hot
         auto Loss = Y.mse_loss(Target);
-        
         float loss_val = Loss.getData()[0];
         
-        // Backward
-        W1.zero_grad();
-        W2.zero_grad();
+        // ---------------------------------------------------------------------
+        // Backward Pass
+        // ---------------------------------------------------------------------
+        mlp.zero_grad();
         Loss.backward();
         
-        // Get gradient norms from the internal OwnTensor
-        auto grad_w1_tensor = W1.grad();  // Returns OwnTensor::Tensor
-        auto grad_w2_tensor = W2.grad();
+        // Compute gradient norms
+        float grad_fc1_norm = compute_grad_norm(mlp.fc1().weight());
+        float grad_fc2_norm = compute_grad_norm(mlp.fc2().weight());
+        float total_norm = std::sqrt(grad_fc1_norm * grad_fc1_norm + 
+                                      grad_fc2_norm * grad_fc2_norm);
         
-        // Copy gradient to CPU for norm calculation
-        auto g1_cpu = grad_w1_tensor.to_cpu();
-        auto g2_cpu = grad_w2_tensor.to_cpu();
+        // ---------------------------------------------------------------------
+        // Optimizer Step (Weight Update)
+        // ---------------------------------------------------------------------
+        std::vector<DTensor*> params = {&mlp.fc1().weight(), &mlp.fc2().weight()};
+        optimizer.step(params);
         
-        float grad_w1_norm = 0.0f, grad_w2_norm = 0.0f;
-        const float* g1_ptr = g1_cpu.data<float>();
-        const float* g2_ptr = g2_cpu.data<float>();
-        
-        for (size_t i = 0; i < g1_cpu.numel(); ++i) grad_w1_norm += g1_ptr[i] * g1_ptr[i];
-        for (size_t i = 0; i < g2_cpu.numel(); ++i) grad_w2_norm += g2_ptr[i] * g2_ptr[i];
-        grad_w1_norm = std::sqrt(grad_w1_norm);
-        grad_w2_norm = std::sqrt(grad_w2_norm);
-        
-        // Combined gradient norm (L2 norm of both weight gradients)
-        float total_norm = std::sqrt(grad_w1_norm * grad_w1_norm + grad_w2_norm * grad_w2_norm);
-        
-        // Simple SGD update (manual, since we don't have an optimizer class)
-        // W1 -= lr * grad_W1
-        // W2 -= lr * grad_W2
-        // (Skipped for now - just demonstrating forward/backward)
-        
+        // ---------------------------------------------------------------------
+        // Logging
+        // ---------------------------------------------------------------------
         auto t1 = std::chrono::high_resolution_clock::now();
         float dt_ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
         float tokens_per_sec = static_cast<float>(B * T) / (dt_ms / 1000.0f);
         
-        // Log to CSV
         if (rank == 0) {
             csv_file << step << "," << std::fixed << std::setprecision(6) 
-                     << loss_val << "," << lr << "," << total_norm 
+                     << loss_val << "," << current_lr << "," << total_norm 
                      << "," << dt_ms << "," << tokens_per_sec << "\n";
             
             if (step % 10 == 0) {
                 std::cout << "step " << std::setw(5) << step 
                           << " | loss: " << std::fixed << std::setprecision(4) << loss_val
-                          << " | lr: " << std::scientific << std::setprecision(2) << lr
+                          << " | lr: " << std::scientific << std::setprecision(2) << current_lr
                           << " | norm: " << std::fixed << std::setprecision(4) << total_norm
                           << " | dt: " << std::setprecision(2) << dt_ms << "ms"
                           << " | tok/sec: " << std::setprecision(2) << tokens_per_sec << std::endl;
@@ -252,6 +299,93 @@ int main(int argc, char** argv) {
         csv_file.close();
         std::cout << "\n=== Training Complete ===" << std::endl;
         std::cout << "Training log saved to: training_log.csv" << std::endl;
+    }
+    
+    // =========================================================================
+    // Text Generation
+    // =========================================================================
+    
+    auto encode_prompt = [](const std::string& prompt) -> std::vector<int> {
+        std::vector<int> tokens;
+        for (char c : prompt) {
+            tokens.push_back(static_cast<int>(c));
+        }
+        return tokens;
+    };
+    
+    auto generate = [&](const std::vector<int>& prompt_tokens, int max_new_tokens) -> std::vector<int> {
+        std::vector<int> generated = prompt_tokens;
+        
+        for (int i = 0; i < max_new_tokens; ++i) {
+            int context_len = std::min(static_cast<int>(generated.size()), T);
+            int start_idx = generated.size() - context_len;
+            
+            // Create input embeddings from context
+            std::vector<float> ctx_embeddings(context_len * n_embd, 0.0f);
+            for (int t = 0; t < context_len; ++t) {
+                int tok = generated[start_idx + t];
+                float token_f = static_cast<float>(tok % vocab_size) / vocab_size;
+                for (int e = 0; e < n_embd; ++e) {
+                    ctx_embeddings[t * n_embd + e] = std::sin(token_f * (e + 1) * 0.1f);
+                }
+            }
+            
+            // Forward pass through model
+            Layout ctx_layout = Layout::replicated(*mesh, {context_len, n_embd});
+            auto Ctx = DTensor::zeros({context_len, n_embd}, mesh, pg, ctx_layout);
+            Ctx.setData(ctx_embeddings, ctx_layout);
+            
+            auto Y = mlp.forward(Ctx);
+            auto Y_data = Y.getData();
+            
+            // Argmax over last position's output
+            int last_pos_offset = (context_len - 1) * n_embd;
+            int next_token = 0;
+            float max_val = Y_data[last_pos_offset];
+            for (int e = 1; e < n_embd; ++e) {
+                if (Y_data[last_pos_offset + e] > max_val) {
+                    max_val = Y_data[last_pos_offset + e];
+                    next_token = e;
+                }
+            }
+            
+            // Map to ASCII range
+            next_token = 32 + (next_token % 95);
+            generated.push_back(next_token);
+        }
+        
+        return generated;
+    };
+    
+    std::vector<std::string> gen_prompts = {
+        "Hello, I am a language model,",
+        "The quick brown fox",
+        "In the year 2025,",
+        "Hi my name is",
+        "Tell me a joke",
+    };
+    
+    if (rank == 0) {
+        std::cout << "\n============================================================" << std::endl;
+        std::cout << "Text Generation After Training" << std::endl;
+        std::cout << "============================================================\n" << std::endl;
+    }
+    
+    for (const auto& prompt : gen_prompts) {
+        if (rank == 0) {
+            std::cout << ">>> " << prompt << std::endl;
+        }
+        
+        auto prompt_tokens = encode_prompt(prompt);
+        auto generated = generate(prompt_tokens, 50);
+        
+        if (rank == 0) {
+            std::string output;
+            for (int tok : generated) {
+                output += static_cast<char>(tok);
+            }
+            std::cout << "    " << output << std::endl << std::endl;
+        }
     }
     
     MPI_Barrier(MPI_COMM_WORLD);

@@ -28,6 +28,7 @@ INCLUDES = \
     -I$(PARENT_DIR)/memory \
     -I$(PARENT_DIR)/bridge \
     -I$(PARENT_DIR)/ckpt \
+    -I$(PARENT_DIR)/nn \
     -I$(TENSOR_LIB_DIR)/include \
     -I$(CUDA_HOME)/include
 
@@ -102,15 +103,20 @@ clean:
 	@echo "\n[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
+# Compile nn.cpp from nn directory
+nn.o: $(PARENT_DIR)/nn/nn.cpp $(PARENT_DIR)/nn/nn.hpp
+	@echo "\n[COMPILE] nn.cpp"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(PARENT_DIR)/nn/nn.cpp -o nn.o
+
 # =============================================================================
 # Linking Rules
 # =============================================================================
 
-# Template for linking MLP executables
+# Template for linking MLP executables (now includes nn.o)
 define MLP_RULE
-$(1): $(1).o $(UNPARALLELED_A) $(TENSOR_LIB_A)
+$(1): $(1).o nn.o $(UNPARALLELED_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $$@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $$@ $$< $(UNPARALLELED_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $$@ $(1).o nn.o $(UNPARALLELED_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $$@ built"
 	@echo "Run: mpirun -np 2 ./$$@\n"
 endef

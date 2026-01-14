@@ -100,10 +100,8 @@ DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh,
       device_mesh_(device_mesh),
       pg_(pg),
       layout_(layout),
-      tensor_(),
-
-    //   tensor_(local_tensor),
-    //   temp_tensor_(local_tensor)
+      tensor_(local_tensor),
+      temp_tensor_(local_tensor)
 {
     cudaSetDevice(rank_);
     
