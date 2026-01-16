@@ -8,7 +8,17 @@
 #include <iostream>
 #include <iomanip>
 
-using namespace Bridge::Autograd;
+using namespace Bridge::autograd;
+namespace ag = Bridge::autograd;
+
+// Helper to create parameters
+DTensor create_parameter(const std::vector<float>& data, const Layout& layout, 
+                        std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg) {
+    DTensor t(mesh, pg);
+    t.setData(data, layout);
+    t.set_requires_grad(true);
+    return t;
+}
 
 void print_separator(int rank, const std::string& title) {
     if (rank == 0) {
@@ -90,7 +100,7 @@ int main(int argc, char** argv) {
         
         // W1: [INPUT_DIM, HIDDEN_DIM] column-sharded
         Layout W1_layout(*mesh, {INPUT_DIM, HIDDEN_DIM}, 1);
-        std::vector<int> W1_local_shape = W1_layout.get_local_shape(rank);
+        std::vector<int64_t> W1_local_shape = W1_layout.get_local_shape(rank);
         int W1_local_size = W1_local_shape[0] * W1_local_shape[1];
         
         std::vector<float> W1_data(W1_local_size, (rank + 1) * 0.5f);
@@ -108,7 +118,7 @@ int main(int argc, char** argv) {
         
         // W2: [HIDDEN_DIM, OUTPUT_DIM] row-sharded
         Layout W2_layout(*mesh, {HIDDEN_DIM, OUTPUT_DIM}, 0);
-        std::vector<int> W2_local_shape = W2_layout.get_local_shape(rank);
+        std::vector<int64_t> W2_local_shape = W2_layout.get_local_shape(rank);
         int W2_local_size = W2_local_shape[0] * W2_local_shape[1];
         
         std::vector<float> W2_data(W2_local_size, 1.0f);
@@ -137,20 +147,25 @@ int main(int argc, char** argv) {
         // =============================================================
         print_separator(rank, "Forward Pass");
         
+        // =============================================================
+        // Forward Pass
+        // =============================================================
+        print_separator(rank, "Forward Pass");
+        
         // Layer 1: X @ W1 -> H (column-sharded)
-        auto H = matmul(X, W1);
+        auto H = X.matmul(W1);
         if (rank == 0) {
             std::cout << "Layer 1: X @ W1 = H (column-sharded)\n";
         }
         
         // Activation
-        auto H_relu = relu(H);
+        auto H_relu = H.relu();
         if (rank == 0) {
             std::cout << "ReLU activation applied\n";
         }
         
         // Layer 2: H @ W2 -> Y (replicated via AllReduce)
-        auto Y = matmul(H_relu, W2);
+        auto Y = H_relu.matmul(W2);
         if (rank == 0) {
             std::cout << "Layer 2: H @ W2 = Y (replicated)\n";
         }
@@ -160,12 +175,16 @@ int main(int argc, char** argv) {
         // =============================================================
         print_separator(rank, "Computing Loss");
         
-        // Simple mean loss (across all elements)
-        OwnTensor::Tensor Y_local = Y.dtensor->local_tensor();
-        float loss_val = OwnTensor::reduce_mean(Y_local).to_cpu().data<float>()[0];
+        // Create dummy target (all zeros) for MSE loss
+        Layout target_layout = Layout::replicated(*mesh, {BATCH, OUTPUT_DIM});
+        auto Target = DTensor::zeros({BATCH, OUTPUT_DIM}, mesh, pg, target_layout);
         
-        // Convert to ag::Value for backward
-        ag::Value loss = Y.value;
+        // Compute MSE Loss
+        auto Loss = Y.mse_loss(Target);
+        Loss.set_requires_grad(true); // Ensure loss requires grad for backward
+        
+        // Get scalar loss value for printing
+        float loss_val = OwnTensor::reduce_mean(Loss.local_tensor()).to_cpu().data<float>()[0];
         
         if (rank == 0) {
             std::cout << "Loss: " << std::fixed << std::setprecision(4) << loss_val << "\n";
@@ -177,10 +196,10 @@ int main(int argc, char** argv) {
         print_separator(rank, "Backward Pass");
         
         if (rank == 0) {
-            std::cout << "Running ag::backward()...\n";
+            std::cout << "Running Loss.backward()...\n";
         }
         
-        ag::backward(loss);
+        Loss.backward();
         cudaDeviceSynchronize();
         
         if (rank == 0) {
@@ -193,7 +212,7 @@ int main(int argc, char** argv) {
         print_separator(rank, "Verifying Gradients");
         
         // Check W1 gradients
-        const OwnTensor::Tensor& W1_grad = W1.value.grad();
+        const OwnTensor::Tensor& W1_grad = W1.grad();
         float W1_grad_sum = OwnTensor::reduce_sum(OwnTensor::abs(W1_grad))
                                 .to_cpu().data<float>()[0];
         
@@ -206,7 +225,7 @@ int main(int argc, char** argv) {
         }
         
         // Check W2 gradients
-        const OwnTensor::Tensor& W2_grad = W2.value.grad();
+        const OwnTensor::Tensor& W2_grad = W2.grad();
         float W2_grad_sum = OwnTensor::reduce_sum(OwnTensor::abs(W2_grad))
                                 .to_cpu().data<float>()[0];
         
@@ -248,3 +267,5 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return 0;
 }
+
+

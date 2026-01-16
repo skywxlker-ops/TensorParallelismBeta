@@ -1,0 +1,20 @@
+
+=== DTensor Language Model Training ===
+World size: 2
+Config: B=2, T=64, n_embd=256, hidden=512
+Training: 2000 steps, warmup=100, lr=0.0006 -> 6e-05
+Loaded 100000000 tokens from dataset
+
+Starting training for 2000 steps...
+
+=== GRADIENT DEBUG ===
+grad range: [-0.0078125, 0.0078125]
+
+=== GRADIENTS AFTER BACKWARD ===
+fc1 grad first: 0.0108469
+step     0 | loss: 23.0259 | lr: 6.00e-06 | norm: 5.7321 | dt: 132.11ms | tok/sec: 968.91
+step    10 | loss: 23.0259 | lr: 6.60e-05 | norm: 5.0469 | dt: 26.10ms | tok/sec: 4903.59
+step    20 | loss: 22.9912 | lr: 1.26e-04 | norm: 3.8683 | dt: 27.00ms | tok/sec: 4741.01
+step    30 | loss: 23.0259 | lr: 1.86e-04 | norm: 3.2175 | dt: 24.80ms | tok/sec: 5161.02
+step    40 | loss: 22.8942 | lr: 2.46e-04 | norm: 2.9271 | dt: 26.31ms | tok/sec: 4864.38
+step    50 | loss: 23.0259 | lr: 3.06e-04 | norm: 3.8439 | dt: 25.27ms | tok/sec: 5064.60

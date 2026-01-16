@@ -66,7 +66,21 @@ public:
     DTensor div(const DTensor& other) const;
     DTensor matmul(const DTensor& other) const;
     DTensor relu() const;
+    DTensor gelu() const;
+    DTensor softmax(int64_t dim = -1) const;
     DTensor mse_loss(const DTensor& target) const;
+    DTensor cross_entropy_loss(const DTensor& target) const;
+    
+    /**
+     * Embedding lookup with autograd support.
+     * @param indices Token IDs as OwnTensor (uint16 dtype)
+     * @param weight Embedding weight DTensor [vocab_size, embedding_dim]
+     * @param padding_idx Index to ignore (-1 for none)
+     * @return DTensor of embeddings [num_tokens, embedding_dim]
+     */
+    static DTensor embedding(const OwnTensor::Tensor& indices, 
+                             DTensor& weight, 
+                             int padding_idx = -1);
 
     DTensor reshape(const std::vector<int64_t>& new_global_shape) const;
 

@@ -147,6 +147,22 @@ Tensor mse_loss(const Tensor& predictions, const Tensor& targets) {
     return OwnTensor::autograd::mse_loss(predictions, targets);
 }
 
+Tensor gelu(const Tensor& x) {
+    return OwnTensor::autograd::gelu(x);
+}
+
+Tensor softmax(const Tensor& x, int64_t dim) {
+    return OwnTensor::autograd::softmax(x, dim);
+}
+
+Tensor categorical_cross_entropy(const Tensor& predictions, const Tensor& targets) {
+    return OwnTensor::autograd::categorical_cross_entropy(predictions, targets);
+}
+
+Tensor embedding(const Tensor& indices, const Tensor& weight, int padding_idx) {
+    return OwnTensor::autograd::embedding(indices, weight, padding_idx);
+}
+
 void backward(Tensor& output, const Tensor* grad_output) {
     OwnTensor::autograd::backward(output, grad_output);
 }

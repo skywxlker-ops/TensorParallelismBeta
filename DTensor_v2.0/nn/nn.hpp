@@ -222,6 +222,39 @@ private:
 };
 
 // =============================================================================
+// DTensor-based Replicated Linear Layer (no parallelism, for output projection)
+// =============================================================================
+
+class DLinearReplicated {
+public:
+    /**
+     * Construct a replicated (non-parallel) linear layer
+     * Full weight matrix on each GPU for proper autograd
+     * @param in_features Input dimension
+     * @param out_features Output dimension
+     * @param mesh Device mesh
+     * @param pg Process group
+     */
+    DLinearReplicated(int64_t in_features,
+                      int64_t out_features,
+                      std::shared_ptr<DeviceMesh> mesh,
+                      std::shared_ptr<ProcessGroupNCCL> pg);
+    
+    DTensor forward(const DTensor& input);
+    
+    DTensor& weight();
+    void set_requires_grad(bool requires);
+    void zero_grad();
+
+private:
+    int64_t in_features_;
+    int64_t out_features_;
+    std::shared_ptr<DeviceMesh> mesh_;
+    std::shared_ptr<ProcessGroupNCCL> pg_;
+    std::unique_ptr<DTensor> weight_;  // [in_features, out_features] replicated
+};
+
+// =============================================================================
 // DTensor-based MLP for Tensor Parallelism
 // =============================================================================
 
@@ -248,6 +281,43 @@ public:
 private:
     std::unique_ptr<DLinear> fc1_;
     std::unique_ptr<DLinear> fc2_;
+};
+
+// =============================================================================
+// DTensor-based Embedding Layer
+// =============================================================================
+
+class DEmbedding {
+public:
+    /**
+     * Construct a distributed embedding layer
+     * @param vocab_size Vocabulary size
+     * @param embedding_dim Embedding dimension
+     * @param mesh Device mesh
+     * @param pg Process group
+     */
+    DEmbedding(int64_t vocab_size,
+               int64_t embedding_dim,
+               std::shared_ptr<DeviceMesh> mesh,
+               std::shared_ptr<ProcessGroupNCCL> pg);
+    
+    /**
+     * Forward pass: lookup embeddings for token IDs
+     * @param token_ids Vector of token IDs [batch_size * seq_len]
+     * @return DTensor of embeddings [batch_size * seq_len, embedding_dim]
+     */
+    DTensor forward(const std::vector<int>& token_ids);
+    
+    DTensor& weight() { return *weight_; }
+    void set_requires_grad(bool requires);
+    void zero_grad();
+
+private:
+    int64_t vocab_size_;
+    int64_t embedding_dim_;
+    std::unique_ptr<DTensor> weight_;  // [vocab_size, embedding_dim]
+    std::shared_ptr<DeviceMesh> mesh_;
+    std::shared_ptr<ProcessGroupNCCL> pg_;
 };
 
 // =============================================================================

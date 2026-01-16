@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Plot DTensor training loss from CSV log.
-Usage: python plot_loss.py [training_log.csv]
+Usage: python3 plot_loss.py [training_log.csv]
 """
 
 import pandas as pd
@@ -19,12 +19,12 @@ def plot_loss(csv_path="training_log.csv", output_path="loss_vs_step.png"):
     ax.plot(df['step'], df['loss'], color='#4F46E5', linewidth=1.5, alpha=0.8)
     
     # Logarithmic scale for better visualization
-    ax.set_yscale('log')
+    # ax.set_yscale('log')
     
     # Labels and title
     ax.set_title('DTensor GPT Training: Loss vs Step ', fontsize=14, fontweight='bold')
     ax.set_xlabel('Training Step', fontsize=12)
-    ax.set_ylabel('Loss (log scale)', fontsize=12)
+    ax.set_ylabel('Loss ', fontsize=12)
     
     # Grid for both major and minor ticks
     ax.grid(True, alpha=0.3, which='both')
