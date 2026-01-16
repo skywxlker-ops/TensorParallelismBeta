@@ -66,6 +66,29 @@ OwnTensor::Tensor relu(const OwnTensor::Tensor& x);
 OwnTensor::Tensor mse_loss(const OwnTensor::Tensor& predictions, const OwnTensor::Tensor& targets);
 
 /**
+ * Autograd-aware GeLU activation.
+ */
+OwnTensor::Tensor gelu(const OwnTensor::Tensor& x);
+
+/**
+ * Autograd-aware softmax.
+ */
+OwnTensor::Tensor softmax(const OwnTensor::Tensor& x, int64_t dim = -1);
+
+/**
+ * Autograd-aware categorical cross entropy loss.
+ */
+OwnTensor::Tensor categorical_cross_entropy(const OwnTensor::Tensor& predictions, const OwnTensor::Tensor& targets);
+
+/**
+ * Autograd-aware embedding lookup.
+ * @param indices Tensor of token IDs (uint16)
+ * @param weight Embedding weight matrix [vocab_size, embedding_dim]
+ * @param padding_idx Index to treat as padding (-1 for none)
+ */
+OwnTensor::Tensor embedding(const OwnTensor::Tensor& indices, const OwnTensor::Tensor& weight, int padding_idx = -1);
+
+/**
  * Execute backward pass on a tensor.
  */
 void backward(OwnTensor::Tensor& output, const OwnTensor::Tensor* grad_output = nullptr);

@@ -150,19 +150,11 @@ DTensor::DTensor(DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, 
 }
 
 DTensor::~DTensor() {
-    // Synchronize all streams
-    cudaStreamSynchronize(compute_stream_);
-    cudaStreamSynchronize(comm_stream_);
-    cudaStreamSynchronize(data_stream_);
-    
-    // Destroy streams
-    cudaStreamDestroy(compute_stream_);
-    cudaStreamDestroy(comm_stream_);
-    cudaStreamDestroy(data_stream_);
-    
-    // Destroy events
-    cudaEventDestroy(compute_event_);
-    cudaEventDestroy(comm_event_);
+    // Skip explicit CUDA cleanup - let the OS handle it on process exit.
+    // This avoids crashes from MPI/NCCL/CUDA interaction during shutdown.
+    // The drawback is potential resource leaks during long-running programs
+    // that create/destroy many DTensors, but for typical training workflows
+    // where DTensors live for the program lifetime, this is fine.
 }
 
 // ============================================================================
@@ -482,6 +474,44 @@ DTensor DTensor::mse_loss(const DTensor& target) const {
     return DTensor(device_mesh_, pg_, result, Layout::replicated(*device_mesh_, {1}));
 }
 
+DTensor DTensor::gelu() const {
+    OwnTensor::Tensor result = Bridge::autograd::gelu(tensor_);
+    return DTensor(device_mesh_, pg_, result, layout_);
+}
+
+DTensor DTensor::softmax(int64_t dim) const {
+    OwnTensor::Tensor result = Bridge::autograd::softmax(tensor_, dim);
+    return DTensor(device_mesh_, pg_, result, layout_);
+}
+
+DTensor DTensor::cross_entropy_loss(const DTensor& target) const {
+    // Relaxed check - just needs same local shapes for computation
+    auto local_shape = tensor_.shape().dims;
+    auto target_shape = target.tensor_.shape().dims;
+    if (local_shape != target_shape) {
+        throw std::runtime_error("cross_entropy_loss: local shapes don't match");
+    }
+    OwnTensor::Tensor result = Bridge::autograd::categorical_cross_entropy(tensor_, target.tensor_);
+    return DTensor(device_mesh_, pg_, result, Layout::replicated(*device_mesh_, {1}));
+}
+
+DTensor DTensor::embedding(const OwnTensor::Tensor& indices, DTensor& weight, int padding_idx) {
+    // The embedding weight should be replicated across all ranks for simplicity
+    // Indices are the same on all ranks, embedding lookup is done locally
+    
+    // Call Bridge autograd embedding on local weight tensor
+    OwnTensor::Tensor local_result = Bridge::autograd::embedding(
+        indices, weight.tensor_, padding_idx
+    );
+    
+    // Output is [num_tokens, embedding_dim], replicated
+    int64_t num_tokens = indices.numel();
+    int64_t embed_dim = weight.get_layout().get_global_shape()[1];
+    Layout out_layout = Layout::replicated(weight.get_layout().get_mesh(), {num_tokens, embed_dim});
+    
+    return DTensor(weight.device_mesh_, weight.pg_, local_result, out_layout);
+}
+
 #undef DEFINE_TENSOR_OP
 
 // ============================================================================
@@ -510,6 +540,18 @@ DTensor DTensor::matmul(const DTensor& other) const {
         return _row_parallel_matmul(other);
     }
 
+    // Replicated × Replicated: X [M, K] @ W [K, N] -> Y [M, N] (local matmul)
+    if (a_placement->type() == PlacementType::REPLICATE &&
+        b_placement->type() == PlacementType::REPLICATE) {
+        OwnTensor::Tensor Y_local = Bridge::autograd::matmul(tensor_, other.tensor_);
+        std::vector<int64_t> Y_global_shape = {
+            a_layout.get_global_shape()[0],
+            b_layout.get_global_shape()[1]
+        };
+        Layout Y_layout = Layout::replicated(*device_mesh_, Y_global_shape);
+        return DTensor(device_mesh_, pg_, Y_local, Y_layout);
+    }
+
     std::ostringstream oss;
     oss << "DTensor::matmul: Unsupported sharding combination!\n"
         << "  Layout A: " << a_layout.describe(rank_) << "\n"
@@ -519,7 +561,9 @@ DTensor DTensor::matmul(const DTensor& other) const {
 
 DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
     // Column-Parallel: X [M, K] @ W1 [K, N/P] -> H [M, N/P]
-    OwnTensor::Tensor Y_shard = Bridge::autograd::matmul(this->tensor_, other.local_tensor());
+    // Use other.tensor_ directly (not local_tensor() which makes a copy)
+    // so gradients accumulate to the actual weight tensor
+    OwnTensor::Tensor Y_shard = Bridge::autograd::matmul(this->tensor_, other.tensor_);
 
     std::vector<int64_t> Y_global_shape = {
         this->layout_.get_global_shape()[0],

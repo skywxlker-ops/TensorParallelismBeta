@@ -132,12 +132,14 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Hyperparameters
     // =========================================================================
-    const int B = 4;              // Batch size
+    const int B = 2;              // Batch size (reduced for memory)
     const int T = 64;             // Sequence length
-    const int vocab_size = 50257;
+    const int vocab_size_raw = 5000;  // Reduced for memory (was 10000)
+    // Pad vocab_size to be divisible by world_size for even sharding
+    const int vocab_size = ((vocab_size_raw + world_size - 1) / world_size) * world_size;
     const int n_embd = 256;       // Embedding dimension
     const int hidden_dim = 512;   // MLP hidden dimension
-    const int max_steps = 1000;   // Training steps
+    const int max_steps = 2000;   // Training steps
     const int warmup_steps = 100; // LR warmup steps
     const float max_lr = 6e-4f;   // Max learning rate
     const float min_lr = 6e-5f;   // Min learning rate (10% of max)
@@ -166,10 +168,22 @@ int main(int argc, char** argv) {
     }
     
     // =========================================================================
-    // Model: DMLP with Tensor Parallelism
+    // Model: Embedding + MLP + Output Projection with Tensor Parallelism
     // =========================================================================
+    {  // Begin scope for DTensor objects - ensures destruction before MPI finalize
+    
+    // Embedding layer: token IDs -> embeddings [vocab_size, n_embd]
+    DEmbedding embedding(vocab_size, n_embd, mesh, pg);
+    embedding.set_requires_grad(true);
+    
+    // MLP: hidden layer processing [n_embd -> hidden_dim -> n_embd]
     DMLP mlp(n_embd, hidden_dim, n_embd, mesh, pg);
     mlp.set_requires_grad(true);
+    
+    // Output projection: embeddings -> vocab logits [n_embd, vocab_size]
+    // Replicated - each GPU has full output projection weights
+    DLinearReplicated out_proj(n_embd, vocab_size, mesh, pg);
+    out_proj.set_requires_grad(true);
     
     // Learning rate scheduler
     LRScheduler lr_scheduler(max_lr, min_lr, warmup_steps, max_steps);
@@ -203,9 +217,9 @@ int main(int argc, char** argv) {
         optimizer.set_lr(current_lr);
         
         // ---------------------------------------------------------------------
-        // Get batch of tokens and create embeddings
+        // Get batch of tokens
         // ---------------------------------------------------------------------
-        std::vector<float> input_embeddings(B * T * n_embd, 0.0f);
+        std::vector<int> input_tokens(B * T);
         std::vector<int> target_tokens(B * T);
         
         for (int b = 0; b < B; ++b) {
@@ -215,14 +229,8 @@ int main(int argc, char** argv) {
                     data_pos = 0;
                     idx = data_pos + b * (T + 1) + t;
                 }
-                
-                // Simple pseudo-embedding: normalize token ID to float
-                float token_f = static_cast<float>(tokens[idx]) / vocab_size;
-                for (int e = 0; e < n_embd; ++e) {
-                    input_embeddings[(b * T + t) * n_embd + e] = 
-                        std::sin(token_f * (e + 1) * 0.1f);
-                }
-                target_tokens[b * T + t] = tokens[idx + 1] % n_embd;
+                input_tokens[b * T + t] = tokens[idx];
+                target_tokens[b * T + t] = tokens[idx + 1];
             }
         }
         
@@ -231,34 +239,83 @@ int main(int argc, char** argv) {
             data_pos = 0;
         }
         
-        // Create input DTensor [B*T, n_embd] - replicated
-        Layout input_layout = Layout::replicated(*mesh, {B * T, n_embd});
-        auto X = DTensor::zeros({B * T, n_embd}, mesh, pg, input_layout);
-        X.setData(input_embeddings, input_layout);
+        // ---------------------------------------------------------------------
+        // Forward Pass: Embedding -> MLP -> Output Projection -> Loss
+        // ---------------------------------------------------------------------
         
-        // Create target DTensor [B*T, n_embd] - for MSE loss (one-hot)
-        Layout target_layout = Layout::replicated(*mesh, {B * T, n_embd});
-        std::vector<float> target_emb(B * T * n_embd, 0.0f);
+        // 1. Embedding lookup: token IDs -> embeddings [B*T, n_embd]
+        auto X = embedding.forward(input_tokens);
+        
+        // 2. MLP Layer 1: [B*T, n_embd] -> [B*T, n_embd]
+        // 2. MLP: [B*T, n_embd] -> [B*T, n_embd]
+        auto H = mlp.forward(X);
+        
+        // 4. Output projection: [B*T, n_embd] -> [B*T, vocab_size] (replicated)
+        auto logits = out_proj.forward(H);
+        
+        // 4. Apply softmax to get probabilities (replicated, full vocab)
+        auto probs = logits.softmax(-1);
+        
+        // 5. Create REPLICATED target one-hot [B*T, vocab_size]
+        Layout target_layout = Layout::replicated(*mesh, {B * T, vocab_size});
+        std::vector<float> target_onehot(B * T * vocab_size, 0.0f);
         for (int i = 0; i < B * T; ++i) {
-            target_emb[i * n_embd + target_tokens[i]] = 1.0f;
+            int tgt = target_tokens[i] % vocab_size;
+            target_onehot[i * vocab_size + tgt] = 1.0f;
         }
-        auto Target = DTensor::zeros({B * T, n_embd}, mesh, pg, target_layout);
-        Target.setData(target_emb, target_layout);
+        auto Target = DTensor::zeros({B * T, vocab_size}, mesh, pg, target_layout);
+        Target.setData(target_onehot, target_layout);
+        
+        // 6. Compute cross-entropy loss manually (more stable)
+        // Loss = -mean(sum(target * log(probs), dim=1))
+        auto probs_data = probs.getData();
+        float loss_val = 0.0f;
+        for (int i = 0; i < B * T; ++i) {
+            int tgt = target_tokens[i] % vocab_size;
+            float p = std::max(probs_data[i * vocab_size + tgt], 1e-10f);
+            loss_val -= std::log(p);
+        }
+        loss_val /= (B * T);
+        
+        // 7. Compute gradient manually: grad = (probs - target) / (B * T)
+        // This is the stable softmax-cross-entropy gradient
+        std::vector<float> grad_logits(B * T * vocab_size);
+        for (int i = 0; i < B * T; ++i) {
+            for (int j = 0; j < vocab_size; ++j) {
+                float p = probs_data[i * vocab_size + j];
+                float t = target_onehot[i * vocab_size + j];
+                grad_logits[i * vocab_size + j] = (p - t) / (B * T);
+            }
+        }
+        
+        // Create gradient DTensor and set on logits
+        auto Grad = DTensor::zeros({B * T, vocab_size}, mesh, pg, target_layout);
+        Grad.setData(grad_logits, target_layout);
+        
+        // Debug: Check gradient values at step 0
+        if (step == 0 && rank == 0) {
+            float max_grad = *std::max_element(grad_logits.begin(), grad_logits.end());
+            float min_grad = *std::min_element(grad_logits.begin(), grad_logits.end());
+            std::cout << "\n=== GRADIENT DEBUG ===" << std::endl;
+            std::cout << "grad range: [" << min_grad << ", " << max_grad << "]" << std::endl;
+        }
         
         // ---------------------------------------------------------------------
-        // Forward Pass
+        // Backward Pass (using manual gradient)
         // ---------------------------------------------------------------------
-        auto Y = mlp.forward(X);
-        
-        // Loss: MSE between Y and target one-hot
-        auto Loss = Y.mse_loss(Target);
-        float loss_val = Loss.getData()[0];
-        
-        // ---------------------------------------------------------------------
-        // Backward Pass
-        // ---------------------------------------------------------------------
+        embedding.zero_grad();
         mlp.zero_grad();
-        Loss.backward();
+        out_proj.zero_grad();
+        
+        // Backprop through logits with our manual gradient
+        logits.backward(&Grad);
+        
+        // Debug: Check gradients after backward at step 0
+        if (step == 0 && rank == 0) {
+            auto fc1_grad = mlp.fc1().weight().grad().to_cpu();
+            std::cout << "\n=== GRADIENTS AFTER BACKWARD ===" << std::endl;
+            std::cout << "fc1 grad first: " << fc1_grad.data<float>()[0] << std::endl;
+        }
         
         // Compute gradient norms
         float grad_fc1_norm = compute_grad_norm(mlp.fc1().weight());
@@ -266,10 +323,33 @@ int main(int argc, char** argv) {
         float total_norm = std::sqrt(grad_fc1_norm * grad_fc1_norm + 
                                       grad_fc2_norm * grad_fc2_norm);
         
+        // Clear autograd graph to prevent memory leak
+        // Set grad_fn to nullptr on all intermediate and parameter tensors
+        X.local_tensor().set_grad_fn(nullptr);
+        H.local_tensor().set_grad_fn(nullptr);
+        logits.local_tensor().set_grad_fn(nullptr);
+        probs.local_tensor().set_grad_fn(nullptr);
+        Grad.local_tensor().set_grad_fn(nullptr);
+        Target.local_tensor().set_grad_fn(nullptr);
+        
+        // Clear MLP and embedding weight grad_fn to prevent graph accumulation
+        embedding.weight().local_tensor().set_grad_fn(nullptr);
+        mlp.fc1().weight().local_tensor().set_grad_fn(nullptr);
+        mlp.fc2().weight().local_tensor().set_grad_fn(nullptr);
+        out_proj.weight().local_tensor().set_grad_fn(nullptr);
+        
+        // Sync to ensure memory is freed
+        cudaDeviceSynchronize();
+        
         // ---------------------------------------------------------------------
         // Optimizer Step (Weight Update)
         // ---------------------------------------------------------------------
-        std::vector<DTensor*> params = {&mlp.fc1().weight(), &mlp.fc2().weight()};
+        std::vector<DTensor*> params = {
+            &embedding.weight(),
+            &mlp.fc1().weight(), 
+            &mlp.fc2().weight(),
+            &out_proj.weight()
+        };
         optimizer.step(params);
         
         // ---------------------------------------------------------------------
@@ -388,9 +468,16 @@ int main(int argc, char** argv) {
         }
     }
     
+    }  // End DTensor scope - mlp destroyed here before MPI finalize
+    
+    // Cleanup: Sync CUDA, reset PG, finalize MPI
+    cudaDeviceSynchronize();
     MPI_Barrier(MPI_COMM_WORLD);
     pg.reset();
     MPI_Finalize();
     
     return 0;
 }
+X.local_tensor().set_grad_fn(nullptr);
+mlp.fc1().weight().local_tensor().set_grad_fn(nullptr);
+cudaDeviceSynchronize();

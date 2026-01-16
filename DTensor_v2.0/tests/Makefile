@@ -70,7 +70,8 @@ TESTS = \
     test_fault_tolerance \
     test_memory_pool_efficiency \
     test_caching_allocator \
-    test_dtensor_autograd
+    test_dtensor_autograd \
+    test_autograd_tp
 
 # =============================================================================
 # Build Rules
