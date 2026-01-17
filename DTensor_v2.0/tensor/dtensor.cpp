@@ -63,7 +63,7 @@ public:
 DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name)
     : rank_(pg->get_rank()),
       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
-      device_mesh_(device_mesh),
+      device_mesh_(&device_mesh),
       pg_(pg),
       stream_(pg->getStream()),
       layout_(layout), 
@@ -210,7 +210,7 @@ void DTensor::replicate(int root) {
     
     pg_->broadcast_async(tensor_.data<float>(), tensor_.data<float>(), total_numel, OwnTensor::Dtype::Float32, root)->wait();
     
-    layout_ = Layout(device_mesh_, global_shape);
+    layout_ = Layout(*device_mesh_, global_shape);
     shape_ = global_shape;
     size_ = total_numel;
 }

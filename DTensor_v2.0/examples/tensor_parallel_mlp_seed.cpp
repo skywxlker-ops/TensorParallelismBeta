@@ -55,10 +55,10 @@ int main(int argc, char** argv) {
     // const int64_t F = 768*4;     // hidden dim (will be sharded: F / P per GPU)
 
 
-    const int64_t B = 1;      // batch size
-    const int64_t C = 2;      // input features
-    const int64_t T = 3;      // token length
-    const int64_t F = 2*2;     // hidden dim (will be sharded: F / P per GPU
+    const int64_t B = 1;     // batch size
+    const int64_t C = 2;   // input features
+    const int64_t T = 3;  // token length
+    const int64_t F = 2*2; // hidden dim (will be sharded: F / P per GPU)
 
     // ========== FIXED DATA FOR COMPARISON ==========
     // Initialize with deterministic values so we can compare with non-sharded version
@@ -176,7 +176,9 @@ int main(int argc, char** argv) {
     Layout w2_layout(device_mesh, {B, F, C }, 1);
 
     DTensor W2(device_mesh, pg, w2_layout);
+
     if (rank == 0) W2.setData(w2_data);  // Set fixed data BEFORE sharding
+    
     W2.replicate(0);
 
     // std::vector<float> w2_full_data(B * F * C );
@@ -224,15 +226,11 @@ int main(int argc, char** argv) {
     // === FORWARD PASS TIMING END, SYNC TIMING START ===
     cudaEventRecord(sync_start, comm_stream);
     
-    // Async sync - enqueue all-reduce but don't wait yet (PyTorch-style deferred wait)
-    Y1.sync_async();
+    // Autograd-aware sync: all-reduce forward AND registers backward function
+    // for gradient all-reduce (critical for proper gradient flow through Block 1)
+    Y1.sync_w_autograd();
     
     // === SYNC TIMING END ===
-    // Note: sync_async() returns immediately, but we record the event here
-    // The actual all-reduce is still running on GPU asynchronously
-    
-    // Now we need the result - call wait() before displaying
-    Y1.wait();  // Deferred wait - Y1 is now replicated and ready for next block
     cudaEventRecord(sync_stop, comm_stream);
     
     if (rank == 0) { std::cout<<"\n Y1 after sync (replicated - input to Block 2) \n"; }

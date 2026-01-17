@@ -191,13 +191,16 @@ int main(int argc, char** argv) {
     if (rank == 0) std::cout<<"\n Y1 before sync \n"; 
 
     Y1.display(); 
-
+    
     // === FORWARD PASS TIMING END, SYNC TIMING START ===
     cudaEventRecord(sync_start, comm_stream);
     
     // Async sync - enqueue all-reduce but don't wait yet (PyTorch-style deferred wait)
+    // Y1.mutable_tensor().set_requires_grad(true);
     Y1.sync_async();
-    
+
+    Y1.sync_w_autograd();
+
     // === SYNC TIMING END ===
     // Note: sync_async() returns immediately, but we record the event here
     // The actual all-reduce is still running on GPU asynchronously
