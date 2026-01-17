@@ -8,20 +8,59 @@
 #include <sstream>
 #include "tensor/dtensor.h"
 #include "TensorLib.h"
+#include "autograd/ops_template.h"
 #include "mlp/layers.h"
 #include "device/DeviceCore.h"  // For OwnTensor::cuda::setCurrentStream
 // #include "reverse.cuh"
 #include <nvtx3/nvtx3.hpp>
 #include <nvtx3/nvToolsExt.h>
 #include "process_group/fused_transpose_kernel.cuh"
+#include "process_group/shard_fused_transpose_kernel.cuh"
 #include "process_group/fused_rotate_kernel.cuh"
 // #include "process_group/fused_transpose_kernel.cuh"
 
+// =============================================================================
+// AllReduceSumBackward: Autograd node for distributed gradient sync
+// Forward: Y = all_reduce_sum(X)  (sum partial results across GPUs)
+// Backward: dX = all_reduce_sum(dY) (sum gradient contributions across GPUs)
+// =============================================================================
+class AllReduceSumBackward : public OwnTensor::Node {
+private:
+    std::shared_ptr<ProcessGroupNCCL> pg_;
+    size_t numel_;
+    OwnTensor::Dtype dtype_;
+    
+public:
+    AllReduceSumBackward(std::shared_ptr<ProcessGroupNCCL> pg, size_t numel, OwnTensor::Dtype dtype)
+        : Node(1), pg_(pg), numel_(numel), dtype_(dtype) {}
+    
+    std::string name() const override { return "AllReduceSumBackward"; }
+    
+    std::vector<OwnTensor::Tensor> apply(std::vector<OwnTensor::Tensor>&& grads) override {
+        if (grads.empty()) return {};
+        
+        OwnTensor::Tensor grad = grads[0];
+        
+        // All-reduce gradient: sum contributions from all GPUs
+        // This is critical for correct gradient flow through tensor parallel sync points
+        pg_->all_reduce_async(
+            grad.data(), 
+            const_cast<void*>(grad.data()), 
+            grad.numel(), 
+            grad.dtype(), 
+            sum, 
+            false
+        )->wait();
+        
+        return {grad};
+    }
+};
 
-CachingAllocator gAllocator;
+
+// CachingAllocator gAllocator;
 // using namespace OwnTensor;
 
-DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout)
+DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name)
     : rank_(pg->get_rank()),
       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
       device_mesh_(device_mesh),
@@ -30,8 +69,8 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
       layout_(layout), 
       size_(0),
       shape_(0),
-      tensor_(),
-      value_()
+      tensor_()
+    //   value_()
       { 
         shape_ = layout.get_global_shape();
         
@@ -61,11 +100,24 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
         opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, local_gpu);
         OwnTensor::Shape shape{shape_};
         tensor_ = OwnTensor::Tensor(shape, opts);
+        // opts.with_req_grad(true);    
         size_ = 1;
         for (int d : layout_.get_global_shape()) size_ *= d;  
         
-        value_ = ag::make_tensor(tensor_, "");
-      
+
+        tensor_ = OwnTensor::Tensor::rand<float>( shape, opts) ;
+        
+
+        // value_ = ag::make_tensor(tensor_, name);
+        
+        // // Enable gradients for this tensor and initialize grad
+        // if (value_.node) {
+        //     value_.node->requires_grad_flag_ = true;
+        //     // Node constructor only inits grad if requires_grad was true at construction
+        //     // Since we set it after, we must init grad manually
+        //     value_.node->grad = OwnTensor::Tensor::zeros(tensor_.shape(), ag::options(tensor_));
+        // }
+    
     }
 
 // DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh,
@@ -92,11 +144,15 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
     
 // }
 
+
+
 DTensor::~DTensor() {
-  
-    cudaStreamSynchronize(stream_); 
-    // if (data_block_) gAllocator.freeMemory(data_block_);
-    // tensor_.release();
+    // Guard against invalid stream - can happen if ProcessGroup is destroyed first
+    if (stream_ != nullptr) {
+        cudaError_t err = cudaStreamSynchronize(stream_);
+        // Ignore errors during cleanup - stream may be invalid
+        (void)err;
+    }
 }
 
 void DTensor::setData(const std::vector<float>& host_data) {
@@ -524,9 +580,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
     cudaStreamSynchronize(stream_);
     }
     
-    
     // parent_tensor.tensor_.release();
-
 }
 
 
@@ -823,169 +877,169 @@ void DTensor::shard_transpose(int dim, int root, DTensor &parent_tensor){
 //     setShape(tensor_.shape().dims);
 // }
 
-void launch_reverse_kernel(float* d_src, float* d_dst, int nx, int ny, int nz, int dim, cudaStream_t stream);
+// void launch_reverse_kernel(float* d_src, float* d_dst, int nx, int ny, int nz, int dim, cudaStream_t stream);
 
-void DTensor::rotate3D(int dim, bool direction){
-    // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
-    #ifdef WITH_CUDA
-    OwnTensor::cuda::setCurrentStream(stream_);
-    #endif
+// void DTensor::rotate3D(int dim, bool direction){
+//     // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
+//     #ifdef WITH_CUDA
+//     OwnTensor::cuda::setCurrentStream(stream_);
+//     #endif
     
-    // OwnTensor::TensorOptions opts;
-    // opts.dtype = OwnTensor::Dtype::Float32;
-    // opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
-    // OwnTensor::Shape shape{shape_};
-    // OwnTensor::Tensor rtensor_({shape}, opts);
-    // std::cout<<"\n Rotate3D "<<rank_<<"\n DTensor shape "<<rank_<<" ";
-    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
-    // std::cout<<"\n Tensor shape "<<rank_<<" ";
-    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n\n";
+//     // OwnTensor::TensorOptions opts;
+//     // opts.dtype = OwnTensor::Dtype::Float32;
+//     // opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
+//     // OwnTensor::Shape shape{shape_};
+//     // OwnTensor::Tensor rtensor_({shape}, opts);
+//     // std::cout<<"\n Rotate3D "<<rank_<<"\n DTensor shape "<<rank_<<" ";
+//     // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+//     // std::cout<<"\n Tensor shape "<<rank_<<" ";
+//     // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n\n";
 
-    int64_t nx = tensor_.shape().dims[0], ny = tensor_.shape().dims[1], nz = tensor_.shape().dims[2];
+//     int64_t nx = tensor_.shape().dims[0], ny = tensor_.shape().dims[1], nz = tensor_.shape().dims[2];
 
-    int64_t total_elements = (int64_t)nx * ny * nz;
+//     int64_t total_elements = (int64_t)nx * ny * nz;
  
-    float* d_src = static_cast<float*>(tensor_.data());
-    float* d_dst;
+//     float* d_src = static_cast<float*>(tensor_.data());
+//     float* d_dst;
 
-    cudaMalloc(&d_dst, total_elements * sizeof(float));
+//     cudaMalloc(&d_dst, total_elements * sizeof(float));
 
-    if (dim == 0)      {
-        tensor_ = tensor_.transpose(1, 2).contiguous();
-        // std::cout<<"\n after transpose "<<rank_<<"\n";
-        // tensor_ = tensor_.contiguous()
-        // std::cout<<"\n after contiguous "<<rank_<<"\n";
-        direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 1, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 2, stream_));
-        if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 1 ) { layout_.set_shard_dim(2); }; if (layout_.get_shard_dim() == 2 ) {  layout_.set_shard_dim(1); }; }
-    }
-    else if (dim == 1) {
-        tensor_ = tensor_.transpose(0, 2).contiguous();
-        // std::cout<<"\n after transpose "<<rank_<<"\n";
-        // tensor_ = tensor_.contiguous();
-        // std::cout<<"\n after contiguous "<<rank_<<"\n";
-        direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 0, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 2, stream_));
-        if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 0 ) { layout_.set_shard_dim(2); }; if (layout_.get_shard_dim() == 2 ) {  layout_.set_shard_dim(0); }; }
-    }
+//     if (dim == 0)      {
+//         tensor_ = tensor_.transpose(1, 2).contiguous();
+//         // std::cout<<"\n after transpose "<<rank_<<"\n";
+//         // tensor_ = tensor_.contiguous()
+//         // std::cout<<"\n after contiguous "<<rank_<<"\n";
+//         direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 1, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 2, stream_));
+//         if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 1 ) { layout_.set_shard_dim(2); }; if (layout_.get_shard_dim() == 2 ) {  layout_.set_shard_dim(1); }; }
+//     }
+//     else if (dim == 1) {
+//         tensor_ = tensor_.transpose(0, 2).contiguous();
+//         // std::cout<<"\n after transpose "<<rank_<<"\n";
+//         // tensor_ = tensor_.contiguous();
+//         // std::cout<<"\n after contiguous "<<rank_<<"\n";
+//         direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 0, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 2, stream_));
+//         if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 0 ) { layout_.set_shard_dim(2); }; if (layout_.get_shard_dim() == 2 ) {  layout_.set_shard_dim(0); }; }
+//     }
     
-    else {
-        tensor_ = tensor_.transpose(0, 1).contiguous();
-        // std::cout<<"\n after transpose "<<rank_<<"\n";
-        // tensor_ = tensor_.contiguous();
-        // std::cout<<"\n after contiguous "<<rank_<<"\n";
-        direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 0, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 1, stream_));
-        if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 0 ) { layout_.set_shard_dim(1); }; if (layout_.get_shard_dim() == 1 ) {  layout_.set_shard_dim(0); }; }
-    }
-    cudaMemcpyAsync(d_src, d_dst, total_elements * sizeof(float), cudaMemcpyDeviceToDevice, stream_);
-    cudaStreamSynchronize(stream_);
-    cudaFree(d_dst);
+//     else {
+//         tensor_ = tensor_.transpose(0, 1).contiguous();
+//         // std::cout<<"\n after transpose "<<rank_<<"\n";
+//         // tensor_ = tensor_.contiguous();
+//         // std::cout<<"\n after contiguous "<<rank_<<"\n";
+//         direction ? (launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 0, stream_)):(launch_reverse_kernel(d_src, d_dst, nx, ny, nz, 1, stream_));
+//         if(layout_.is_sharded()) { if (layout_.get_shard_dim() == 0 ) { layout_.set_shard_dim(1); }; if (layout_.get_shard_dim() == 1 ) {  layout_.set_shard_dim(0); }; }
+//     }
+//     cudaMemcpyAsync(d_src, d_dst, total_elements * sizeof(float), cudaMemcpyDeviceToDevice, stream_);
+//     cudaStreamSynchronize(stream_);
+//     cudaFree(d_dst);
 
-    // std::cout<<"\n DTensor shape "<<rank_<<"\n";
-    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
-    // std::cout<<"\n Tensor shape "<<rank_<<"\n";
-    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
+//     // std::cout<<"\n DTensor shape "<<rank_<<"\n";
+//     // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+//     // std::cout<<"\n Tensor shape "<<rank_<<"\n";
+//     // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
     
-    setShape(tensor_.shape().dims);
-    // std::cout<<"\n DTensor shape "<<rank_<<"\n";
-    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
-    // std::cout<<"\n Tensor shape "<<rank_<<"\n";
-    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
-    layout_.set_global_shape(shape_);
-
-    
-    // std::cout<<"\n Rotate3D post "<<rank_<<"\n DTensor shape "<<rank_<<" ";
-    // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
-    // std::cout<<"\n Tensor shape "<<rank_<<" ";
-    // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n\n";
-    // rtensor_.reset();
-
-    // rtensor_.release();
-    
-}
-
-// Memory-optimized version of rotate3D - avoids memory leaks
-void DTensor::rotate3D_mem(int dim, bool direction){
-    // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
-    #ifdef WITH_CUDA
-    OwnTensor::cuda::setCurrentStream(stream_);
-    #endif
-    
-    int64_t nx = shape_[0], ny = shape_[1], nz = shape_[2];
+//     setShape(tensor_.shape().dims);
+//     // std::cout<<"\n DTensor shape "<<rank_<<"\n";
+//     // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+//     // std::cout<<"\n Tensor shape "<<rank_<<"\n";
+//     // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n";
+//     layout_.set_global_shape(shape_);
 
     
+//     // std::cout<<"\n Rotate3D post "<<rank_<<"\n DTensor shape "<<rank_<<" ";
+//     // std::cout<<"["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
+//     // std::cout<<"\n Tensor shape "<<rank_<<" ";
+//     // std::cout<<"["<<tensor_.shape().dims[0]<<", "<<tensor_.shape().dims[1]<<", "<<tensor_.shape().dims[2]<<"] \n\n";
+//     // rtensor_.reset();
 
-    int64_t total_elements = (int64_t)nx * ny * nz;
+//     // rtensor_.release();
+    
+// }
+
+// // Memory-optimized version of rotate3D - avoids memory leaks
+// void DTensor::rotate3D_mem(int dim, bool direction){
+//     // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
+//     #ifdef WITH_CUDA
+//     OwnTensor::cuda::setCurrentStream(stream_);
+//     #endif
+    
+//     int64_t nx = shape_[0], ny = shape_[1], nz = shape_[2];
+
+    
+
+//     int64_t total_elements = (int64_t)nx * ny * nz;
     
 
 
-    // Perform transpose (creates a view, no new memory allocation)
-    OwnTensor::Tensor transposed;
-    if (dim == 0) {
-        transposed = tensor_.transpose(1, 2);
-        if(layout_.is_sharded()) { 
-            if (layout_.get_shard_dim() == 1) { layout_.set_shard_dim(2); } 
-            else if (layout_.get_shard_dim() == 2) { layout_.set_shard_dim(1); } 
-        }
-    }
-    else if (dim == 1) {
-        transposed = tensor_.transpose(0, 2);
-        if(layout_.is_sharded()) { 
-            if (layout_.get_shard_dim() == 0) { layout_.set_shard_dim(2); } 
-            else if (layout_.get_shard_dim() == 2) { layout_.set_shard_dim(0); } 
-        }
-    }
-    else {
-        transposed = tensor_.transpose(0, 1);
-        if(layout_.is_sharded()) { 
-            if (layout_.get_shard_dim() == 0) { layout_.set_shard_dim(1); } 
-            else if (layout_.get_shard_dim() == 1) { layout_.set_shard_dim(0); } 
-        }
-    }
+//     // Perform transpose (creates a view, no new memory allocation)
+//     OwnTensor::Tensor transposed;
+//     if (dim == 0) {
+//         transposed = tensor_.transpose(1, 2);
+//         if(layout_.is_sharded()) { 
+//             if (layout_.get_shard_dim() == 1) { layout_.set_shard_dim(2); } 
+//             else if (layout_.get_shard_dim() == 2) { layout_.set_shard_dim(1); } 
+//         }
+//     }
+//     else if (dim == 1) {
+//         transposed = tensor_.transpose(0, 2);
+//         if(layout_.is_sharded()) { 
+//             if (layout_.get_shard_dim() == 0) { layout_.set_shard_dim(2); } 
+//             else if (layout_.get_shard_dim() == 2) { layout_.set_shard_dim(0); } 
+//         }
+//     }
+//     else {
+//         transposed = tensor_.transpose(0, 1);
+//         if(layout_.is_sharded()) { 
+//             if (layout_.get_shard_dim() == 0) { layout_.set_shard_dim(1); } 
+//             else if (layout_.get_shard_dim() == 1) { layout_.set_shard_dim(0); } 
+//         }
+//     }
     
-    // Create contiguous copy - this allocates new GPU memory
-    // Create contiguous copy - this allocates new GPU memory
-    // Get dimensions and strides from the transposed view
-    std::vector<int64_t> src_dims = transposed.shape().dims;
-    std::vector<int64_t> src_strides = transposed.stride().strides;
+//     // Create contiguous copy - this allocates new GPU memory
+//     // Create contiguous copy - this allocates new GPU memory
+//     // Get dimensions and strides from the transposed view
+//     std::vector<int64_t> src_dims = transposed.shape().dims;
+//     std::vector<int64_t> src_strides = transposed.stride().strides;
     
-    int64_t new_nx = src_dims[0];
-    int64_t new_ny = src_dims[1];
-    int64_t new_nz = src_dims[2];
+//     int64_t new_nx = src_dims[0];
+//     int64_t new_ny = src_dims[1];
+//     int64_t new_nz = src_dims[2];
 
-    // Create result tensor (contiguous)
-    OwnTensor::Shape result_shape;
-    result_shape.dims = src_dims;
-    OwnTensor::Tensor result_tensor(result_shape, tensor_.dtype(), tensor_.device());
-    float* d_dst = static_cast<float*>(result_tensor.data());
-    float* d_src = static_cast<float*>(transposed.data());
+//     // Create result tensor (contiguous)
+//     OwnTensor::Shape result_shape;
+//     result_shape.dims = src_dims;
+//     OwnTensor::Tensor result_tensor(result_shape, tensor_.dtype(), tensor_.device());
+//     float* d_dst = static_cast<float*>(result_tensor.data());
+//     float* d_src = static_cast<float*>(transposed.data());
 
-    // Prepare metadata for kernel
-    // int64_t *d_dims, *d_strides;
-    // cudaMalloc(&d_dims, 3 * sizeof(int64_t));
-    // cudaMalloc(&d_strides, 3 * sizeof(int64_t));
+//     // Prepare metadata for kernel
+//     // int64_t *d_dims, *d_strides;
+//     // cudaMalloc(&d_dims, 3 * sizeof(int64_t));
+//     // cudaMalloc(&d_strides, 3 * sizeof(int64_t));
     
-    // cudaMemcpyAsync(d_dims, src_dims.data(), 3 * sizeof(int64_t), cudaMemcpyHostToDevice, stream_);
-    // cudaMemcpyAsync(d_strides, src_strides.data(), 3 * sizeof(int64_t), cudaMemcpyHostToDevice, stream_);
+//     // cudaMemcpyAsync(d_dims, src_dims.data(), 3 * sizeof(int64_t), cudaMemcpyHostToDevice, stream_);
+//     // cudaMemcpyAsync(d_strides, src_strides.data(), 3 * sizeof(int64_t), cudaMemcpyHostToDevice, stream_);
 
-    // Determine which axis to reverse based on rotation parameters
-    int axis_to_reverse;
-    if (dim == 0)      axis_to_reverse = direction ? 1 : 2;
-    else if (dim == 1) axis_to_reverse = direction ? 0 : 2;
-    else               axis_to_reverse = direction ? 0 : 1;
+//     // Determine which axis to reverse based on rotation parameters
+//     int axis_to_reverse;
+//     if (dim == 0)      axis_to_reverse = direction ? 1 : 2;
+//     else if (dim == 1) axis_to_reverse = direction ? 0 : 2;
+//     else               axis_to_reverse = direction ? 0 : 1;
     
-    // Launch the fused kernel
-    launch_fused_rotate_kernel(d_src, d_dst, src_strides[0], src_strides[1], src_strides[2], 3, total_elements, new_nx, new_ny, new_nz, axis_to_reverse, stream_);
+//     // Launch the fused kernel
+//     launch_fused_rotate_kernel(d_src, d_dst, src_strides[0], src_strides[1], src_strides[2], 3, total_elements, new_nx, new_ny, new_nz, axis_to_reverse, stream_);
     
-    // Cleanup metadata
-    // cudaFree(d_dims);
-    // cudaFree(d_strides);
+//     // Cleanup metadata
+//     // cudaFree(d_dims);
+//     // cudaFree(d_strides);
     
-    // Update tensor_ to point to the new contiguous result
-    tensor_ = result_tensor;
+//     // Update tensor_ to point to the new contiguous result
+//     tensor_ = result_tensor;
     
-    // Update shape metadata    `
-    setShape(tensor_.shape().dims);
-    layout_.set_global_shape(shape_);
-}
+//     // Update shape metadata    `
+//     setShape(tensor_.shape().dims);
+//     layout_.set_global_shape(shape_);
+// }
 
 // void DTensor::rotate3D(int dim, bool direction) {
 //     // 1. Perform Transpose (Swaps metadata)
@@ -1052,6 +1106,7 @@ void DTensor::shard_default(int dim, int root, DTensor &parent_tensor) {
             << " for tensor with " << global_shape.size() << " dimensions";
         throw std::runtime_error(oss.str());
     }
+    
     // std::cout<<"\n Shard Default \n DTensor shape "<<rank_<<" ";
     // std::cout<<" In Shard ["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] \n";
     // std::cout<<"\n Tensor shape "<<rank_<<" ";
@@ -1068,10 +1123,13 @@ void DTensor::shard_default(int dim, int root, DTensor &parent_tensor) {
     // OwnTensor::Shape new_shape;
     // new_shape.dims = shape_;
     // tensor_ = OwnTensor::Tensor(new_shape, tensor_.dtype(), tensor_.device(), tensor_.requires_grad()); 
+    
     size_t shard_numel = 1;
     for (int d : shape_) shard_numel *= d;
 
     // Write scatter results directly to tensor_  
+
+
     pg_->scatter_async(
     parent_tensor.tensor_.data<float>() ,
     parent_tensor.tensor_.data<float>() + rank_ * shard_numel,
@@ -1101,7 +1159,15 @@ void DTensor::shard_default(int dim, int root, DTensor &parent_tensor) {
 
     // Note: Don't release parent tensor here - it will be freed when it goes out of scope
     // Calling release() here causes memory corruption when parent_tensor destructor runs
+    
     parent_tensor.tensor_.reset();
+
+    // [Temporarily disabled] Add dependency edge for autograd
+    // if (value_.node && parent_tensor.value_.node) {
+    //     value_.node->inputs.push_back(parent_tensor.value_.node);
+    //     value_.node->is_leaf = false;
+    // }
+
 }
 
 void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
@@ -1206,11 +1272,17 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
             true
         );
     }
-    
     // Record event on NCCL stream and make our stream wait for it (GPU-side sync)
     work->event_record();
     work->streamWait(stream_);
+
+    // [Temporarily disabled] Add dependency edge for autograd
+    // if (value_.node && parent_tensor.value_.node) {
+    //     value_.node->inputs.push_back(parent_tensor.value_.node);
+    //     value_.node->is_leaf = false; // Fix deadlock: allow node to be processed in backward
+    // }
 }
+
 
 // void DTensor::shard_own_transpose(int dim, int root, DTensor &parent_tensor) {
 //     // Shard using OwnTensor's transpose to make target dim contiguous
@@ -1317,13 +1389,87 @@ void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
     )->wait();
 
 
-
 }
 
-
-
 void DTensor::sync() {
+    // Blocking sync - enqueue all-reduce and wait for completion
     pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false)->wait();
+    has_pending_collective_ = false;
+    pending_work_ = nullptr;
+}
+
+void DTensor::sync_async() {
+    // Async sync - enqueue all-reduce but DON'T wait (deferred wait)
+    // Store the work handle so we can wait later when data is actually needed
+    pending_work_ = pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false);
+    has_pending_collective_ = true;
+}
+
+void DTensor::sync_w_autograd() {
+    // Autograd-aware sync: performs all-reduce and sets up backward graph
+    // Forward: Y = all_reduce_sum(X) - sum partial results across GPUs
+    // Backward: automatically all-reduces gradient dY before flowing to previous ops
+    
+    // 1. Forward: Blocking all-reduce
+    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false)->wait();
+    
+    // 2. Set up backward graph if tensor requires grad
+    if (tensor_.requires_grad()) {
+        // Create backward node that will all-reduce gradient
+        auto grad_fn = std::make_shared<AllReduceSumBackward>(pg_, size_, tensor_.dtype());
+        
+        // Connect to existing graph: get edge to current tensor's grad_fn (if any)
+        if (tensor_.grad_fn()) {
+            grad_fn->set_next_edge(0, OwnTensor::Edge(tensor_.grad_fn(), 0));
+        } else {
+            // Tensor is a leaf or has no grad_fn - use get_grad_edge pattern
+            grad_fn->set_next_edge(0, OwnTensor::autograd::get_grad_edge(tensor_));
+        }
+        
+        // Set this as the new grad_fn for tensor_
+        // This inserts AllReduceSumBackward into the graph
+        tensor_.set_grad_fn(grad_fn);
+    }
+    
+    has_pending_collective_ = false;
+    pending_work_ = nullptr;
+}
+
+void DTensor::wait() {
+    // Wait for any pending async collective to complete
+    if (has_pending_collective_ && pending_work_) {
+        pending_work_->wait();
+        has_pending_collective_ = false;
+        pending_work_ = nullptr;
+    }
+}
+
+// void DTensor::sync_async_backward_hook() {
+//     tensor_.register_sync_hook(std::make_unique<LambdaPostAccHook>([this](const Tensor& grad){
+//         pending_work_ = pg_->all_reduce_async(grad.data(), const_cast<void*>(grad.data()), grad.numel(),grad.dtype(), sum, false);
+//         has_pending_collective_ = true;
+//     }
+//     ));
+
+// }
+
+// void DTensor::wait_backward_hook() {
+//     tensor_.register_sync_hook(std::make_unique<LambdaPostAccHook>([this](const Tensor& grad) 
+//     {
+//         if (has_pending_collective_ && pending_work_) {
+//             pending_work_->wait();
+//             has_pending_collective_ = false;
+//             pending_work_ = nullptr;
+//         }
+
+//     }
+// ));
+
+// }
+
+
+bool DTensor::has_pending_collective() const {
+    return has_pending_collective_;
 }
 
 // //meant for WQKV matrix DTensor
@@ -1467,6 +1613,25 @@ void DTensor::Linear(  DTensor& Input,  DTensor& Weights,  DTensor& Bias) {
 
     tensor_ = mlp_forward::linear(Input.tensor_, Weights.tensor_, Bias.tensor_);
 
+}
+
+void DTensor::linear_w_autograd(DTensor& Input, DTensor& Weights, DTensor& Bias) {
+    // Use autograd-aware operations for gradient tracking
+    // 
+    // Note: For DTensor 3D tensor parallelism, weights are already in [B, C, F] layout.
+    // Direct matmul: [B, T, C] @ [B, C, F] = [B, T, F]
+    // This differs from 2D linear (which uses weight.t()) because:
+    //   - 2D Linear: input [batch, in_features] @ weight.t() [out_features, in_features].T
+    //   - 3D DTensor: input [B, T, C] @ weight [B, C, F] (no transpose needed)
+    
+    OwnTensor::Tensor out = OwnTensor::autograd::matmul(Input.tensor_, Weights.tensor_);
+    tensor_ = OwnTensor::autograd::add(out, Bias.tensor_);
+}
+
+void DTensor::backward() {
+    // Compute mean as scalar loss and call autograd backward
+    OwnTensor::Tensor loss = OwnTensor::autograd::mean(tensor_);
+    OwnTensor::autograd::backward(loss);
 }
 
 
@@ -1653,7 +1818,7 @@ void DTensor::print() const {
     std::cout << "\n";
 }
 
-ag::Value& DTensor::get_value(){ return value_; }
+// ag::Value& DTensor::get_value(){ return value_; }
 
 // void DTensor::enable_grad() {
 //     // If value_ is stale (pointing to different data than tensor_), recreate it
@@ -1674,13 +1839,28 @@ ag::Value& DTensor::get_value(){ return value_; }
 //     }
 // }
 
+
 void DTensor::display(){
-    tensor_.to_cpu().display();
+    // Note: For async sync, caller should call wait() before display() if needed
+    // Auto-wait disabled to debug crash issue
+    // wait();
+    tensor_.display();
 }
 
-void DTensor::rand() {
-    OwnTensor::TensorOptions opts;
-        opts.dtype = OwnTensor::Dtype::Float32;
-        opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
-    tensor_  = OwnTensor::Tensor::rand({shape_}, opts, 0.0f, 0.1f);
-}
+
+
+
+
+
+// void DTensor::rand() {
+//     OwnTensor::TensorOptions opts;
+//         opts.dtype = OwnTensor::Dtype::Float32;
+//         opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);
+//     tensor_  = OwnTensor::Tensor::rand({shape_}, opts, 0.0f, 0.1f);
+//     // if(value_.node) value_.val() = tensor_;
+// }
+// // void DTensor::enable_grad() {
+
+// }
+
+

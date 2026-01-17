@@ -13,195 +13,195 @@ TARGET = main
 CUDA_HOME      := /usr/local/cuda
 TENSOR_LIB_DIR := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations
 TENSOR_LIB_A   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib/libtensor.a
-CGADIMPL_LIB   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build/libcgadimpl.a
+# CGADIMPL_LIB   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build/libcgadimpl.a
 
-# --- Autograd / Nova / MLIR Configuration ---
-LLVM_PROJECT_BUILD := /home/blu-bridge25/llvm-project/build
-NOVA_INSTALL_DIR   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/install
-NOVA_BUILD_DIR     := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/build
+# # --- Autograd / Nova / MLIR Configuration ---
+# LLVM_PROJECT_BUILD := /home/blu-bridge25/llvm-project/build
+# NOVA_INSTALL_DIR   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/install
+# NOVA_BUILD_DIR     := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/build
 
-AUTOGRAD_INCLUDES := \
-    -I$(NOVA_INSTALL_DIR)/include \
-    -I$(LLVM_PROJECT_BUILD)/include \
-    -I/home/blu-bridge25/llvm-project/llvm/include \
-    -I/home/blu-bridge25/llvm-project/mlir/include
+# AUTOGRAD_INCLUDES := \
+#     -I$(NOVA_INSTALL_DIR)/include \
+#     -I$(LLVM_PROJECT_BUILD)/include \
+#     -I/home/blu-bridge25/llvm-project/llvm/include \
+#     -I/home/blu-bridge25/llvm-project/mlir/include
 
-AUTOGRAD_LIB_PATHS := \
-    -L$(NOVA_INSTALL_DIR)/lib \
-    -L$(NOVA_BUILD_DIR)/lib/Runtime/Core \
-    -L$(NOVA_BUILD_DIR)/lib/Runtime/Executor \
-    -L$(LLVM_PROJECT_BUILD)/lib
+# AUTOGRAD_LIB_PATHS := \
+#     -L$(NOVA_INSTALL_DIR)/lib \
+#     -L$(NOVA_BUILD_DIR)/lib/Runtime/Core \
+#     -L$(NOVA_BUILD_DIR)/lib/Runtime/Executor \
+#     -L$(LLVM_PROJECT_BUILD)/lib
 
-# Nova Libraries
-NOVA_LIBS := \
-    -lNovaPipelines \
-    -lNovaCompilerAPI \
-    -lMLIRNova \
-    -lMLIRNovaToTosaTransforms \
-    -lMLIRNovaToLinalgTransforms \
-    -lMLIRNovaToArithTransforms \
-    -lCompilerTransforms \
-    -lAffineTransforms \
-    -lNovaRuntimeCore \
-    -lNovaRuntimeExecutor
+# # Nova Libraries
+# NOVA_LIBS := \
+#     -lNovaPipelines \
+#     -lNovaCompilerAPI \
+#     -lMLIRNova \
+#     -lMLIRNovaToTosaTransforms \
+#     -lMLIRNovaToLinalgTransforms \
+#     -lMLIRNovaToArithTransforms \
+#     -lCompilerTransforms \
+#     -lAffineTransforms \
+#     -lNovaRuntimeCore \
+#     -lNovaRuntimeExecutor
 
-# MLIR Transforms & Conversion
-MLIR_TRANSFORMS_LIBS := \
-    -lMLIRReconcileUnrealizedCasts \
-    -lMLIRTosaToTensor \
-    -lMLIRTosaToLinalg \
-    -lMLIRTosaTransforms \
-    -lMLIRLinalgTransforms \
-    -lMLIRLinalgUtils \
-    -lMLIRBufferizationTransforms \
-    -lMLIRBufferizationToMemRef \
-    -lMLIRBufferizationPipelines \
-    -lMLIRArithTransforms \
-    -lMLIRArithToLLVM \
-    -lMLIRArithAttrToLLVMConversion \
-    -lMLIRMathToLLVM \
-    -lMLIRTensorTransforms \
-    -lMLIRTensorUtils \
-    -lMLIRMemRefTransforms \
-    -lMLIRMemRefUtils \
-    -lMLIRVectorTransforms \
-    -lMLIRAffineTransforms \
-    -lMLIRAffineUtils \
-    -lMLIRAffineAnalysis \
-    -lMLIRSCFTransforms \
-    -lMLIRSCFUtils \
-    -lMLIRSCFToControlFlow \
-    -lMLIRControlFlowToLLVM \
-    -lMLIRGPUTransforms \
-    -lMLIRGPUToNVVMTransforms \
-    -lMLIRMemRefToLLVM \
-    -lMLIRFuncToLLVM \
-    -lMLIRLLVMCommonConversion \
-    -lMLIRLLVMIRTransforms \
-    -lMLIRTargetLLVM \
-    -lMLIRTargetLLVMIRExport \
-    -lMLIRTargetLLVMIRImport \
-    -lMLIRNVVMToLLVMIRTranslation \
-    -lMLIRArmNeonToLLVMIRTranslation \
-    -lMLIRArmSMEToLLVMIRTranslation \
-    -lMLIRArmSVEToLLVMIRTranslation \
-    -lMLIRVCIXToLLVMIRTranslation \
-    -lMLIRGPUToLLVMIRTranslation \
-    -lMLIROpenMPToLLVMIRTranslation \
-    -lMLIROpenACCToLLVMIRTranslation \
-    -lMLIRROCDLToLLVMIRTranslation \
-    -lMLIRSPIRVToLLVMIRTranslation \
-    -lMLIRToLLVMIRTranslationRegistration \
-    -lMLIRBuiltinToLLVMIRTranslation \
-    -lMLIRLLVMToLLVMIRTranslation
+# # MLIR Transforms & Conversion
+# MLIR_TRANSFORMS_LIBS := \
+#     -lMLIRReconcileUnrealizedCasts \
+#     -lMLIRTosaToTensor \
+#     -lMLIRTosaToLinalg \
+#     -lMLIRTosaTransforms \
+#     -lMLIRLinalgTransforms \
+#     -lMLIRLinalgUtils \
+#     -lMLIRBufferizationTransforms \
+#     -lMLIRBufferizationToMemRef \
+#     -lMLIRBufferizationPipelines \
+#     -lMLIRArithTransforms \
+#     -lMLIRArithToLLVM \
+#     -lMLIRArithAttrToLLVMConversion \
+#     -lMLIRMathToLLVM \
+#     -lMLIRTensorTransforms \
+#     -lMLIRTensorUtils \
+#     -lMLIRMemRefTransforms \
+#     -lMLIRMemRefUtils \
+#     -lMLIRVectorTransforms \
+#     -lMLIRAffineTransforms \
+#     -lMLIRAffineUtils \
+#     -lMLIRAffineAnalysis \
+#     -lMLIRSCFTransforms \
+#     -lMLIRSCFUtils \
+#     -lMLIRSCFToControlFlow \
+#     -lMLIRControlFlowToLLVM \
+#     -lMLIRGPUTransforms \
+#     -lMLIRGPUToNVVMTransforms \
+#     -lMLIRMemRefToLLVM \
+#     -lMLIRFuncToLLVM \
+#     -lMLIRLLVMCommonConversion \
+#     -lMLIRLLVMIRTransforms \
+#     -lMLIRTargetLLVM \
+#     -lMLIRTargetLLVMIRExport \
+#     -lMLIRTargetLLVMIRImport \
+#     -lMLIRNVVMToLLVMIRTranslation \
+#     -lMLIRArmNeonToLLVMIRTranslation \
+#     -lMLIRArmSMEToLLVMIRTranslation \
+#     -lMLIRArmSVEToLLVMIRTranslation \
+#     -lMLIRVCIXToLLVMIRTranslation \
+#     -lMLIRGPUToLLVMIRTranslation \
+#     -lMLIROpenMPToLLVMIRTranslation \
+#     -lMLIROpenACCToLLVMIRTranslation \
+#     -lMLIRROCDLToLLVMIRTranslation \
+#     -lMLIRSPIRVToLLVMIRTranslation \
+#     -lMLIRToLLVMIRTranslationRegistration \
+#     -lMLIRBuiltinToLLVMIRTranslation \
+#     -lMLIRLLVMToLLVMIRTranslation
 
-# MLIR Dialects
-MLIR_DIALECT_LIBS := \
-    -lMLIRLinalgDialect \
-    -lMLIRIndexDialect \
-    -lMLIRSparseTensorDialect \
-    -lMLIRBufferizationDialect \
-    -lMLIRTosaDialect \
-    -lMLIRArithDialect \
-    -lMLIRMathDialect \
-    -lMLIRMemRefDialect \
-    -lMLIRComplexDialect \
-    -lMLIRQuantDialect \
-    -lMLIRSCFDialect \
-    -lMLIRControlFlowDialect \
-    -lMLIRTensorDialect \
-    -lMLIRAffineDialect \
-    -lMLIRFuncDialect \
-    -lMLIRLLVMDialect \
-    -lMLIRUBDialect \
-    -lMLIRPDLDialect \
-    -lMLIRPDLInterpDialect \
-    -lMLIRVectorDialect \
-    -lMLIROpenMPDialect \
-    -lMLIRROCDLDialect \
-    -lMLIRNVVMDialect \
-    -lMLIROpenACCDialect \
-    -lMLIROpenACCMPCommon \
-    -lMLIRDLTIDialect \
-    -lMLIRGPUDialect \
-    -lMLIRVCIXDialect \
-    -lMLIRArmNeonDialect \
-    -lMLIRArmSMEDialect \
-    -lMLIRArmSVEDialect \
-    -lMLIRSPIRVDialect \
-    -lMLIRSPIRVImageInterfaces \
-    -lMLIRSPIRVUtils
+# # MLIR Dialects
+# MLIR_DIALECT_LIBS := \
+#     -lMLIRLinalgDialect \
+#     -lMLIRIndexDialect \
+#     -lMLIRSparseTensorDialect \
+#     -lMLIRBufferizationDialect \
+#     -lMLIRTosaDialect \
+#     -lMLIRArithDialect \
+#     -lMLIRMathDialect \
+#     -lMLIRMemRefDialect \
+#     -lMLIRComplexDialect \
+#     -lMLIRQuantDialect \
+#     -lMLIRSCFDialect \
+#     -lMLIRControlFlowDialect \
+#     -lMLIRTensorDialect \
+#     -lMLIRAffineDialect \
+#     -lMLIRFuncDialect \
+#     -lMLIRLLVMDialect \
+#     -lMLIRUBDialect \
+#     -lMLIRPDLDialect \
+#     -lMLIRPDLInterpDialect \
+#     -lMLIRVectorDialect \
+#     -lMLIROpenMPDialect \
+#     -lMLIRROCDLDialect \
+#     -lMLIRNVVMDialect \
+#     -lMLIROpenACCDialect \
+#     -lMLIROpenACCMPCommon \
+#     -lMLIRDLTIDialect \
+#     -lMLIRGPUDialect \
+#     -lMLIRVCIXDialect \
+#     -lMLIRArmNeonDialect \
+#     -lMLIRArmSMEDialect \
+#     -lMLIRArmSVEDialect \
+#     -lMLIRSPIRVDialect \
+#     -lMLIRSPIRVImageInterfaces \
+#     -lMLIRSPIRVUtils
 
-# MLIR Interfaces
-MLIR_INTERFACES_LIBS := \
-    -lMLIRControlFlowInterfaces \
-    -lMLIRFunctionInterfaces \
-    -lMLIRCallInterfaces \
-    -lMLIRDataLayoutInterfaces \
-    -lMLIRViewLikeInterface \
-    -lMLIRDestinationStyleOpInterface \
-    -lMLIRVectorInterfaces \
-    -lMLIRInferIntRangeInterface \
-    -lMLIRInferIntRangeCommon \
-    -lMLIRMaskableOpInterface \
-    -lMLIRMaskingOpInterface \
-    -lMLIRIndexingMapOpInterface \
-    -lMLIRMemorySlotInterfaces \
-    -lMLIRShapedOpInterfaces \
-    -lMLIRLoopLikeInterface \
-    -lMLIRParallelCombiningOpInterface \
-    -lMLIRSubsetOpInterface \
-    -lMLIRCastInterfaces
+# # MLIR Interfaces
+# MLIR_INTERFACES_LIBS := \
+#     -lMLIRControlFlowInterfaces \
+#     -lMLIRFunctionInterfaces \
+#     -lMLIRCallInterfaces \
+#     -lMLIRDataLayoutInterfaces \
+#     -lMLIRViewLikeInterface \
+#     -lMLIRDestinationStyleOpInterface \
+#     -lMLIRVectorInterfaces \
+#     -lMLIRInferIntRangeInterface \
+#     -lMLIRInferIntRangeCommon \
+#     -lMLIRMaskableOpInterface \
+#     -lMLIRMaskingOpInterface \
+#     -lMLIRIndexingMapOpInterface \
+#     -lMLIRMemorySlotInterfaces \
+#     -lMLIRShapedOpInterfaces \
+#     -lMLIRLoopLikeInterface \
+#     -lMLIRParallelCombiningOpInterface \
+#     -lMLIRSubsetOpInterface \
+#     -lMLIRCastInterfaces
 
-# MLIR Core
-MLIR_CORE_LIBS := \
-    -lMLIRDialect \
-    -lMLIRIR \
-    -lMLIRArithUtils \
-    -lMLIRDialectUtils \
-    -lMLIRQuantUtils \
-    -lMLIRArithValueBoundsOpInterfaceImpl \
-    -lMLIRTransforms \
-    -lMLIRTransformUtils \
-    -lMLIRPass \
-    -lMLIRSupport \
-    -lMLIRSideEffectInterfaces \
-    -lMLIRInferTypeOpInterface \
-    -lMLIRAnalysis \
-    -lMLIRPresburger \
-    -lMLIRValueBoundsOpInterface \
-    -lMLIRAsmParser \
-    -lMLIRParser \
-    -lMLIRBytecodeWriter \
-    -lMLIRBytecodeReader \
-    -lMLIRRewrite \
-    -lMLIRRewritePDL \
-    -lMLIRPDLToPDLInterp
+# # MLIR Core
+# MLIR_CORE_LIBS := \
+#     -lMLIRDialect \
+#     -lMLIRIR \
+#     -lMLIRArithUtils \
+#     -lMLIRDialectUtils \
+#     -lMLIRQuantUtils \
+#     -lMLIRArithValueBoundsOpInterfaceImpl \
+#     -lMLIRTransforms \
+#     -lMLIRTransformUtils \
+#     -lMLIRPass \
+#     -lMLIRSupport \
+#     -lMLIRSideEffectInterfaces \
+#     -lMLIRInferTypeOpInterface \
+#     -lMLIRAnalysis \
+#     -lMLIRPresburger \
+#     -lMLIRValueBoundsOpInterface \
+#     -lMLIRAsmParser \
+#     -lMLIRParser \
+#     -lMLIRBytecodeWriter \
+#     -lMLIRBytecodeReader \
+#     -lMLIRRewrite \
+#     -lMLIRRewritePDL \
+#     -lMLIRPDLToPDLInterp
 
-# LLVM Libraries
-LLVM_LIBS := \
-    -lLLVMFrontendOpenMP \
-    -lLLVMFrontendAtomic \
-    -lLLVMFrontendOffloading \
-    -lLLVMCodeGen \
-    -lLLVMScalarOpts \
-    -lLLVMTransformUtils \
-    -lLLVMAnalysis \
-    -lLLVMObject \
-    -lLLVMObjectYAML \
-    -lLLVMMC \
-    -lLLVMBitWriter \
-    -lLLVMProfileData \
-    -lLLVMCore \
-    -lLLVMTargetParser \
-    -lLLVMSupport \
-    -lLLVMDemangle \
-    -lLLVMBinaryFormat \
-    -lLLVMBitReader \
-    -lLLVMBitstreamReader \
-    -lLLVMRemarks
+# # LLVM Libraries
+# LLVM_LIBS := \
+#     -lLLVMFrontendOpenMP \
+#     -lLLVMFrontendAtomic \
+#     -lLLVMFrontendOffloading \
+#     -lLLVMCodeGen \
+#     -lLLVMScalarOpts \
+#     -lLLVMTransformUtils \
+#     -lLLVMAnalysis \
+#     -lLLVMObject \
+#     -lLLVMObjectYAML \
+#     -lLLVMMC \
+#     -lLLVMBitWriter \
+#     -lLLVMProfileData \
+#     -lLLVMCore \
+#     -lLLVMTargetParser \
+#     -lLLVMSupport \
+#     -lLLVMDemangle \
+#     -lLLVMBinaryFormat \
+#     -lLLVMBitReader \
+#     -lLLVMBitstreamReader \
+#     -lLLVMRemarks
 
-AUTOGRAD_LIBS := $(NOVA_LIBS) $(MLIR_TRANSFORMS_LIBS) $(MLIR_DIALECT_LIBS) $(MLIR_INTERFACES_LIBS) $(MLIR_CORE_LIBS) $(LLVM_LIBS)
+# AUTOGRAD_LIBS := $(NOVA_LIBS) $(MLIR_TRANSFORMS_LIBS) $(MLIR_DIALECT_LIBS) $(MLIR_INTERFACES_LIBS) $(MLIR_CORE_LIBS) $(LLVM_LIBS)
 
 INCLUDES = \
     -I. \
@@ -211,12 +211,12 @@ INCLUDES = \
     -I./bridge \
     -I$(TENSOR_LIB_DIR)/include \
     -I$(CUDA_HOME)/include \
-    -I/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/include \
+#     -I/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/include \
     $(AUTOGRAD_INCLUDES)
 
 LIB_PATHS = \
     -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib \
-    -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build \
+#     -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib \
     $(AUTOGRAD_LIB_PATHS)
@@ -228,7 +228,7 @@ LDFLAGS = -L/home/blu-bridge25/.local/lib -Xlinker -rpath -Xlinker /home/blu-bri
 SRCS = main.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/processGroupNCCL_new.cpp \
+	process_group/processGroupNccl_new.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp
 
@@ -253,7 +253,7 @@ TEST_MLP_SRCS = \
 	test_mlp_forward.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/processGroupNCCL_new.cpp \
+	process_group/processGroupNccl_new.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 
@@ -407,7 +407,7 @@ clean:
 
 # Tensor Parallel MLP Example
 
-CUDA_SRCS = process_group/reverse.cu process_group/fused_rotate_kernel.cu process_group/fused_transpose_kernel.cu
+CUDA_SRCS =  process_group/fused_transpose_kernel.cu process_group/shard_fused_transpose_kernel.cu
 CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
 
 TP_MLP_SRCS = \
@@ -432,20 +432,92 @@ CUDA_LDFLAGS = -L/usr/local/cuda-12.6/include
 # 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LDFLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 # 	@echo "[SUCCESS] Tensor Parallel MLP Example build complete."
 
+# Tensor Parallel MLP with Autograd support (uses sharding and sync)
+TP_MLP_AUTOGRAD_SRCS = \
+    examples/tensor_parallel_mlp.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+	tensor/placement.cpp
 
-tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(CGADIMPL_LIB)
-	@echo "\n[LINKING] $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(TP_MLP_OBJS) -Xlinker --start-group $(CGADIMPL_LIB) $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+TP_MLP_AUTOGRAD_OBJS = $(TP_MLP_AUTOGRAD_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+tensor_parallel_mlp: $(TP_MLP_AUTOGRAD_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(TP_MLP_AUTOGRAD_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Tensor Parallel MLP Example with Autograd build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/tensor_parallel_mlp\n"
+
+# Normal MLP with fixed seed data (no sharding/sync) for comparison
+MLP_SEED_SRCS = \
+    examples/mlp_seed.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+	tensor/placement.cpp
+
+MLP_SEED_OBJS = $(MLP_SEED_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+mlp_seed: $(MLP_SEED_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(MLP_SEED_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Normal MLP (Fixed Seed) build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/mlp_seed\n"
+
+# Tensor Parallel MLP with fixed seed data (sharding/sync) for comparison
+TP_MLP_SEED_SRCS = \
+    examples/tensor_parallel_mlp_seed.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+	tensor/placement.cpp
+
+TP_MLP_SEED_OBJS = $(TP_MLP_SEED_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+tensor_parallel_mlp_seed: $(TP_MLP_SEED_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(TP_MLP_SEED_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Tensor Parallel MLP (Fixed Seed) build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/tensor_parallel_mlp_seed\n"
+
+# DModule MLP Example (uses DistributedNN.h)
+DMLP_EXAMPLE_SRCS = \
+    examples/dmlp_example.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+	tensor/placement.cpp
+
+DMLP_EXAMPLE_OBJS = $(DMLP_EXAMPLE_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+dmlp_example: $(DMLP_EXAMPLE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(DMLP_EXAMPLE_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] DModule MLP Example build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/dmlp_example\n"
+
+# tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(CGADIMPL_LIB)
+# 	@echo "\n[LINKING] $@"
+# 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(TP_MLP_OBJS) -Xlinker --start-group $(CGADIMPL_LIB) $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+
 
 
 
 # Use a more explicit pattern that handles subdirectories better
 
-$(TP_MLP_SRCS:.cpp=.o): %.o: %.cpp
-	@echo "[COMPILE C++] $<"
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+# $(TP_MLP_SRCS:.cpp=.o): %.o: %.cpp
+# 	@echo "[COMPILE C++] $<"
+# 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# NEW CUDA rule  
+# # NEW CUDA rule  
 $(CUDA_OBJS): %.o: %.cu
 	@echo "[COMPILE CUDA] $<"
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
@@ -462,15 +534,15 @@ SHARD_BENCH_SRCS = \
 
 SHARD_BENCH_OBJS = $(SHARD_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
 
-shard_benchmarking: $(SHARD_BENCH_OBJS) $(TENSOR_LIB_A) $(CGADIMPL_LIB)
+shard_benchmarking: $(SHARD_BENCH_OBJS) $(TENSOR_LIB_A) 
 	@echo "\n[LINKING] Creating benchmark executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(SHARD_BENCH_OBJS) -Xlinker --start-group $(CGADIMPL_LIB) $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(SHARD_BENCH_OBJS) -Xlinker --start-group  $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] Shard Benchmarking build complete."
 	@echo "\nRun with: mpirun -np 2 ./benchmarks/shard_benchmarking\n"
 
-# Rotate Benchmarking
-ROTATE_BENCH_SRCS = \
-    benchmarks/Rotate_benchmark.cpp \
+# Interconnect Benchmarks
+INTERCONNECT_BENCH_SRCS = \
+    benchmarks/interconnect_benchmarks.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \
@@ -478,45 +550,64 @@ ROTATE_BENCH_SRCS = \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
-ROTATE_BENCH_OBJS = $(ROTATE_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
+INTERCONNECT_BENCH_OBJS = $(INTERCONNECT_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
 
-rotate_benchmarking: $(ROTATE_BENCH_OBJS) $(TENSOR_LIB_A) $(CGADIMPL_LIB)
+interconnect_benchmarks: $(INTERCONNECT_BENCH_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating benchmark executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(ROTATE_BENCH_OBJS) -Xlinker --start-group $(CGADIMPL_LIB) $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
-	@echo "[SUCCESS] Rotate Benchmarking build complete."
-	@echo "\nRun with: mpirun -np 2 ./benchmarks/rotate_benchmarking\n"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(INTERCONNECT_BENCH_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Interconnect Benchmarks build complete."
+	@echo "\nRun with: mpirun -np 2 ./benchmarks/interconnect_benchmarks\n"
 
-# TensorLib Sharding Benchmark
-TENSORLIB_BENCH_SRCS = benchmarks/tensorlib_sharding_benchmark.cpp
-TENSORLIB_BENCH_OBJS = $(TENSORLIB_BENCH_SRCS:.cpp=.o)
 
-benchmarks/tensorlib_sharding_benchmark.o: benchmarks/tensorlib_sharding_benchmark.cpp
-	@echo "[COMPILE] $<"
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+# # Rotate Benchmarking
+# ROTATE_BENCH_SRCS = \
+#     benchmarks/Rotate_benchmark.cpp \
+#     tensor/dtensor.cpp \
+#     tensor/device_mesh.cpp \
+#     process_group/processGroupNccl_new.cpp \
+#     memory/cachingAllocator.cpp \
+#     bridge/tensor_ops_bridge.cpp \
+#     tensor/placement.cpp
 
-tensorlib_sharding_benchmark: benchmarks/tensorlib_sharding_benchmark.o $(TENSOR_LIB_A)
-	@echo "\n[LINKING] Creating benchmark executable: $@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ benchmarks/tensorlib_sharding_benchmark.o $(TENSOR_LIB_A) $(LIBS) $(LDFLAGS)
-	@echo "[SUCCESS] TensorLib Sharding Benchmark build complete."
-	@echo "\nRun with: mpirun -np 2 ./benchmarks/tensorlib_sharding_benchmark\n"
+# ROTATE_BENCH_OBJS = $(ROTATE_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
 
-# LibTorch Sharding Benchmark (requires LibTorch/PyTorch installation)
-TORCH_DIR = /usr/local/lib/python3.10/dist-packages/torch
-TORCH_INCLUDES = -I$(TORCH_DIR)/include -I$(TORCH_DIR)/include/torch/csrc/api/include
-TORCH_LIBS = -L$(TORCH_DIR)/lib -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda -Wl,-rpath,$(TORCH_DIR)/lib
+# rotate_benchmarking: $(ROTATE_BENCH_OBJS) $(TENSOR_LIB_A) $(CGADIMPL_LIB)
+# 	@echo "\n[LINKING] Creating benchmark executable: $@"
+# 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(ROTATE_BENCH_OBJS) -Xlinker --start-group $(CGADIMPL_LIB) $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+# 	@echo "[SUCCESS] Rotate Benchmarking build complete."
+# 	@echo "\nRun with: mpirun -np 2 ./benchmarks/rotate_benchmarking\n"
 
-benchmarks/libtorch_sharding_benchmark.o: benchmarks/libtorch_sharding_benchmark.cpp
-	@echo "[COMPILE] $<"
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TORCH_INCLUDES) -c $< -o $@
+# # TensorLib Sharding Benchmark
+# TENSORLIB_BENCH_SRCS = benchmarks/tensorlib_sharding_benchmark.cpp
+# TENSORLIB_BENCH_OBJS = $(TENSORLIB_BENCH_SRCS:.cpp=.o)
 
-libtorch_sharding_benchmark: benchmarks/libtorch_sharding_benchmark.o
-	@echo "\n[LINKING] Creating benchmark executable: $@"
-	$(CXX) -o benchmarks/$@ benchmarks/libtorch_sharding_benchmark.o $(TORCH_LIBS) -L$(CUDA_HOME)/lib64 -lmpi -lnccl -lcudart $(LDFLAGS)
-	@echo "[SUCCESS] LibTorch Sharding Benchmark build complete."
-	@echo "\nRun with: mpirun -np 2 ./benchmarks/libtorch_sharding_benchmark\n"
+# benchmarks/tensorlib_sharding_benchmark.o: benchmarks/tensorlib_sharding_benchmark.cpp
+# 	@echo "[COMPILE] $<"
+# 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# # Striped Attention Example
-# STRIPED_ATTN_SRCS = \
+# tensorlib_sharding_benchmark: benchmarks/tensorlib_sharding_benchmark.o $(TENSOR_LIB_A)
+# 	@echo "\n[LINKING] Creating benchmark executable: $@"
+# 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ benchmarks/tensorlib_sharding_benchmark.o $(TENSOR_LIB_A) $(LIBS) $(LDFLAGS)
+# 	@echo "[SUCCESS] TensorLib Sharding Benchmark build complete."
+# 	@echo "\nRun with: mpirun -np 2 ./benchmarks/tensorlib_sharding_benchmark\n"
+
+# # LibTorch Sharding Benchmark (requires LibTorch/PyTorch installation)
+# TORCH_DIR = /usr/local/lib/python3.10/dist-packages/torch
+# TORCH_INCLUDES = -I$(TORCH_DIR)/include -I$(TORCH_DIR)/include/torch/csrc/api/include
+# TORCH_LIBS = -L$(TORCH_DIR)/lib -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda -Wl,-rpath,$(TORCH_DIR)/lib
+
+# benchmarks/libtorch_sharding_benchmark.o: benchmarks/libtorch_sharding_benchmark.cpp
+# 	@echo "[COMPILE] $<"
+# 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TORCH_INCLUDES) -c $< -o $@
+
+# libtorch_sharding_benchmark: benchmarks/libtorch_sharding_benchmark.o
+# 	@echo "\n[LINKING] Creating benchmark executable: $@"
+# 	$(CXX) -o benchmarks/$@ benchmarks/libtorch_sharding_benchmark.o $(TORCH_LIBS) -L$(CUDA_HOME)/lib64 -lmpi -lnccl -lcudart $(LDFLAGS)
+# 	@echo "[SUCCESS] LibTorch Sharding Benchmark build complete."
+# 	@echo "\nRun with: mpirun -np 2 ./benchmarks/libtorch_sharding_benchmark\n"
+
+# # # Striped Attention Example
+# # STRIPED_ATTN_SRCS = \
 # 	examples/striped_attention_example.cpp \
 # 	tensor/dtensor.cpp \
 # 	tensor/device_mesh.cpp \

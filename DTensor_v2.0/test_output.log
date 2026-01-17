@@ -1,0 +1,24 @@
+shard_fused_transpose Kernel FAILED: invalid argument
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Kernel failed in shard_fused_transpose
+[blubridge25-MS-7E06:42801] *** Process received signal ***
+[blubridge25-MS-7E06:42801] Signal: Aborted (6)
+[blubridge25-MS-7E06:42801] Signal code:  (-6)
+[blubridge25-MS-7E06:42801] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x42520)[0x76c3d7a42520]
+[blubridge25-MS-7E06:42801] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x12c)[0x76c3d7a969fc]
+[blubridge25-MS-7E06:42801] [ 2] /lib/x86_64-linux-gnu/libc.so.6(raise+0x16)[0x76c3d7a42476]
+[blubridge25-MS-7E06:42801] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xd3)[0x76c3d7a287f3]
+[blubridge25-MS-7E06:42801] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa2b9e)[0x76c3d7ea2b9e]
+[blubridge25-MS-7E06:42801] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae20c)[0x76c3d7eae20c]
+[blubridge25-MS-7E06:42801] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae277)[0x76c3d7eae277]
+[blubridge25-MS-7E06:42801] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae4d8)[0x76c3d7eae4d8]
+[blubridge25-MS-7E06:42801] [ 8] ./examples/tensor_parallel_mlp(+0x200ebf)[0x5cfb4d1baebf]
+[blubridge25-MS-7E06:42801] [ 9] ./examples/tensor_parallel_mlp(+0x1ea51b)[0x5cfb4d1a451b]
+[blubridge25-MS-7E06:42801] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x76c3d7a29d90]
+[blubridge25-MS-7E06:42801] [11] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x76c3d7a29e40]
+[blubridge25-MS-7E06:42801] [12] ./examples/tensor_parallel_mlp(+0x1e05a5)[0x5cfb4d19a5a5]
+[blubridge25-MS-7E06:42801] *** End of error message ***
+--------------------------------------------------------------------------
+prterun noticed that process rank 0 with PID 42801 on node blubridge25-MS-7E06 exited on
+signal 6 (Aborted).
+--------------------------------------------------------------------------

@@ -15,9 +15,11 @@
 #include "tensor/device_mesh.h"
 #include "tensor/layout.h"
 #include "tensor/placement.h"
-#include "reverse.cuh"
+#include "autograd/AutogradOps.h"
+#include "autograd/Engine.h"
+// #include "reverse.cuh"
 
-#include "ad/ag_all.hpp"  
+// #include "ad/ag_all.hpp"  
 
 using namespace OwnTensor;
 
@@ -27,7 +29,7 @@ extern CachingAllocator gAllocator;
 class DTensor {
 public:
 
-    DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout);
+    DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name = "");
     ~DTensor();
 
     void setData(const std::vector<float>& host_data) ;
@@ -41,6 +43,12 @@ public:
     void matmul( DTensor& A,  DTensor& B);
 
     void Linear(  DTensor& Input,  DTensor& Weights,  DTensor& Bias);
+    
+    // Autograd-enabled linear layer for gradient tracking
+    void linear_w_autograd(DTensor& Input, DTensor& Weights, DTensor& Bias);
+    
+    // Backward pass - computes gradients for tensors with requires_grad=true
+    void backward();
     // DTensor matmul(const DTensor& other) const;
     // DTensor  _column_parallel_matmul(const DTensor& other) const;
     // DTensor _row_parallel_matmul(const DTensor& other) const;
@@ -51,8 +59,8 @@ public:
 
 
 
-    void rotate3D( int dim, bool direction);
-    void rotate3D_mem( int dim, bool direction);  // Memory-optimized version
+    // void rotate3D( int dim, bool direction);
+    // void rotate3D_mem( int dim, bool direction);  // Memory-optimized version
     
     void shard(int dim, int root , DTensor &parent_tensor );
 
@@ -63,7 +71,13 @@ public:
     void shard_fused_transpose(int dim, int root, DTensor &parent_tensor);  // Uses custom kernel for reordering
     // void shard_own_transpose(int dim, int root, DTensor &parent_tensor);    // Uses OwnTensor transpose
 
-    void sync();
+    void sync();              // All-reduce with wait (blocking)
+    void sync_async();         // All-reduce without wait (async)
+    void sync_async_backward_hook();
+    void sync_w_autograd();     // Autograd-aware sync (registers backward for gradient all-reduce)
+    void wait();               // Wait for pending async collective
+    void wait_backward_hook();
+    bool has_pending_collective() const;  // Check if async collective pending
 
     void assemble(int dim, int root, DTensor &sharded_tensor ); 
 
@@ -78,17 +92,18 @@ public:
     // void loadCheckpoint(const std::string& path);
     void display();
 
-    void rand() ;
+    // void rand() ;
 
     void print() const;
 
-    ag::Value& get_value();
-    // void enable_grad();
+    // ag::Value& get_value();
+    void enable_grad();
     // void get_tensor(){ return tensor_; }
     
     void setShape(std::vector<int64_t>newShape){ shape_ = newShape ; }
     const Layout& get_layout()  { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
+    OwnTensor::Tensor& mutable_tensor() { return tensor_; }
     std::shared_ptr<ProcessGroupNCCL> get_pg() const { return pg_; }
     const DeviceMesh& get_device_mesh() const { return device_mesh_; }
     int rank() const { return rank_; }
@@ -110,7 +125,7 @@ private:
     const DeviceMesh& device_mesh_;
     std::shared_ptr<ProcessGroupNCCL> pg_;
     cudaStream_t stream_;
-    ag::Value value_ ;
+    // ag::Value value_ ;
 
     Layout layout_;
     
@@ -123,6 +138,10 @@ private:
     std::string dtype_ = "float32";
     Block* data_block_;
     Block* temp_block_;
+    
+    // Async collective tracking
+    bool has_pending_collective_ = false;
+    std::shared_ptr<Work> pending_work_ = nullptr;
 
 
 

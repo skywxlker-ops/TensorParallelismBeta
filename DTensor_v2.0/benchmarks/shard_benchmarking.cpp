@@ -2,10 +2,8 @@
 #include <iostream>
 #include <vector>
 #include <nccl.h>
-#include <nvtx3/nvtx3.hpp>
-#include <nvtx3/nvToolsExt.h>
-#include <nvtx3/nvToolsExtCuda.h>
-
+#include <mpi.h>
+#include <cuda_runtime.h>
 
 #define CUDA_CHECK(cmd) do {                         \
   cudaError_t e = cmd;                              \
@@ -22,17 +20,17 @@ int main(int argc, char** argv) {
     int rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-    std::shared_ptr<Work> work_obj;
    
-    DeviceMesh device_mesh ({2}, {0,1});
-
-    auto pg = device_mesh.get_process_group(0);
-
+    // Set CUDA device FIRST before any CUDA/NCCL operations
     int num_devices = 0;
     cudaGetDeviceCount(&num_devices);
     if (num_devices > 0) {
         CUDA_CHECK(cudaSetDevice(rank % num_devices));
     }
+
+    DeviceMesh device_mesh ({2}, {0,1});
+
+    auto pg = device_mesh.get_process_group(0);
 
     cudaStream_t comm_stream;
     cudaStreamCreate(&comm_stream);
@@ -49,14 +47,10 @@ int main(int argc, char** argv) {
     const int64_t B = 8;      // batch size
     const int64_t C = 2 * t;      // input features
     const int64_t F = 4 * t;      // token length
-    
-    // auto pg = device_mesh.get_process_group(0);
-
- 
 
     // Allocate tensors BEFORE timing starts
     
-    Layout w1_layout(device_mesh, { B , C , F }, 1);
+    Layout w1_layout(device_mesh, { B , C , F }, 2);
     DTensor W1(device_mesh, pg, w1_layout);
     
     // Only root initializes with random data
@@ -65,15 +59,12 @@ int main(int argc, char** argv) {
         // W1.display();
     }
     
-    Layout W1_asS_layout(device_mesh,{ B , C/2 , F });
+    Layout W1_asS_layout(device_mesh,{ B , C , F/2 });
     DTensor W1_Shard(device_mesh, pg, W1_asS_layout);
     
     // Warmup run (not timed)
      for (int i = 0; i < 10; i++ ){
-      // std::string message = "Start of iteration: ";
-    // nvtxRangePush(message.c_str());  
-    W1_Shard.shard_fused_transpose( 1 , 0 , W1 );
-    // nvtxRangePop();
+    W1_Shard.shard_fused_transpose( 2 , 0 , W1 );
     } 
 
     cudaDeviceSynchronize();
@@ -88,10 +79,9 @@ int main(int argc, char** argv) {
 
     CUDA_CHECK(cudaEventSynchronize(stop));
     
-    // W1_Shard.display();
 
     cudaEventElapsedTime(&duration, start, stop);
-
+    
     duration /= 100;
 
     cudaDeviceSynchronize();
@@ -110,7 +100,6 @@ int main(int argc, char** argv) {
       std::cout<<" THROUGHPUT : "<< throughput <<std::endl;    
       
       std::cout<<" B : "<< B <<std::endl;
-      // std::cout<<" T : "<< T <<std::endl;
       std::cout<<" C : "<< C <<std::endl;
       std::cout<<" F : "<< F <<std::endl;
     }

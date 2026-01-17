@@ -21,32 +21,27 @@ def benchmark_sharding(b, t, c, shard_dim=0, num_iterations=100):
     
     # Create tensor on GPU
     tensor = torch.randn(b, t, c, device=f"cuda:{rank}")
-    
-    # Warm-up
+
     for _ in range(10):
         dt = distribute_tensor(tensor, mesh, [Shard(shard_dim)])
         torch.cuda.synchronize()
     
-    # Benchmark
+
     torch.cuda.synchronize()
     start = time.perf_counter()
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
-    # start_event.record()
-    torch.cuda.nvtx.range_push("start of rotation")
+
     for i in range(num_iterations):
-        torch.cuda.nvtx.range_push("start of iteration: " + str(i) + "with sync")
-        torch.cuda.nvtx.range_push("start of iteration: " + str(i))
+
         dt = distribute_tensor(tensor, mesh, [Shard(shard_dim)])
-        torch.cuda.nvtx.range_pop()
-        torch.cuda.synchronize()
+
         torch.cuda.nvtx.range_pop()
         
-    # end_event.record()
     
     end = time.perf_counter()
 
-    torch.cuda.nvtx.range_pop()
+
     
     avg_time_ms = (end - start) / num_iterations * 1000
     tensor_size_mb = tensor.numel() * tensor.element_size() / (1024 * 1024)

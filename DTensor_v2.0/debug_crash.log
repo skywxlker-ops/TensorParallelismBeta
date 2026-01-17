@@ -1,0 +1,49 @@
+Y requires grad: true
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  In-place operator +=: Cannot promote result type beyond lhs dtype. LHS: int8, RHS: float32
+[blubridge25-MS-7E06:37552] *** Process received signal ***
+[blubridge25-MS-7E06:37552] Signal: Aborted (6)
+[blubridge25-MS-7E06:37552] Signal code:  (-6)
+[blubridge25-MS-7E06:37552] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x42520)[0x724e0b442520]
+[blubridge25-MS-7E06:37552] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x12c)[0x724e0b4969fc]
+[blubridge25-MS-7E06:37552] [ 2] /lib/x86_64-linux-gnu/libc.so.6(raise+0x16)[0x724e0b442476]
+[blubridge25-MS-7E06:37552] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xd3)[0x724e0b4287f3]
+[blubridge25-MS-7E06:37552] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa2b9e)[0x724e0b8a2b9e]
+[blubridge25-MS-7E06:37552] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae20c)[0x724e0b8ae20c]
+[blubridge25-MS-7E06:37552] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae277)[0x724e0b8ae277]
+[blubridge25-MS-7E06:37552] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae4d8)[0x724e0b8ae4d8]
+[blubridge25-MS-7E06:37552] [ 8] ./examples/tensor_parallel_mlp(+0x41b9d6)[0x5ac3de7149d6]
+[blubridge25-MS-7E06:37552] [ 9] ./examples/tensor_parallel_mlp(+0x255fc4)[0x5ac3de54efc4]
+[blubridge25-MS-7E06:37552] [10] ./examples/tensor_parallel_mlp(+0x2a9029)[0x5ac3de5a2029]
+[blubridge25-MS-7E06:37552] [11] ./examples/tensor_parallel_mlp(+0x24f24d)[0x5ac3de54824d]
+[blubridge25-MS-7E06:37552] [12] ./examples/tensor_parallel_mlp(+0x1eaf02)[0x5ac3de4e3f02]
+[blubridge25-MS-7E06:37552] [13] /lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x724e0b429d90]
+[blubridge25-MS-7E06:37552] [14] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x724e0b429e40]
+[blubridge25-MS-7E06:37552] [15] ./examples/tensor_parallel_mlp(+0x1e05a5)[0x5ac3de4d95a5]
+[blubridge25-MS-7E06:37552] *** End of error message ***
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  In-place operator +=: Cannot promote result type beyond lhs dtype. LHS: Unknown, RHS: float32
+[blubridge25-MS-7E06:37553] *** Process received signal ***
+[blubridge25-MS-7E06:37553] Signal: Aborted (6)
+[blubridge25-MS-7E06:37553] Signal code:  (-6)
+[blubridge25-MS-7E06:37553] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x42520)[0x714719442520]
+[blubridge25-MS-7E06:37553] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x12c)[0x7147194969fc]
+[blubridge25-MS-7E06:37553] [ 2] /lib/x86_64-linux-gnu/libc.so.6(raise+0x16)[0x714719442476]
+[blubridge25-MS-7E06:37553] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xd3)[0x7147194287f3]
+[blubridge25-MS-7E06:37553] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa2b9e)[0x7147198a2b9e]
+[blubridge25-MS-7E06:37553] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae20c)[0x7147198ae20c]
+[blubridge25-MS-7E06:37553] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae277)[0x7147198ae277]
+[blubridge25-MS-7E06:37553] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xae4d8)[0x7147198ae4d8]
+[blubridge25-MS-7E06:37553] [ 8] ./examples/tensor_parallel_mlp(+0x41b9d6)[0x5dd382a2a9d6]
+[blubridge25-MS-7E06:37553] [ 9] ./examples/tensor_parallel_mlp(+0x255fc4)[0x5dd382864fc4]
+[blubridge25-MS-7E06:37553] [10] ./examples/tensor_parallel_mlp(+0x2a9029)[0x5dd3828b8029]
+[blubridge25-MS-7E06:37553] [11] ./examples/tensor_parallel_mlp(+0x24f24d)[0x5dd38285e24d]
+[blubridge25-MS-7E06:37553] [12] ./examples/tensor_parallel_mlp(+0x1eaf02)[0x5dd3827f9f02]
+[blubridge25-MS-7E06:37553] [13] /lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x714719429d90]
+[blubridge25-MS-7E06:37553] [14] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x714719429e40]
+[blubridge25-MS-7E06:37553] [15] ./examples/tensor_parallel_mlp(+0x1e05a5)[0x5dd3827ef5a5]
+[blubridge25-MS-7E06:37553] *** End of error message ***
+--------------------------------------------------------------------------
+prterun noticed that process rank 0 with PID 37552 on node blubridge25-MS-7E06 exited on
+signal 6 (Aborted).
+--------------------------------------------------------------------------
