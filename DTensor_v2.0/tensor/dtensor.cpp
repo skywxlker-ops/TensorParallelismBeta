@@ -1149,3 +1149,174 @@ void DTensor::zero_grad() {
         tensor_.fill_grad<float>(0.0f);
     }
 }
+
+// ============================================================================
+// Async Collective Operations (from _adhi_)
+// ============================================================================
+
+void DTensor::sync_async() {
+    // Async sync - enqueue all-reduce but DON'T wait (deferred wait)
+    // Store the work handle so we can wait later when data is actually needed
+    pending_work_ = pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), 
+                                          size_, OwnTensor::Dtype::Float32, sum, false);
+    has_pending_collective_ = true;
+}
+
+void DTensor::wait() {
+    // Wait for any pending async collective to complete
+    if (has_pending_collective_ && pending_work_) {
+        pending_work_->wait();
+        has_pending_collective_ = false;
+        pending_work_ = nullptr;
+    }
+}
+
+bool DTensor::has_pending_collective() const {
+    return has_pending_collective_;
+}
+
+void DTensor::sync_w_autograd() {
+    // Autograd-aware sync: performs all-reduce and sets up backward graph
+    // Forward: Y = all_reduce_sum(X) - sum partial results across GPUs
+    // Backward: automatically all-reduces gradient dY before flowing to previous ops
+    
+    // 1. Forward: Blocking all-reduce
+    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), 
+                          size_, OwnTensor::Dtype::Float32, sum, false)->wait();
+    
+    // 2. Autograd graph update would go here (requires AllReduceSumBackward node)
+    // For now, just clear pending state
+    has_pending_collective_ = false;
+    pending_work_ = nullptr;
+}
+
+// ============================================================================
+// Striped Attention Support (from _adhi_)
+// ============================================================================
+
+void DTensor::permute_striped(int dim) {
+    if (dim < 0 || dim >= (int)shape_.size()) {
+        throw std::runtime_error("DTensor::permute_striped: Invalid dimension");
+    }
+    
+    int seq_len = shape_[dim];
+    int d = world_size_;
+    int n = seq_len / d;
+    
+    if (seq_len % d != 0) {
+        std::ostringstream oss;
+        oss << "DTensor::permute_striped: Sequence length (" << seq_len 
+            << ") must be divisible by world_size (" << d << ")";
+        throw std::runtime_error(oss.str());
+    }
+    
+    int outer_size = 1;
+    int inner_size = 1;
+    for (int i = 0; i < dim; i++) outer_size *= shape_[i];
+    for (int i = dim + 1; i < (int)shape_.size(); i++) inner_size *= shape_[i];
+    
+    std::vector<float> host_data = getData();
+    std::vector<float> permuted_data(size_);
+    
+    for (int outer = 0; outer < outer_size; outer++) {
+        for (int seq = 0; seq < seq_len; seq++) {
+            int source_seq = (seq % n) * d + (seq / n);
+            
+            for (int inner = 0; inner < inner_size; inner++) {
+                int src_idx = outer * seq_len * inner_size + source_seq * inner_size + inner;
+                int dst_idx = outer * seq_len * inner_size + seq * inner_size + inner;
+                permuted_data[dst_idx] = host_data[src_idx];
+            }
+        }
+    }
+    
+    cudaMemcpyAsync(tensor_.data<float>(), permuted_data.data(),
+                    size_ * sizeof(float), cudaMemcpyHostToDevice, data_stream_);
+    cudaStreamSynchronize(data_stream_);
+}
+
+void DTensor::unpermute_striped(int dim) {
+    if (dim < 0 || dim >= (int)shape_.size()) {
+        throw std::runtime_error("DTensor::unpermute_striped: Invalid dimension");
+    }
+    
+    int seq_len = shape_[dim];
+    int d = world_size_;
+    int n = seq_len / d;
+    
+    if (seq_len % d != 0) {
+        std::ostringstream oss;
+        oss << "DTensor::unpermute_striped: Sequence length (" << seq_len 
+            << ") must be divisible by world_size (" << d << ")";
+        throw std::runtime_error(oss.str());
+    }
+    
+    int outer_size = 1;
+    int inner_size = 1;
+    for (int i = 0; i < dim; i++) outer_size *= shape_[i];
+    for (int i = dim + 1; i < (int)shape_.size(); i++) inner_size *= shape_[i];
+    
+    std::vector<float> host_data = getData();
+    std::vector<float> unpermuted_data(size_);
+    
+    for (int outer = 0; outer < outer_size; outer++) {
+        for (int seq = 0; seq < seq_len; seq++) {
+            int source_seq = (seq % d) * n + (seq / d);
+            
+            for (int inner = 0; inner < inner_size; inner++) {
+                int src_idx = outer * seq_len * inner_size + source_seq * inner_size + inner;
+                int dst_idx = outer * seq_len * inner_size + seq * inner_size + inner;
+                unpermuted_data[dst_idx] = host_data[src_idx];
+            }
+        }
+    }
+    
+    cudaMemcpyAsync(tensor_.data<float>(), unpermuted_data.data(),
+                    size_ * sizeof(float), cudaMemcpyHostToDevice, data_stream_);
+    cudaStreamSynchronize(data_stream_);
+}
+
+// ============================================================================
+// Assemble/Gather (from _adhi_)
+// ============================================================================
+
+void DTensor::assemble(int dim, int root, DTensor& sharded_tensor) {
+    // Gather sharded tensor pieces back to full tensor
+    std::vector<int64_t> global_shape = sharded_tensor.get_layout().get_global_shape();
+    size_t total_numel = numelFromShape(global_shape);
+    
+    // Ensure this tensor has space for full assembled result
+    if (tensor_.numel() != total_numel) {
+        tensor_ = OwnTensor::Tensor(toShape(global_shape),
+                                    OwnTensor::TensorOptions()
+                                        .with_device(tensor_.device())
+                                        .with_dtype(tensor_.dtype()));
+    }
+    
+    // All-gather the sharded pieces
+    size_t shard_numel = sharded_tensor.local_tensor().numel();
+    pg_->all_gather(sharded_tensor.local_tensor().data<float>(), 
+                    tensor_.data<float>(),
+                    shard_numel, OwnTensor::Dtype::Float32, true);
+    
+    layout_ = Layout::replicated(*device_mesh_, std::vector<int64_t>(global_shape.begin(), global_shape.end()));
+    shape_ = global_shape;
+    size_ = total_numel;
+}
+
+// ============================================================================
+// Linear Layer Operations (from _adhi_)
+// ============================================================================
+
+void DTensor::Linear(DTensor& Input, DTensor& Weights, DTensor& Bias) {
+    // Compute Y = matmul(Input, Weights) + Bias
+    OwnTensor::Tensor matmul_result = Bridge::matmul(Input.tensor_, Weights.tensor_);
+    tensor_ = Bridge::add(matmul_result, Bias.tensor_);
+}
+
+void DTensor::linear_w_autograd(DTensor& Input, DTensor& Weights, DTensor& Bias) {
+    // Use autograd-aware operations for gradient tracking
+    OwnTensor::Tensor out = Bridge::autograd::matmul(Input.tensor_, Weights.tensor_);
+    tensor_ = Bridge::autograd::add(out, Bias.tensor_);
+}
+
