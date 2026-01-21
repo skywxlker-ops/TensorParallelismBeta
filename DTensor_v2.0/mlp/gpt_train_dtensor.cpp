@@ -478,6 +478,3 @@ int main(int argc, char** argv) {
     
     return 0;
 }
-X.local_tensor().set_grad_fn(nullptr);
-mlp.fc1().weight().local_tensor().set_grad_fn(nullptr);
-cudaDeviceSynchronize();

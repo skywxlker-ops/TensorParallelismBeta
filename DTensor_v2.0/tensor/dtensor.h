@@ -48,7 +48,77 @@ public:
     void allReduce_async();     // Queue AllReduce, don't wait
     void reduceScatter_async(); // Queue ReduceScatter, don't wait
     void allGather_async();     // Queue AllGather, don't wait
-    // void sync_async();          // Queue sync (AllReduce SUM), don't wait
+    
+    // =========================================
+    // ASYNC COLLECTIVE TRACKING (from _adhi_)
+    // =========================================
+    
+    /**
+     * Non-blocking sync - enqueues all-reduce without waiting.
+     * Call wait() later when data is needed.
+     */
+    void sync_async();
+    
+    /**
+     * Autograd-aware sync: all-reduce + inserts backward hook for gradient sync.
+     * Forward: Y = all_reduce_sum(X)
+     * Backward: dX = all_reduce_sum(dY)
+     */
+    void sync_w_autograd();
+    
+    /**
+     * Wait for any pending async collective to complete.
+     */
+    void wait();
+    
+    /**
+     * Check if there's a pending async collective.
+     */
+    bool has_pending_collective() const;
+    
+    // =========================================
+    // STRIPED ATTENTION SUPPORT (from _adhi_)
+    // =========================================
+    
+    /**
+     * Permute tensor for striped attention pattern.
+     * Rearranges sequence positions for distributed attention.
+     * @param dim Dimension to permute (default: 0)
+     */
+    void permute_striped(int dim = 0);
+    
+    /**
+     * Undo striped permutation.
+     * @param dim Dimension to unpermute (default: 0)
+     */
+    void unpermute_striped(int dim = 0);
+    
+    // =========================================
+    // GATHER/ASSEMBLE (from _adhi_)
+    // =========================================
+    
+    /**
+     * Gather sharded tensor back to replicated form.
+     * @param dim Dimension that was sharded
+     * @param root Root rank for gather
+     * @param sharded_tensor Source sharded tensor
+     */
+    void assemble(int dim, int root, DTensor& sharded_tensor);
+    
+    // =========================================
+    // LINEAR LAYER OPERATIONS (from _adhi_)
+    // =========================================
+    
+    /**
+     * Compute linear layer: Y = matmul(X, W) + B
+     * Result stored in this tensor.
+     */
+    void Linear(DTensor& Input, DTensor& Weights, DTensor& Bias);
+    
+    /**
+     * Linear with autograd: tracks gradients for backprop.
+     */
+    void linear_w_autograd(DTensor& Input, DTensor& Weights, DTensor& Bias);
 
     void setData(const std::vector<float>& host_data, const Layout& layout);
     
@@ -328,6 +398,10 @@ private:
     std::vector<int64_t> shape_; 
     std::string dtype_ = "float32";
     bool requires_grad_ = false;
+    
+    // Async collective tracking (from _adhi_)
+    bool has_pending_collective_ = false;
+    std::shared_ptr<Work> pending_work_ = nullptr;
 
 
 
