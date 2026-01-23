@@ -1,0 +1,26 @@
+# Binaries and Objects
+*.o
+*.a
+*.so
+*.out
+*.exe
+
+# Build directories
+lib/objects/
+lib/unparalleled.a
+lib/unparalleled.so
+
+# Executables
+benchmarks/shard_benchmarking
+benchmarks/shard_benchmarking2
+benchmarks/shard_benchmarking_vary
+nn/examples/hooks_example
+mlp/test_customdnn_mlp
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/

@@ -29,6 +29,7 @@ INCLUDES = \
     -I$(PARENT_DIR)/memory \
     -I$(PARENT_DIR)/bridge \
     -I$(PARENT_DIR)/ckpt \
+    -I$(PARENT_DIR)/nn \
     -I$(TENSOR_LIB_DIR)/include \
     -I$(CUDA_HOME)/include
 
@@ -71,7 +72,8 @@ TESTS = \
     test_memory_pool_efficiency \
     test_caching_allocator \
     test_dtensor_autograd \
-    test_autograd_tp
+    test_autograd_tp \
+    test_customdnn_mlp
 
 # =============================================================================
 # Build Rules
@@ -130,6 +132,22 @@ $(1): $(1).o $(UNPARALLELED_A) $(TENSOR_LIB_A)
 endef
 
 $(foreach test,$(TESTS),$(eval $(call TEST_RULE,$(test))))
+
+# =============================================================================
+# Special Rules (tests requiring additional objects)
+# =============================================================================
+
+# CustomDNN.o for tests using the new API
+CustomDNN.o: $(PARENT_DIR)/nn/CustomDNN.cpp
+	@echo "[COMPILE] CustomDNN.cpp"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Override test_customdnn_mlp to link with CustomDNN.o
+test_customdnn_mlp: test_customdnn_mlp.o CustomDNN.o $(UNPARALLELED_A) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ test_customdnn_mlp.o CustomDNN.o $(UNPARALLELED_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] $@ built"
+	@echo "Run: mpirun -np 2 ./$@\n"
 
 # =============================================================================
 # Library Checks

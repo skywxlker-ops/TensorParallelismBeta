@@ -46,14 +46,19 @@ DLinear::DLinear(std::shared_ptr<DeviceMesh> mesh,
     weight_->set_requires_grad(true);
     
     // Initialize bias if needed
+    // For column-parallel (Shard(1)), output is sharded on last dim, so bias must match
+    // For row-parallel (Shard(0)), output is replicated after sync, so bias should be replicated
     if (has_bias_) {
-        if (bias_sharding_.is_shard()) {
-            Layout b_layout(*mesh, {out_features_}, bias_sharding_.shard_dim());
+        // For column-parallel, bias should be sharded same as weight columns
+        // For row-parallel or replicated, bias should be replicated
+        if (weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 1) {
+            // Column-parallel: shard bias to match sharded output
+            Layout b_layout(*mesh, {out_features_}, 0);  // 1D, sharded on dim 0
             bias_ = std::make_unique<DTensor>(
                 DTensor::zeros({out_features_}, mesh, pg, b_layout));
         } else {
-            // Replicated bias
-            Layout b_layout = Layout::replicated(*mesh, {out_features_});
+            // Row-parallel or replicated: replicated bias
+            Layout b_layout = Layout::replicated(*mesh, {out_features_});  // 1D
             bias_ = std::make_unique<DTensor>(
                 DTensor::zeros({out_features_}, mesh, pg, b_layout));
         }
@@ -99,14 +104,15 @@ DTensor DLinear::forward(const DTensor& input) {
     // Compute Y = X @ W
     DTensor output = input.matmul(*weight_);
     
-    // Add bias if present
-    if (has_bias_ && bias_) {
-        output = output.add(*bias_);
-    }
-    
     // Auto-sync: Row-parallel (Shard(0)) needs AllReduce to sum partial results
     if (weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 0) {
         output.sync();  // AllReduce sum
+    }
+
+    // Add bias if present
+    // Note: Add bias AFTER sync for row-parallel to avoid adding bias multiple times
+    if (has_bias_ && bias_) {
+        output = output.add(*bias_);
     }
     
     return output;
@@ -212,11 +218,17 @@ DMLP::DMLP(int64_t in_features,
     
     // First layer: Column-parallel (shards hidden dimension)
     fc1_ = std::make_unique<DLinear>(
-        in_features, hidden_features, mesh, pg, ParallelType::COLUMN);
+        mesh, pg, in_features, hidden_features,
+        ShardingType::Shard(1),      // Weight: Column-sharded
+        ShardingType::Replicated(),  // Bias: Replicated (adapted internally)
+        true);
     
     // Second layer: Row-parallel (shards input to produce replicated output)
     fc2_ = std::make_unique<DLinear>(
-        hidden_features, out_features, mesh, pg, ParallelType::ROW);
+        mesh, pg, hidden_features, out_features,
+        ShardingType::Shard(0),      // Weight: Row-sharded
+        ShardingType::Replicated(),  // Bias: Replicated
+        true);
 }
 
 DTensor DMLP::forward(const DTensor& input) {
