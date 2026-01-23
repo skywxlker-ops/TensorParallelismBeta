@@ -57,7 +57,8 @@ LIB_SRCS := \
     process_group/reverse.cu \
     memory/cachingAllocator.cpp \
     bridge/bridge.cpp \
-    tensor/dtensor_native.cpp
+    nn/nn.cpp \
+    nn/CustomDNN.cpp
 
 # Object files go into lib/objects/
 LIB_OBJDIR := $(LIBDIR)/objects
@@ -189,10 +190,23 @@ dmlp_example: $(DMLP_EXAMPLE_OBJS) $(TENSOR_LIB_A)
 	@echo "\nRun with: mpirun -np 2 ./examples/dmlp_example\n"
 
 # =============================================================================
+# EXAMPLES
+# =============================================================================
+
+hooks_example: $(LIB_A) $(TENSOR_LIB_A)
+	@mkdir -p nn/examples
+	@echo "\n[COMPILE] nn/examples/hooks_example.cpp"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c nn/examples/hooks_example.cpp -o nn/examples/hooks_example.o
+	@echo "[LINKING] hooks_example"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o nn/examples/hooks_example nn/examples/hooks_example.o $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Example built: nn/examples/hooks_example"
+	@echo "\nRun: mpirun -np 2 ./nn/examples/hooks_example\n"
+
+# =============================================================================
 # CLEANUP
 # =============================================================================
 
 clean:
 	@echo "[CLEAN] Removing build artifacts..."
-	rm -rf $(LIB_OBJDIR) $(LIB_A) $(LIB_SO) benchmarks/*.o benchmarks/shard_benchmarking benchmarks/shard_benchmarking2 benchmarks/shard_benchmarking_vary
+	rm -rf $(LIB_OBJDIR) $(LIB_A) $(LIB_SO) benchmarks/*.o benchmarks/shard_benchmarking benchmarks/shard_benchmarking2 benchmarks/shard_benchmarking_vary nn/examples/*.o nn/examples/hooks_example
 	@echo "[CLEAN] Done"

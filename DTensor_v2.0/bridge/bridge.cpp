@@ -160,7 +160,9 @@ Tensor categorical_cross_entropy(const Tensor& predictions, const Tensor& target
 }
 
 Tensor embedding(const Tensor& indices, const Tensor& weight, int padding_idx) {
-    return OwnTensor::autograd::embedding(indices, weight, padding_idx);
+    // Note: padding_idx not supported in TensorLib's embedding, ignoring it
+    // TensorLib signature is: embedding(weight, indices)
+    return OwnTensor::autograd::embedding(weight, indices);
 }
 
 void backward(Tensor& output, const Tensor* grad_output) {
