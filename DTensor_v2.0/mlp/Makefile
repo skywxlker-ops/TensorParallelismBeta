@@ -51,6 +51,7 @@ LIBS = \
 # --- All MLP executables ---
 MLPS = \
     test_dtensor_mlp \
+    test_4layer_mlp \
     gpt_train_dtensor
 
 # =============================================================================
@@ -91,7 +92,7 @@ help:
 # Clean target
 clean:
 	@echo "[CLEAN] Removing MLP executables and objects..."
-	rm -f $(MLPS) *.o
+	rm -f $(MLPS) *.o CustomDNN.o
 	@echo "[CLEAN] Done"
 
 # =============================================================================
@@ -103,20 +104,25 @@ clean:
 	@echo "\n[COMPILE] $<"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# Compile nn.cpp from nn directory
+# Compile nn.cpp from nn directory (legacy support)
 nn.o: $(PARENT_DIR)/nn/nn.cpp $(PARENT_DIR)/nn/nn.hpp
 	@echo "\n[COMPILE] nn.cpp"
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(PARENT_DIR)/nn/nn.cpp -o nn.o
+
+# Compile CustomDNN.cpp from nn directory (new framework)
+CustomDNN.o: $(PARENT_DIR)/nn/CustomDNN.cpp $(PARENT_DIR)/nn/CustomDNN.h
+	@echo "\n[COMPILE] CustomDNN.cpp"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(PARENT_DIR)/nn/CustomDNN.cpp -o CustomDNN.o
 
 # =============================================================================
 # Linking Rules
 # =============================================================================
 
-# Template for linking MLP executables (now includes nn.o)
+# Template for linking MLP executables (now includes nn.o and CustomDNN.o)
 define MLP_RULE
-$(1): $(1).o nn.o $(UNPARALLELED_A) $(TENSOR_LIB_A)
+$(1): $(1).o nn.o CustomDNN.o $(UNPARALLELED_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $$@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $$@ $(1).o nn.o $(UNPARALLELED_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $$@ $(1).o nn.o CustomDNN.o $(UNPARALLELED_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $$@ built"
 	@echo "Run: mpirun -np 2 ./$$@\n"
 endef

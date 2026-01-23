@@ -316,6 +316,24 @@ void DLinearReplicated::zero_grad() {
 // =============================================================================
 
 void SGD::step(std::vector<DTensor*> params) {
+    // Gradient clipping: compute global norm and scale if needed
+    float global_norm_sq = 0.0f;
+    const float max_norm = 1000.0f;  // Balanced clip threshold
+    
+    // First pass: compute global gradient norm
+    for (DTensor* param : params) {
+        if (!param->requires_grad()) continue;
+        auto grad_cpu = param->grad().to_cpu();
+        const float* g_ptr = grad_cpu.data<float>();
+        size_t numel = grad_cpu.numel();
+        for (size_t i = 0; i < numel; ++i) {
+            global_norm_sq += g_ptr[i] * g_ptr[i];
+        }
+    }
+    float global_norm = std::sqrt(global_norm_sq);
+    float clip_coef = (global_norm > max_norm) ? (max_norm / global_norm) : 1.0f;
+    
+    // Second pass: apply clipped gradient update
     for (DTensor* param : params) {
         if (!param->requires_grad()) continue;
         
@@ -330,9 +348,9 @@ void SGD::step(std::vector<DTensor*> params) {
         const float* g_ptr = grad_cpu.data<float>();
         size_t numel = weight_cpu.numel();
         
-        // W = W - lr * grad
+        // W = W - lr * clip_coef * grad
         for (size_t i = 0; i < numel; ++i) {
-            w_ptr[i] -= lr_ * g_ptr[i];
+            w_ptr[i] -= lr_ * clip_coef * g_ptr[i];
         }
         
         // Copy back to GPU using cudaMemcpy

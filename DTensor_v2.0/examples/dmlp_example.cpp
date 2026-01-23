@@ -8,8 +8,8 @@
  * Run: mpirun -np 2 ./examples/dmlp_example
  */
 
-#include "nn/DistributedNN.h"
 #include <mpi.h>
+#include "DTensor_v2.0/mlp_adhi/DistributedNN.h"
 
 using namespace OwnTensor;
 using namespace OwnTensor::dnn;

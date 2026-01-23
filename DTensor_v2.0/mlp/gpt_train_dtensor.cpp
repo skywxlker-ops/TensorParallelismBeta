@@ -3,7 +3,7 @@
  * @brief Language Model Training with DTensor Tensor Parallelism
  * 
  * Features:
- * - DMLP class with Column/Row parallelism
+ * - DMLP class with Column/Row parallelism (using CustomDNN framework)
  * - SGD optimizer with weight updates
  * - Learning rate scheduling (warmup + cosine decay)
  * - Text generation from prompts
@@ -13,7 +13,7 @@
  */
 
 #include <unparalleled/unparalleled.h>
-#include "nn/nn.hpp"
+#include "nn/CustomDNN.h"  // Updated to use CustomDNN framework
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -21,6 +21,9 @@
 #include <iomanip>
 #include <chrono>
 #include <cstring>
+
+// Use the CustomDNN namespace
+using namespace OwnTensor::dnn;
 
 // =============================================================================
 // Learning Rate Scheduler (Warmup + Cosine Decay)
@@ -132,7 +135,7 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Hyperparameters
     // =========================================================================
-    const int B = 2;              // Batch size (reduced for memory)
+    const int B = 2;              // Batch size (increased for smoother loss)
     const int T = 64;             // Sequence length
     const int vocab_size_raw = 5000;  // Reduced for memory (was 10000)
     // Pad vocab_size to be divisible by world_size for even sharding
@@ -141,12 +144,12 @@ int main(int argc, char** argv) {
     const int hidden_dim = 512;   // MLP hidden dimension
     const int max_steps = 2000;   // Training steps
     const int warmup_steps = 100; // LR warmup steps
-    const float max_lr = 6e-4f;   // Max learning rate
-    const float min_lr = 6e-5f;   // Min learning rate (10% of max)
+    const float max_lr = 3e-5f;   // Balanced LR with gradient clipping
+    const float min_lr = 3e-6f;   // Min learning rate (10% of max)
     
     if (rank == 0) {
         std::cout << "Config: B=" << B << ", T=" << T << ", n_embd=" << n_embd 
-                  << ", hidden=" << hidden_dim << std::endl;
+                  << ", hidden=" << hidden_dim << " (4-layer MLP)" << std::endl;
         std::cout << "Training: " << max_steps << " steps, warmup=" << warmup_steps
                   << ", lr=" << max_lr << " -> " << min_lr << std::endl;
     }
@@ -176,9 +179,13 @@ int main(int argc, char** argv) {
     DEmbedding embedding(vocab_size, n_embd, mesh, pg);
     embedding.set_requires_grad(true);
     
-    // MLP: hidden layer processing [n_embd -> hidden_dim -> n_embd]
-    DMLP mlp(n_embd, hidden_dim, n_embd, mesh, pg);
-    mlp.set_requires_grad(true);
+    // MLP Block 1: hidden layer processing [n_embd -> hidden_dim -> n_embd]
+    DMLP mlp1(n_embd, hidden_dim, n_embd, mesh, pg);
+    mlp1.set_requires_grad(true);
+    
+    // MLP Block 2: second hidden layer [n_embd -> hidden_dim -> n_embd]
+    DMLP mlp2(n_embd, hidden_dim, n_embd, mesh, pg);
+    mlp2.set_requires_grad(true);
     
     // Output projection: embeddings -> vocab logits [n_embd, vocab_size]
     // Replicated - each GPU has full output projection weights
@@ -246,9 +253,11 @@ int main(int argc, char** argv) {
         // 1. Embedding lookup: token IDs -> embeddings [B*T, n_embd]
         auto X = embedding.forward(input_tokens);
         
-        // 2. MLP Layer 1: [B*T, n_embd] -> [B*T, n_embd]
-        // 2. MLP: [B*T, n_embd] -> [B*T, n_embd]
-        auto H = mlp.forward(X);
+        // 2. MLP Block 1 (layers 1-2): [B*T, n_embd] -> [B*T, n_embd]
+        auto H1 = mlp1.forward(X);
+        
+        // 3. MLP Block 2 (layers 3-4): [B*T, n_embd] -> [B*T, n_embd]
+        auto H = mlp2.forward(H1);
         
         // 4. Output projection: [B*T, n_embd] -> [B*T, vocab_size] (replicated)
         auto logits = out_proj.forward(H);
@@ -304,7 +313,8 @@ int main(int argc, char** argv) {
         // Backward Pass (using manual gradient)
         // ---------------------------------------------------------------------
         embedding.zero_grad();
-        mlp.zero_grad();
+        mlp1.zero_grad();
+        mlp2.zero_grad();
         out_proj.zero_grad();
         
         // Backprop through logits with our manual gradient
@@ -312,20 +322,25 @@ int main(int argc, char** argv) {
         
         // Debug: Check gradients after backward at step 0
         if (step == 0 && rank == 0) {
-            auto fc1_grad = mlp.fc1().weight().grad().to_cpu();
+            auto fc1_grad = mlp1.fc1().weight().grad().to_cpu();
             std::cout << "\n=== GRADIENTS AFTER BACKWARD ===" << std::endl;
-            std::cout << "fc1 grad first: " << fc1_grad.data<float>()[0] << std::endl;
+            std::cout << "mlp1.fc1 grad first: " << fc1_grad.data<float>()[0] << std::endl;
         }
         
-        // Compute gradient norms
-        float grad_fc1_norm = compute_grad_norm(mlp.fc1().weight());
-        float grad_fc2_norm = compute_grad_norm(mlp.fc2().weight());
-        float total_norm = std::sqrt(grad_fc1_norm * grad_fc1_norm + 
-                                      grad_fc2_norm * grad_fc2_norm);
+        // Compute gradient norms (all 4 layers)
+        float grad_mlp1_fc1 = compute_grad_norm(mlp1.fc1().weight());
+        float grad_mlp1_fc2 = compute_grad_norm(mlp1.fc2().weight());
+        float grad_mlp2_fc1 = compute_grad_norm(mlp2.fc1().weight());
+        float grad_mlp2_fc2 = compute_grad_norm(mlp2.fc2().weight());
+        float total_norm = std::sqrt(grad_mlp1_fc1 * grad_mlp1_fc1 + 
+                                      grad_mlp1_fc2 * grad_mlp1_fc2 +
+                                      grad_mlp2_fc1 * grad_mlp2_fc1 +
+                                      grad_mlp2_fc2 * grad_mlp2_fc2);
         
         // Clear autograd graph to prevent memory leak
         // Set grad_fn to nullptr on all intermediate and parameter tensors
-        X.local_tensor().set_grad_fn(nullptr);
+        X.local_tensor().set_grad_fn(nullptr);  
+        H1.local_tensor().set_grad_fn(nullptr);
         H.local_tensor().set_grad_fn(nullptr);
         logits.local_tensor().set_grad_fn(nullptr);
         probs.local_tensor().set_grad_fn(nullptr);
@@ -334,8 +349,10 @@ int main(int argc, char** argv) {
         
         // Clear MLP and embedding weight grad_fn to prevent graph accumulation
         embedding.weight().local_tensor().set_grad_fn(nullptr);
-        mlp.fc1().weight().local_tensor().set_grad_fn(nullptr);
-        mlp.fc2().weight().local_tensor().set_grad_fn(nullptr);
+        mlp1.fc1().weight().local_tensor().set_grad_fn(nullptr);
+        mlp1.fc2().weight().local_tensor().set_grad_fn(nullptr);
+        mlp2.fc1().weight().local_tensor().set_grad_fn(nullptr);
+        mlp2.fc2().weight().local_tensor().set_grad_fn(nullptr);
         out_proj.weight().local_tensor().set_grad_fn(nullptr);
         
         // Sync to ensure memory is freed
@@ -346,8 +363,10 @@ int main(int argc, char** argv) {
         // ---------------------------------------------------------------------
         std::vector<DTensor*> params = {
             &embedding.weight(),
-            &mlp.fc1().weight(), 
-            &mlp.fc2().weight(),
+            &mlp1.fc1().weight(), 
+            &mlp1.fc2().weight(),
+            &mlp2.fc1().weight(), 
+            &mlp2.fc2().weight(),
             &out_proj.weight()
         };
         optimizer.step(params);
@@ -382,8 +401,20 @@ int main(int argc, char** argv) {
     }
     
     // =========================================================================
-    // Text Generation
+    // Text Generation (skip for large batch to avoid OOM)
     // =========================================================================
+    
+    // Skip text generation when using large batch sizes to avoid OOM
+    if (B > 4) {
+        if (rank == 0) {
+            std::cout << "\n[INFO] Skipping text generation with B=" << B 
+                      << " to avoid memory issues." << std::endl;
+            std::cout << "Training completed successfully!" << std::endl;
+        }
+        goto cleanup;  // Skip to cleanup section
+    }
+    
+    cudaDeviceSynchronize();  // Ensure all GPU ops complete
     
     auto encode_prompt = [](const std::string& prompt) -> std::vector<int> {
         std::vector<int> tokens;
@@ -415,7 +446,8 @@ int main(int argc, char** argv) {
             auto Ctx = DTensor::zeros({context_len, n_embd}, mesh, pg, ctx_layout);
             Ctx.setData(ctx_embeddings, ctx_layout);
             
-            auto Y = mlp.forward(Ctx);
+            auto H1_gen = mlp1.forward(Ctx);
+            auto Y = mlp2.forward(H1_gen);
             auto Y_data = Y.getData();
             
             // Argmax over last position's output
@@ -470,6 +502,7 @@ int main(int argc, char** argv) {
     
     }  // End DTensor scope - mlp destroyed here before MPI finalize
     
+cleanup:
     // Cleanup: Sync CUDA, reset PG, finalize MPI
     cudaDeviceSynchronize();
     MPI_Barrier(MPI_COMM_WORLD);
@@ -478,3 +511,4 @@ int main(int argc, char** argv) {
     
     return 0;
 }
+

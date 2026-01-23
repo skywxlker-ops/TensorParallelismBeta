@@ -171,6 +171,23 @@ shard_benchmarking_vary: $(LIB_A) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] Benchmark built: benchmarks/shard_benchmarking_vary"
 	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./benchmarks/shard_benchmarking_vary\n"
 
+DMLP_EXAMPLE_SRCS = \
+    examples/dmlp_example.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+	tensor/placement.cpp
+
+DMLP_EXAMPLE_OBJS = $(DMLP_EXAMPLE_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+dmlp_example: $(DMLP_EXAMPLE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(DMLP_EXAMPLE_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] DModule MLP Example build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/dmlp_example\n"
+
 # =============================================================================
 # CLEANUP
 # =============================================================================
