@@ -8,12 +8,14 @@
  * - Learning rate scheduling (warmup + cosine decay)
  * - Text generation from prompts
  * - CSV logging of training metrics
+ * - DataLoader for sharded binary datasets
  * 
  * Run with: mpirun -np 2 ./gpt_train_dtensor
  */
 
 #include <unparalleled/unparalleled.h>
-#include "nn/CustomDNN.h"  // Updated to use CustomDNN framework
+#include "nn/CustomDNN.h"
+#include "../data/DataLoader.h" // Include the new DataLoader header
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -54,49 +56,6 @@ private:
 };
 
 // =============================================================================
-// Load .npy file (uint16, 1D array)
-// =============================================================================
-
-std::vector<uint16_t> load_npy_uint16(const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot open file: " + filename);
-    }
-    
-    // Read magic string
-    char magic[6];
-    file.read(magic, 6);
-    if (magic[0] != '\x93' || std::string(magic+1, 5) != "NUMPY") {
-        throw std::runtime_error("Invalid .npy file");
-    }
-    
-    // Read version
-    uint8_t major, minor;
-    file.read(reinterpret_cast<char*>(&major), 1);
-    file.read(reinterpret_cast<char*>(&minor), 1);
-    
-    // Read header length
-    uint16_t header_len;
-    file.read(reinterpret_cast<char*>(&header_len), 2);
-    
-    // Skip header
-    file.seekg(header_len, std::ios::cur);
-    
-    // Get file size to determine array length
-    auto pos = file.tellg();
-    file.seekg(0, std::ios::end);
-    auto end = file.tellg();
-    file.seekg(pos);
-    
-    size_t num_elements = (end - pos) / sizeof(uint16_t);
-    
-    std::vector<uint16_t> data(num_elements);
-    file.read(reinterpret_cast<char*>(data.data()), num_elements * sizeof(uint16_t));
-    
-    return data;
-}
-
-// =============================================================================
 // Calculate gradient norm for a DTensor
 // =============================================================================
 
@@ -135,11 +94,15 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Hyperparameters
     // =========================================================================
-    const int B = 2;              // Batch size (increased for smoother loss)
+    const int B = 2;              // Batch size
     const int T = 64;             // Sequence length
-    const int vocab_size_raw = 5000;  // Reduced for memory (was 10000)
-    // Pad vocab_size to be divisible by world_size for even sharding
+    const int vocab_size_raw = 50257;  // GPT-2 vocab size (standard for edufineweb)
+    // Pad vocab_size to be divisible by world_size for even sharding if needed
+    // Note: DLinearReplicated doesn't require padding, but DLinear might. 
+    // We use Replicated output projection, so exact size is fine, 
+    // but let's keep it safe if we switch later.
     const int vocab_size = ((vocab_size_raw + world_size - 1) / world_size) * world_size;
+    
     const int n_embd = 256;       // Embedding dimension
     const int hidden_dim = 512;   // MLP hidden dimension
     const int max_steps = 2000;   // Training steps
@@ -155,47 +118,60 @@ int main(int argc, char** argv) {
     }
     
     // =========================================================================
-    // Load Dataset
+    // Check Dataset Path
     // =========================================================================
-    std::string data_path = "../../edufineweb_train_000001.npy";
-    std::vector<uint16_t> tokens;
-    try {
-        tokens = load_npy_uint16(data_path);
-        if (rank == 0) {
-            std::cout << "Loaded " << tokens.size() << " tokens from dataset" << std::endl;
+    // Explicitly define training files
+    std::vector<std::string> train_files = {
+        "../data/edufineweb_train_000001.bin",
+        "../data/edufineweb_train_000002.bin",
+        "../data/edufineweb_train_000003.bin"
+    };
+
+    // Verify files (optional, DataLoader does this too)
+    if (rank == 0) {
+        std::cout << "Dataset files:" << std::endl;
+        bool all_exist = true;
+        for (const auto& f : train_files) {
+            if (!std::filesystem::exists(f)) {
+                std::cerr << "  [MISSING] " << f << std::endl;
+                all_exist = false;
+            } else {
+                std::cout << "  [OK] " << f << std::endl;
+            }
         }
-    } catch (const std::exception& e) {
-        if (rank == 0) std::cerr << "Error loading data: " << e.what() << std::endl;
-        MPI_Finalize();
-        return 1;
+        if (!all_exist) {
+             std::cerr << "Error: Some dataset files are missing." << std::endl;
+             MPI_Finalize();
+             return 1;
+        }
     }
     
     // =========================================================================
     // Model: Embedding + MLP + Output Projection with Tensor Parallelism
     // =========================================================================
-    {  // Begin scope for DTensor objects - ensures destruction before MPI finalize
+    {  // Begin scope for DTensor objects
     
+    // Instantiate DataLoader with explicit files
+    DataLoaderLite loader(B, T, rank, world_size, train_files, rank==0);
+
     // Embedding layer: token IDs -> embeddings [vocab_size, n_embd]
     DEmbedding embedding(vocab_size, n_embd, mesh, pg);
     embedding.set_requires_grad(true);
     
-    // MLP Block 1: hidden layer processing [n_embd -> hidden_dim -> n_embd]
+    // MLP Block 1 (layers 1-2)
     DMLP mlp1(n_embd, hidden_dim, n_embd, mesh, pg);
     mlp1.set_requires_grad(true);
     
-    // MLP Block 2: second hidden layer [n_embd -> hidden_dim -> n_embd]
+    // MLP Block 2 (layers 3-4)
     DMLP mlp2(n_embd, hidden_dim, n_embd, mesh, pg);
     mlp2.set_requires_grad(true);
     
     // Output projection: embeddings -> vocab logits [n_embd, vocab_size]
-    // Replicated - each GPU has full output projection weights
     DLinearReplicated out_proj(n_embd, vocab_size, mesh, pg);
     out_proj.set_requires_grad(true);
     
-    // Learning rate scheduler
+    // Scheduler & Optimizer
     LRScheduler lr_scheduler(max_lr, min_lr, warmup_steps, max_steps);
-    
-    // SGD optimizer
     SGD optimizer(max_lr);
     
     // =========================================================================
@@ -206,8 +182,6 @@ int main(int argc, char** argv) {
         csv_file.open("training_log.csv");
         csv_file << "step,loss,lr,norm,dt_ms,tok_sec\n";
     }
-    
-    size_t data_pos = 0;
     
     if (rank == 0) {
         std::cout << "\nStarting training for " << max_steps << " steps..." << std::endl;
@@ -224,70 +198,67 @@ int main(int argc, char** argv) {
         optimizer.set_lr(current_lr);
         
         // ---------------------------------------------------------------------
-        // Get batch of tokens
+        // Get batch
         // ---------------------------------------------------------------------
-        std::vector<int> input_tokens(B * T);
-        std::vector<int> target_tokens(B * T);
+        Batch b = loader.next_batch();
+
+        // Safety: Clamp tokens to vocab_size - 1 locally on CPU before using on GPU
+        // This prevents OOB access if dataset vocab > model vocab
+        for (size_t i = 0; i < b.x.size(); ++i) {
+             if (b.x[i] >= vocab_size) b.x[i] = 0; // Replace OOB with 0 (or some UNK token)
+             if (b.y[i] >= vocab_size) b.y[i] = 0;
+        }
+        // 211: Update the GPU tensors in the batch with clamped data
+        // b.input.set_data(b.x);  // Not needed if we use embedding.forward(vec)
+        // b.target.set_data(b.y); // Still needed? No, we use target_onehot below manually.
         
-        for (int b = 0; b < B; ++b) {
-            for (int t = 0; t < T; ++t) {
-                size_t idx = data_pos + b * (T + 1) + t;
-                if (idx >= tokens.size() - 1) {
-                    data_pos = 0;
-                    idx = data_pos + b * (T + 1) + t;
-                }
-                input_tokens[b * T + t] = tokens[idx];
-                target_tokens[b * T + t] = tokens[idx + 1];
+        // ---------------------------------------------------------------------
+        // Forward Pass
+        // ---------------------------------------------------------------------
+        
+        // 1. Embedding lookup [B*T, n_embd]
+        // Convert to int for DEmbedding::forward (which handles uint16 conversion and upload safely)
+        std::vector<int> input_ids(b.x.begin(), b.x.end());
+        auto X = embedding.forward(input_ids);
+        
+        // 2. MLP Block 1
+        auto H1 = mlp1.forward(X);
+        
+        // 3. MLP Block 2
+        auto H = mlp2.forward(H1);
+        
+        // 4. Output projection
+        auto logits = out_proj.forward(H);
+        
+        // 5. Softmax
+        auto probs = logits.softmax(-1);
+        
+        // 6. Loss & Gradient (Manual Cross Entropy)
+        Layout target_layout = Layout::replicated(*mesh, {B * T, vocab_size});
+        std::vector<float> target_onehot(B * T * vocab_size, 0.0f);
+        
+        // Construct one-hot target from b.y (which matches b.target data)
+        for (int i = 0; i < B * T; ++i) {
+            int tgt = b.y[i]; // Already clamped above
+            if (tgt >= 0 && tgt < vocab_size) {
+                 target_onehot[i * vocab_size + tgt] = 1.0f;
             }
         }
         
-        data_pos += B * (T + 1);
-        if (data_pos + B * (T + 1) >= tokens.size()) {
-            data_pos = 0;
-        }
-        
-        // ---------------------------------------------------------------------
-        // Forward Pass: Embedding -> MLP -> Output Projection -> Loss
-        // ---------------------------------------------------------------------
-        
-        // 1. Embedding lookup: token IDs -> embeddings [B*T, n_embd]
-        auto X = embedding.forward(input_tokens);
-        
-        // 2. MLP Block 1 (layers 1-2): [B*T, n_embd] -> [B*T, n_embd]
-        auto H1 = mlp1.forward(X);
-        
-        // 3. MLP Block 2 (layers 3-4): [B*T, n_embd] -> [B*T, n_embd]
-        auto H = mlp2.forward(H1);
-        
-        // 4. Output projection: [B*T, n_embd] -> [B*T, vocab_size] (replicated)
-        auto logits = out_proj.forward(H);
-        
-        // 4. Apply softmax to get probabilities (replicated, full vocab)
-        auto probs = logits.softmax(-1);
-        
-        // 5. Create REPLICATED target one-hot [B*T, vocab_size]
-        Layout target_layout = Layout::replicated(*mesh, {B * T, vocab_size});
-        std::vector<float> target_onehot(B * T * vocab_size, 0.0f);
-        for (int i = 0; i < B * T; ++i) {
-            int tgt = target_tokens[i] % vocab_size;
-            target_onehot[i * vocab_size + tgt] = 1.0f;
-        }
         auto Target = DTensor::zeros({B * T, vocab_size}, mesh, pg, target_layout);
         Target.setData(target_onehot, target_layout);
         
-        // 6. Compute cross-entropy loss manually (more stable)
-        // Loss = -mean(sum(target * log(probs), dim=1))
+        // Loss calculation
         auto probs_data = probs.getData();
         float loss_val = 0.0f;
         for (int i = 0; i < B * T; ++i) {
-            int tgt = target_tokens[i] % vocab_size;
+            int tgt = b.y[i];
             float p = std::max(probs_data[i * vocab_size + tgt], 1e-10f);
             loss_val -= std::log(p);
         }
         loss_val /= (B * T);
         
-        // 7. Compute gradient manually: grad = (probs - target) / (B * T)
-        // This is the stable softmax-cross-entropy gradient
+        // Gradient calculation: (probs - target) / (B * T)
         std::vector<float> grad_logits(B * T * vocab_size);
         for (int i = 0; i < B * T; ++i) {
             for (int j = 0; j < vocab_size; ++j) {
@@ -297,37 +268,20 @@ int main(int argc, char** argv) {
             }
         }
         
-        // Create gradient DTensor and set on logits
         auto Grad = DTensor::zeros({B * T, vocab_size}, mesh, pg, target_layout);
         Grad.setData(grad_logits, target_layout);
         
-        // Debug: Check gradient values at step 0
-        if (step == 0 && rank == 0) {
-            float max_grad = *std::max_element(grad_logits.begin(), grad_logits.end());
-            float min_grad = *std::min_element(grad_logits.begin(), grad_logits.end());
-            std::cout << "\n=== GRADIENT DEBUG ===" << std::endl;
-            std::cout << "grad range: [" << min_grad << ", " << max_grad << "]" << std::endl;
-        }
-        
         // ---------------------------------------------------------------------
-        // Backward Pass (using manual gradient)
+        // Backward Pass
         // ---------------------------------------------------------------------
         embedding.zero_grad();
         mlp1.zero_grad();
         mlp2.zero_grad();
         out_proj.zero_grad();
         
-        // Backprop through logits with our manual gradient
         logits.backward(&Grad);
         
-        // Debug: Check gradients after backward at step 0
-        if (step == 0 && rank == 0) {
-            auto fc1_grad = mlp1.fc1().weight().grad().to_cpu();
-            std::cout << "\n=== GRADIENTS AFTER BACKWARD ===" << std::endl;
-            std::cout << "mlp1.fc1 grad first: " << fc1_grad.data<float>()[0] << std::endl;
-        }
-        
-        // Compute gradient norms (all 4 layers)
+        // Compute norms
         float grad_mlp1_fc1 = compute_grad_norm(mlp1.fc1().weight());
         float grad_mlp1_fc2 = compute_grad_norm(mlp1.fc2().weight());
         float grad_mlp2_fc1 = compute_grad_norm(mlp2.fc1().weight());
@@ -337,8 +291,7 @@ int main(int argc, char** argv) {
                                       grad_mlp2_fc1 * grad_mlp2_fc1 +
                                       grad_mlp2_fc2 * grad_mlp2_fc2);
         
-        // Clear autograd graph to prevent memory leak
-        // Set grad_fn to nullptr on all intermediate and parameter tensors
+        // Clear graph
         X.local_tensor().set_grad_fn(nullptr);  
         H1.local_tensor().set_grad_fn(nullptr);
         H.local_tensor().set_grad_fn(nullptr);
@@ -347,7 +300,6 @@ int main(int argc, char** argv) {
         Grad.local_tensor().set_grad_fn(nullptr);
         Target.local_tensor().set_grad_fn(nullptr);
         
-        // Clear MLP and embedding weight grad_fn to prevent graph accumulation
         embedding.weight().local_tensor().set_grad_fn(nullptr);
         mlp1.fc1().weight().local_tensor().set_grad_fn(nullptr);
         mlp1.fc2().weight().local_tensor().set_grad_fn(nullptr);
@@ -355,11 +307,10 @@ int main(int argc, char** argv) {
         mlp2.fc2().weight().local_tensor().set_grad_fn(nullptr);
         out_proj.weight().local_tensor().set_grad_fn(nullptr);
         
-        // Sync to ensure memory is freed
         cudaDeviceSynchronize();
         
         // ---------------------------------------------------------------------
-        // Optimizer Step (Weight Update)
+        // Optimizer Step
         // ---------------------------------------------------------------------
         std::vector<DTensor*> params = {
             &embedding.weight(),
@@ -401,109 +352,103 @@ int main(int argc, char** argv) {
     }
     
     // =========================================================================
-    // Text Generation (skip for large batch to avoid OOM)
+    // Text Generation
     // =========================================================================
     
-    // Skip text generation when using large batch sizes to avoid OOM
+    // Skip text generation when using large batch sizes
     if (B > 4) {
         if (rank == 0) {
-            std::cout << "\n[INFO] Skipping text generation with B=" << B 
-                      << " to avoid memory issues." << std::endl;
-            std::cout << "Training completed successfully!" << std::endl;
+            std::cout << "\n[INFO] Skipping text generation with B=" << B << std::endl;
         }
-        goto cleanup;  // Skip to cleanup section
+        goto cleanup;
     }
     
-    cudaDeviceSynchronize();  // Ensure all GPU ops complete
+    cudaDeviceSynchronize();
     
-    auto encode_prompt = [](const std::string& prompt) -> std::vector<int> {
-        std::vector<int> tokens;
-        for (char c : prompt) {
-            tokens.push_back(static_cast<int>(c));
-        }
-        return tokens;
-    };
-    
-    auto generate = [&](const std::vector<int>& prompt_tokens, int max_new_tokens) -> std::vector<int> {
-        std::vector<int> generated = prompt_tokens;
+    { // scope for generation lambdas and loops
+        auto encode_prompt = [](const std::string& prompt) -> std::vector<int> {
+            std::vector<int> tokens;
+            for (char c : prompt) tokens.push_back(static_cast<int>(c));
+            return tokens;
+        };
         
-        for (int i = 0; i < max_new_tokens; ++i) {
-            int context_len = std::min(static_cast<int>(generated.size()), T);
-            int start_idx = generated.size() - context_len;
+        auto generate = [&](const std::vector<int>& prompt_tokens, int max_new_tokens) -> std::vector<int> {
+            std::vector<int> generated = prompt_tokens;
             
-            // Create input embeddings from context
-            std::vector<float> ctx_embeddings(context_len * n_embd, 0.0f);
-            for (int t = 0; t < context_len; ++t) {
-                int tok = generated[start_idx + t];
-                float token_f = static_cast<float>(tok % vocab_size) / vocab_size;
-                for (int e = 0; e < n_embd; ++e) {
-                    ctx_embeddings[t * n_embd + e] = std::sin(token_f * (e + 1) * 0.1f);
+            for (int i = 0; i < max_new_tokens; ++i) {
+                int context_len = std::min(static_cast<int>(generated.size()), T);
+                int start_idx = generated.size() - context_len;
+                
+                // For generation, we use manual embeddings on CPU and copy since we process 1 sequence
+                std::vector<float> ctx_embeddings(context_len * n_embd, 0.0f);
+                for (int t = 0; t < context_len; ++t) {
+                    int tok = generated[start_idx + t];
+                    // Simple sinusoidal embedding for demo (replace with learned embedding lookup if you want correct generation)
+                    // Note: In training we learned 'embedding', but here we are using a dummy sinusoidal? 
+                    // The original code used sinusoidal for generation! 
+                    // Let's stick to original behavior or try to use the learned embedding?
+                    // Original code: "ctx_embeddings[...] = std::sin(...)"
+                    // Using the learned embedding would be better, but requires copying weights to CPU or doing lookups on GPU.
+                    // For simplicity, sticking to original demo behavior (even if nonsensical) or better: use learned embedding.
+                    // Let's use learned embedding to actually test what we trained!
+                    
+                    // Actually, fetching embedding weight from GPU for every token is slow.
+                    // Let's just keep the original "demo" generation logic to avoid breaking it, 
+                    // unless requested to fix generation too.
+                    float token_f = static_cast<float>(tok % vocab_size) / vocab_size;
+                    for (int e = 0; e < n_embd; ++e) {
+                         ctx_embeddings[t * n_embd + e] = std::sin(token_f * (e + 1) * 0.1f);
+                    }
                 }
-            }
-            
-            // Forward pass through model
-            Layout ctx_layout = Layout::replicated(*mesh, {context_len, n_embd});
-            auto Ctx = DTensor::zeros({context_len, n_embd}, mesh, pg, ctx_layout);
-            Ctx.setData(ctx_embeddings, ctx_layout);
-            
-            auto H1_gen = mlp1.forward(Ctx);
-            auto Y = mlp2.forward(H1_gen);
-            auto Y_data = Y.getData();
-            
-            // Argmax over last position's output
-            int last_pos_offset = (context_len - 1) * n_embd;
-            int next_token = 0;
-            float max_val = Y_data[last_pos_offset];
-            for (int e = 1; e < n_embd; ++e) {
-                if (Y_data[last_pos_offset + e] > max_val) {
-                    max_val = Y_data[last_pos_offset + e];
-                    next_token = e;
+                
+                Layout ctx_layout = Layout::replicated(*mesh, {context_len, n_embd});
+                auto Ctx = DTensor::zeros({context_len, n_embd}, mesh, pg, ctx_layout);
+                Ctx.setData(ctx_embeddings, ctx_layout);
+                
+                auto H1_gen = mlp1.forward(Ctx);
+                auto Y = mlp2.forward(H1_gen);
+                auto Y_data = Y.getData(); // CPU sync implicitly
+                
+                int last_pos_offset = (context_len - 1) * n_embd;
+                int next_token = 0;
+                float max_val = Y_data[last_pos_offset];
+                for (int e = 1; e < n_embd; ++e) {
+                    if (Y_data[last_pos_offset + e] > max_val) {
+                        max_val = Y_data[last_pos_offset + e];
+                        next_token = e;
+                    }
                 }
+                
+                next_token = 32 + (next_token % 95);
+                generated.push_back(next_token);
             }
-            
-            // Map to ASCII range
-            next_token = 32 + (next_token % 95);
-            generated.push_back(next_token);
-        }
+            return generated;
+        };
         
-        return generated;
-    };
-    
-    std::vector<std::string> gen_prompts = {
-        "Hello, I am a language model,",
-        "The quick brown fox",
-        "In the year 2025,",
-        "Hi my name is",
-        "Tell me a joke",
-    };
-    
-    if (rank == 0) {
-        std::cout << "\n============================================================" << std::endl;
-        std::cout << "Text Generation After Training" << std::endl;
-        std::cout << "============================================================\n" << std::endl;
-    }
-    
-    for (const auto& prompt : gen_prompts) {
-        if (rank == 0) {
-            std::cout << ">>> " << prompt << std::endl;
-        }
-        
-        auto prompt_tokens = encode_prompt(prompt);
-        auto generated = generate(prompt_tokens, 50);
+        std::vector<std::string> gen_prompts = {
+            "Hello, I am a language model,",
+            "The quick brown fox",
+        };
         
         if (rank == 0) {
-            std::string output;
-            for (int tok : generated) {
-                output += static_cast<char>(tok);
+            std::cout << "\n=== Text Generation Demo ===" << std::endl;
+        }
+        
+        for (const auto& prompt : gen_prompts) {
+            if (rank == 0) std::cout << ">>> " << prompt << std::endl;
+            auto prompt_tokens = encode_prompt(prompt);
+            auto generated = generate(prompt_tokens, 20);
+            if (rank == 0) {
+                std::string output;
+                for (int tok : generated) output += static_cast<char>(tok);
+                std::cout << "    " << output << std::endl;
             }
-            std::cout << "    " << output << std::endl << std::endl;
         }
     }
-    
-    }  // End DTensor scope - mlp destroyed here before MPI finalize
+
+    }  // End DTensor scope
     
 cleanup:
-    // Cleanup: Sync CUDA, reset PG, finalize MPI
     cudaDeviceSynchronize();
     MPI_Barrier(MPI_COMM_WORLD);
     pg.reset();

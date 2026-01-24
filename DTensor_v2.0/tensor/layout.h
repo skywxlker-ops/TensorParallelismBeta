@@ -125,12 +125,66 @@ public:
         return Layout(*mesh_, new_global_shape);
     }
 
-    // Check for element-wise op compatibility
+    // Check for element-wise op compatibility with broadcasting
     bool is_compatible(const Layout& other) const {
-        // Simple check: are global shapes and sharding identical?
-        return global_shape_ == other.global_shape_ &&
-                placement_->type() == other.placement_->type() &&
-                placement_->dim() == other.placement_->dim();
+        // Fast path: Exact match
+        if (global_shape_ == other.global_shape_ &&
+            placement_->type() == other.placement_->type() &&
+            placement_->dim() == other.placement_->dim()) {
+            return true;
+        }
+
+        // Broadcasting Check
+        // Simplify for common case: 2D [B, N] + 1D [N]
+        // LHS: [d0, d1], Sharded(1) -> local [d0, d1_local]
+        // RHS: [d1],     Sharded(0) -> local [d1_local]
+        // Result is valid if:
+        // 1. Shapes are broadcast compatible globally
+        // 2. Sharding maps to the same global dimension index
+        
+        // Basic global shape broadcast check (right-alignment)
+        int ndim1 = global_shape_.size();
+        int ndim2 = other.global_shape_.size();
+        int max_dim = std::max(ndim1, ndim2);
+        
+        for (int i = 0; i < max_dim; ++i) {
+            int idx1 = ndim1 - 1 - i;
+            int idx2 = ndim2 - 1 - i;
+            
+            int64_t dim1 = (idx1 >= 0) ? global_shape_[idx1] : 1;
+            int64_t dim2 = (idx2 >= 0) ? other.global_shape_[idx2] : 1;
+            
+            if (dim1 != dim2 && dim1 != 1 && dim2 != 1) {
+                return false; // Not broadcastable
+            }
+        }
+        
+        // Sharding compatibility
+        // If both are replicated -> OK (handled by broadcast logic above implicitly? No, need to return true)
+        if (is_replicated() && other.is_replicated()) return true;
+        
+        // If one is replicated and the other sharded:
+        // Generally unsafe unless the sharded dim is 1 in the replicated tensor (so it stays 1 locally)
+        // OR the replicated tensor effectively "broadcasts" over the sharded dimension.
+        // For now, let's focus on the Sharded + Sharded case causing the crash.
+        
+        if (is_sharded() && other.is_sharded()) {
+            int shard_dim1 = placement_->dim(); // Relative to ndim1
+            int shard_dim2 = other.placement_->dim(); // Relative to ndim2
+            
+            // Map shard dimensions to the aligned "max_dim" space (right-aligned)
+            int effective_dim1 = max_dim - (ndim1 - shard_dim1); 
+            int effective_dim2 = max_dim - (ndim2 - shard_dim2);
+            
+            // They must be sharding the SAME global dimension
+            if (effective_dim1 == effective_dim2) {
+                // And that dimension must NOT be broadcasted (i.e. size must match)
+                // (If one size was 1, it couldn't be sharded meaningfully in this context typically)
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     bool operator==(const Layout& other) const {
