@@ -49,18 +49,23 @@ DLinear::DLinear(std::shared_ptr<DeviceMesh> mesh,
     // For column-parallel (Shard(1)), output is sharded on last dim, so bias must match
     // For row-parallel (Shard(0)), output is replicated after sync, so bias should be replicated
     if (has_bias_) {
-        // For column-parallel, bias should be sharded same as weight columns
-        // For row-parallel or replicated, bias should be replicated
+        // Linear layer output: Y = X @ W
+        // Col Parallel: X [B, K] @ W [K, N/P] -> Y [B, N/P] (Sharded on dim 1)
+        // Row Parallel: X [B, K/P] @ W [K/P, N] -> Y [B, N] (Replicated after sync)
+        
+        // Bias shape is [N] (out_features)
+        
         if (weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 1) {
-            // Column-parallel: shard bias to match sharded output
-            Layout b_layout(*mesh, {out_features_}, 0);  // 1D, sharded on dim 0
+            // Column-parallel: Output is [B, N/P]. Bias should be [1, N/P] to broadcast correctly.
+            // We create a 2D bias tensor [1, N] sharded on dim 1: [1] -> [1], [N] -> [N/P] local.
+            Layout b_layout(*mesh, {1, out_features_}, 1);  // 2D, sharded on dim 1
             bias_ = std::make_unique<DTensor>(
-                DTensor::zeros({out_features_}, mesh, pg, b_layout));
+                DTensor::zeros({1, out_features_}, mesh, pg, b_layout));
         } else {
-            // Row-parallel or replicated: replicated bias
-            Layout b_layout = Layout::replicated(*mesh, {out_features_});  // 1D
+            // Row-parallel: Output is [B, N] (Replicated). Bias should be [1, N] (Replicated).
+            Layout b_layout = Layout::replicated(*mesh, {1, out_features_});  // 2D
             bias_ = std::make_unique<DTensor>(
-                DTensor::zeros({out_features_}, mesh, pg, b_layout));
+                DTensor::zeros({1, out_features_}, mesh, pg, b_layout));
         }
         bias_->set_requires_grad(true);
     }
@@ -221,15 +226,16 @@ DMLP::DMLP(int64_t in_features,
         mesh, pg, in_features, hidden_features,
         ShardingType::Shard(1),      // Weight: Column-sharded
         ShardingType::Replicated(),  // Bias: Replicated (adapted internally)
-        true);
+        false); // Use false to disable bias
     
     // Second layer: Row-parallel (shards input to produce replicated output)
     fc2_ = std::make_unique<DLinear>(
         mesh, pg, hidden_features, out_features,
         ShardingType::Shard(0),      // Weight: Row-sharded
         ShardingType::Replicated(),  // Bias: Replicated
-        true);
+        false); // Use false to disable bias
 }
+
 
 DTensor DMLP::forward(const DTensor& input) {
     // Layer 1: Column-parallel matmul
@@ -306,28 +312,43 @@ DEmbedding::DEmbedding(int64_t vocab_size,
 DTensor DEmbedding::forward(const std::vector<int>& token_ids) {
     int batch_size = token_ids.size();
     
-    // Create indices tensor on GPU (uint16 dtype as required by OwnTensor embedding)
-    std::vector<uint16_t> indices_u16(batch_size);
+    // MatMul-based Embedding: Output = OneHot(Input) @ Weight
+    // Input: [B] integers. OneHot: [B, Vocab]. Weight: [Vocab, Dim]. Output: [B, Dim].
+    
+    // 1. Create One-Hot Tensor [B, Vocab] on GPU
+    // Replicated layout across batch dimension for inputs (since inputs are local per rank usually?)
+    // Actually, `input` here is local `std::vector<int>`.
+    // The `weight_` is Replicated [Vocab, Dim].
+    // We want Output [B, Dim] (local).
+    
+    // Create zero-filled one-hot buffer on CPU then upload (easiest logic, optimization later)
+    // Or set indices on GPU if OwnTensor supports it.
+    // Let's build a float vector on CPU. Warning: Large memory [B * Vocab].
+    // If B=128 (2*64), Vocab=50304 -> ~6.4M floats = 25MB. Acceptable.
+    
+    std::vector<float> one_hot_cpu(batch_size * vocab_size_, 0.0f);
     for (int i = 0; i < batch_size; ++i) {
         int token = token_ids[i];
-        if (token < 0 || token >= vocab_size_) token = 0;
-        indices_u16[i] = static_cast<uint16_t>(token);
+        if (token >= 0 && token < vocab_size_) {
+            one_hot_cpu[i * vocab_size_ + token] = 1.0f;
+        }
     }
     
-    // Create OwnTensor for indices on GPU
-    OwnTensor::Shape idx_shape;
-    idx_shape.dims = {static_cast<int64_t>(batch_size)};
-    OwnTensor::TensorOptions opts = OwnTensor::TensorOptions()
-        .with_device(weight_->local_tensor().device())
-        .with_dtype(OwnTensor::Dtype::UInt16);
-    OwnTensor::Tensor indices = OwnTensor::Tensor::zeros(idx_shape, opts);
+    // Create OneHot DTensor (Replicated layout)
+    // We treat the batch as just a local chunk.
+    // Global shape? If inputs are different on ranks, `DTensor` usually manages global view.
+    // But here we are returning a `DTensor` that result from local operations? 
+    // `DEmbedding` assumes Replicated weights.
+    // If we return a DTensor, it must have a Layout.
+    // Let's assume Replicated Layout for the input batch for now (simplest for `matmul` on replicated weights).
     
-    // Copy indices to GPU
-    cudaMemcpy(indices.data<uint16_t>(), indices_u16.data(), 
-               batch_size * sizeof(uint16_t), cudaMemcpyHostToDevice);
+    Layout one_hot_layout = Layout::replicated(*mesh_, {static_cast<int64_t>(batch_size), vocab_size_});
+    DTensor one_hot = DTensor::zeros({static_cast<int64_t>(batch_size), vocab_size_}, mesh_, pg_, one_hot_layout);
+    one_hot.setData(one_hot_cpu, one_hot_layout);
     
-    // Use DTensor::embedding for autograd-aware lookup
-    return DTensor::embedding(indices, *weight_, -1);
+    // 2. Perform Matmul: [B, V] @ [V, D] -> [B, D]
+    // Both are Replicated, so result is Replicated.
+    return one_hot.matmul(*weight_);
 }
 
 DTensor& DEmbedding::weight() {
