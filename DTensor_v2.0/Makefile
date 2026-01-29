@@ -2,11 +2,11 @@ CXX = /home/blu-bridge25/.local/bin/mpic++
 
 NVCC_LINKER = /usr/local/cuda/bin/nvcc
 NVCC = /usr/local/cuda/bin/nvcc
-NVCC_FLAGS = -std=c++17 -Xcompiler -fPIC -g -ccbin=$(CXX)
+NVCC_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -ccbin=$(CXX)
 
-CXXFLAGS += -fPIC -std=c++17 -g -DWITH_CUDA
+CXXFLAGS += -fPIC -std=c++17 -O3 -g -DWITH_CUDA
 
-NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -g -ccbin=/home/blu-bridge25/.local/bin/mpic++
+NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -ccbin=/home/blu-bridge25/.local/bin/mpic++
 
 TARGET = main
 
@@ -230,9 +230,10 @@ SRCS = main.cpp \
 	tensor/device_mesh.cpp \
 	process_group/processGroupNccl_new.cpp \
 	memory/cachingAllocator.cpp \
-	bridge/tensor_ops_bridge.cpp
+	bridge/tensor_ops_bridge.cpp \
+	tensor/placement.cpp
 
-OBJS = $(SRCS:.cpp=.o)
+OBJS = $(SRCS:.cpp=.o) $(CUDA_OBJS)
 
 .PHONY: all clean test test_mlp_forward
 
@@ -250,8 +251,8 @@ $(TARGET): $(OBJS) $(TENSOR_LIB_A)
 
 
 TEST_MLP_SRCS = \
-	test_mlp_forward.cpp \
-	tensor/dtensor.cpp \
+	tests/kiruthik_mlp_test.cpp \
+# 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
 	process_group/processGroupNccl_new.cpp \
 	memory/cachingAllocator.cpp \
@@ -259,10 +260,10 @@ TEST_MLP_SRCS = \
 
 TEST_MLP_OBJS = $(TEST_MLP_SRCS:.cpp=.o)
 
-# test_mlp_forward: $(TEST_MLP_OBJS) $(TENSOR_LIB_A)
-# 	@echo "\n[LINKING] Creating test executable: $@"
-# 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $(TEST_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
-# 	@echo "[SUCCESS] Test build complete."
+kkk: $(TEST_MLP_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $@ $(TEST_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	@echo "[SUCCESS] Test build complete."
 
 
 %.o: %.cpp
@@ -289,6 +290,7 @@ clean:
 	@echo "[CLEAN] Removing object files and executables..."
 	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
 	rm -f tests/*.o tests/test_device_mesh tests/test_matmul
+	rm -f TrainingSctipts/*.o
 	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom benchmarks/shard_benchmarking
 	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
 
@@ -425,7 +427,7 @@ TP_MLP_OBJS = $(TP_MLP_SRCS:.cpp=.o) $(CUDA_OBJS)
 CUDA_LDFLAGS = -L/usr/local/cuda-12.6/include
 
 %.o: %.cu
-	nvcc -c $< -o $@
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
 # tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 # 	@echo "\n[LINKING] Creating example executable: $@"
@@ -622,3 +624,93 @@ interconnect_benchmarks: $(INTERCONNECT_BENCH_OBJS) $(TENSOR_LIB_A)
 # 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o examples/$@ $(STRIPED_ATTN_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 # 	@echo "[SUCCESS] Striped Attention Example build complete."
 # 	@echo "\nRun with 4 GPUs: mpirun -np 4 ./examples/striped_attention_example\n"
+# Embedding Example
+EMBEDDING_EXAMPLE_SRCS = \
+    examples/embedding_example.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+EMBEDDING_EXAMPLE_OBJS = $(EMBEDDING_EXAMPLE_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+embedding_example: $(EMBEDDING_EXAMPLE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(EMBEDDING_EXAMPLE_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Embedding Example build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/embedding_example\n"
+
+# DMLP Embedding Example
+DMLP_EMBEDDING_SRCS = \
+    examples/dmlp_embedding_example.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+DMLP_EMBEDDING_OBJS = $(DMLP_EMBEDDING_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+dmlp_embedding_example: $(DMLP_EMBEDDING_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(DMLP_EMBEDDING_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] DMLP Embedding Example build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/dmlp_embedding_example\n"
+
+# DMLP Full (Parallel Embedding)
+DMLP_FULL_SRCS = \
+    examples/dmlp_full.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+DMLP_FULL_OBJS = $(DMLP_FULL_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+dmlp_full: $(DMLP_FULL_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(DMLP_FULL_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] DMLP Full build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/dmlp_full\n"
+
+# GPT2 Parallel Test
+GPT2_PARALLEL_TEST_SRCS = \
+    TrainingSctipts/gpt2_parallel_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+GPT2_PARALLEL_TEST_OBJS = $(GPT2_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+gpt2_parallel_test: $(GPT2_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Parallel Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_parallel_test\n"
+
+# GPT2 MLP Parallel Test (Non-parallel Embedding/LM Head)
+GPT2_MLP_PARALLEL_TEST_SRCS = \
+    TrainingSctipts/gpt2_mlp_parallel_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+GPT2_MLP_PARALLEL_TEST_OBJS = $(GPT2_MLP_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+gpt2_mlp_parallel_test: $(GPT2_MLP_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_MLP_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 MLP Parallel Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_mlp_parallel_test\n"
+
