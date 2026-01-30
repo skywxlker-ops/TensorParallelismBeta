@@ -1190,6 +1190,32 @@ void DTensor::zero_grad() {
     }
 }
 
+float DTensor::grad_norm() const {
+    // Get the gradient tensor (local shard)
+    OwnTensor::Tensor g = grad();
+    
+    // Safety check: if no gradient, return 0
+    if (!g.is_valid() || g.numel() == 0) {
+        return 0.0f;
+    }
+    
+    // Compute squared values on GPU
+    OwnTensor::Tensor g_sq = g * g;
+    
+    // Sum all elements on GPU using reduce_sum
+    OwnTensor::Tensor local_sum_tensor = OwnTensor::reduce_sum(g_sq);
+    
+    // Copy result to CPU before accessing data pointer
+    OwnTensor::Tensor local_sum_cpu = local_sum_tensor.to_cpu();
+    float local_norm_sq = local_sum_cpu.data<float>()[0];
+    
+    // All-reduce across ranks to get global norm squared
+    float global_norm_sq = 0.0f;
+    pg_->all_reduce_cpu(&local_norm_sq, &global_norm_sq, 1, OwnTensor::Dtype::Float32, op_t::sum);
+    
+    return std::sqrt(global_norm_sq);
+}
+
 // ============================================================================
 // Async Collective Operations (from _adhi_)
 // ============================================================================

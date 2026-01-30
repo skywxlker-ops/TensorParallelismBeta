@@ -269,6 +269,13 @@ public:
      * Zero out gradients (for training loops).
      */
     void zero_grad();
+    
+    /**
+     * Compute gradient L2 norm on GPU, then all-reduce across ranks.
+     * Much faster than copying gradients to CPU.
+     * @return Global L2 norm of the gradient
+     */
+    float grad_norm() const;
 
 
     static DTensor empty(const std::vector<int64_t>& global_shape,
