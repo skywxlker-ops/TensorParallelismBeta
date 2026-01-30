@@ -175,6 +175,8 @@ void DeviceMesh::initialize_process_groups() {
 
         // Create stream and work object for the new ProcessGroupNCCL
         cudaStream_t stream;
+        // Ensure correct device before stream creation
+        cudaSetDevice(device);
         cudaStreamCreate(&stream);
         auto work_obj = std::make_shared<Work>(stream, nullptr);
         

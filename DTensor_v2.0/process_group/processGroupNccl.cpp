@@ -32,7 +32,7 @@ ProcessGroupNCCL::ProcessGroupNCCL(int world_size, int rank, ncclUniqueId& id, s
 
 
     local_rank_ = rank % gpus_per_node_;
-    CUDACHECK(cudaSetDevice(local_rank_));
+    // CUDACHECK(cudaSetDevice(local_rank_)); // Removed: Trust main's cudaSetDevice
 
     NCCLCHECK(ncclCommInitRank(&comm_, world_size_, id_, rank_));
 
@@ -464,3 +464,34 @@ ProcessGroupNCCL::launch_work_collectives(
 
 // Explicit template instantiation (required for linking)
 // The lambda types used in async operations require this
+
+static MPI_Datatype mpiTypeConversion(OwnTensor::Dtype type) {
+    switch(type){
+        case OwnTensor::Dtype::Int32:   return MPI_INT;
+        case OwnTensor::Dtype::Int64:   return MPI_LONG_LONG;
+        case OwnTensor::Dtype::Float32: return MPI_FLOAT;
+        case OwnTensor::Dtype::Float64: return MPI_DOUBLE;
+        default: throw std::runtime_error("MPI Type conversion failed: unsupported type");
+    }
+}
+
+static MPI_Op mpiOpConversion(op_t op) {
+    switch(op){
+        case sum: return MPI_SUM;
+        case max: return MPI_MAX;
+        case min: return MPI_MIN;
+        case mul: return MPI_PROD;
+        default: throw std::runtime_error("MPI Op conversion failed: unsupported op");
+    }
+}
+
+void ProcessGroupNCCL::all_reduce_cpu(const void* sendbuff, void* recvbuff, size_t count, OwnTensor::Dtype dtype, op_t operation) {
+    MPI_Datatype mpi_type = mpiTypeConversion(dtype);
+    MPI_Op mpi_op = mpiOpConversion(operation);
+    
+    int mpi_err = MPI_Allreduce(sendbuff == recvbuff ? MPI_IN_PLACE : sendbuff, 
+                               recvbuff, count, mpi_type, mpi_op, MPI_COMM_WORLD);
+    if (mpi_err != MPI_SUCCESS) {
+        throw std::runtime_error("MPI_Allreduce failed");
+    }
+}

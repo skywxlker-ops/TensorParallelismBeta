@@ -21,7 +21,7 @@
 using namespace OwnTensor;
 
 
-extern CachingAllocator gAllocator;
+// gAllocator is now OwnTensor::gAllocator (declared in memory/cachingAllocator.hpp)
 
 class DTensor {
 public:
@@ -140,6 +140,13 @@ public:
     DTensor softmax(int64_t dim = -1) const;
     DTensor mse_loss(const DTensor& target) const;
     DTensor cross_entropy_loss(const DTensor& target) const;
+    DTensor sparse_cross_entropy_loss(const DTensor& target) const;
+    DTensor distributed_sparse_cross_entropy_loss(const DTensor& target) const;
+    DTensor layer_norm(const DTensor& weight, const DTensor& bias, float eps = 1e-5) const;
+
+    Dtype dtype() const { return dtype_enum_; }
+    Layout layout() const { return layout_; }
+    std::vector<int64_t> shape() const { return shape_; }
     
     /**
      * Embedding lookup with autograd support.
@@ -267,7 +274,8 @@ public:
     static DTensor empty(const std::vector<int64_t>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
                          std::shared_ptr<ProcessGroupNCCL> pg,
-                         const Layout& layout);
+                         const Layout& layout,
+                         Dtype dtype = Dtype::Float32);
     
     /**
      * Create a DTensor filled with zeros.
@@ -275,7 +283,8 @@ public:
     static DTensor zeros(const std::vector<int64_t>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
                          std::shared_ptr<ProcessGroupNCCL> pg,
-                         const Layout& layout);
+                         const Layout& layout,
+                         Dtype dtype = Dtype::Float32);
     
     /**
      * Create a DTensor filled with ones.
@@ -396,7 +405,7 @@ private:
 
     int size_;
     std::vector<int64_t> shape_; 
-    std::string dtype_ = "float32";
+    Dtype dtype_enum_ = Dtype::Float32;
     bool requires_grad_ = false;
     
     // Async collective tracking (from _adhi_)
@@ -404,6 +413,16 @@ private:
     std::shared_ptr<Work> pending_work_ = nullptr;
 
 
+
+    // Shared streams per rank to avoid RAII issues and resource exhaustion
+    static cudaStream_t shared_compute_stream_;
+    static cudaStream_t shared_comm_stream_;
+    static cudaStream_t shared_data_stream_;
+    static cudaEvent_t shared_compute_event_;
+    static cudaEvent_t shared_comm_event_;
+    static bool streams_initialized_;
+    
+    void init_shared_streams();
 
     void printRecursive(const std::vector<float>& data,
                         const std::vector<int64_t>& dims,

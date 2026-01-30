@@ -159,10 +159,18 @@ Tensor categorical_cross_entropy(const Tensor& predictions, const Tensor& target
     return OwnTensor::autograd::categorical_cross_entropy(predictions, targets);
 }
 
+Tensor sparse_cross_entropy_loss(const Tensor& logits, const Tensor& targets) {
+    return OwnTensor::autograd::sparse_cross_entropy_loss(logits, targets);
+}
+
 Tensor embedding(const Tensor& indices, const Tensor& weight, int padding_idx) {
     // Note: padding_idx not supported in TensorLib's embedding, ignoring it
     // TensorLib signature is: embedding(weight, indices)
     return OwnTensor::autograd::embedding(weight, indices);
+}
+
+Tensor layer_norm(const Tensor& input, const Tensor& weight, const Tensor& bias, int normalized_shape, float eps) {
+    return OwnTensor::autograd::layer_norm(input, weight, bias, normalized_shape, eps);
 }
 
 void backward(Tensor& output, const Tensor* grad_output) {

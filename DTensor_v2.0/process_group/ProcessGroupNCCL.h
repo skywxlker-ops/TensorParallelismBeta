@@ -142,6 +142,9 @@ public:
 
     result_t sendrecv(const void* sendbuff, void* recvbuff, int send_rank, int recv_rank, size_t count, OwnTensor::Dtype dtype, bool sync = false);
 
+    // CPU based collectives using MPI
+    void all_reduce_cpu(const void* sendbuff, void* recvbuff, size_t count, OwnTensor::Dtype dtype, op_t operation);
+
 
 
 
