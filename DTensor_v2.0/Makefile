@@ -696,6 +696,42 @@ gpt2_parallel_test: $(GPT2_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 Parallel Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_parallel_test\n"
 
+# GPT2 Entropy Parallel Test
+GPT2_ENTROPY_PARALLEL_TEST_SRCS = \
+    TrainingSctipts/gpt2_entropy_parallel_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingSctipts/MaskOps.o
+
+gpt2_entropy_parallel_test: $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Entropy Parallel Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_entropy_parallel_test\n"
+
+# GPT2 Sync Verification Test
+GPT2_SYNC_VERIFY_TEST_SRCS = \
+    TrainingSctipts/gpt2_sync_verify_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+GPT2_SYNC_VERIFY_TEST_OBJS = $(GPT2_SYNC_VERIFY_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingSctipts/MaskOps.o
+
+gpt2_sync_verify_test: $(GPT2_SYNC_VERIFY_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_SYNC_VERIFY_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Sync Verification Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_sync_verify_test\n"
+
 # GPT2 MLP Parallel Test (Non-parallel Embedding/LM Head)
 GPT2_MLP_PARALLEL_TEST_SRCS = \
     TrainingSctipts/gpt2_mlp_parallel_test.cpp \
