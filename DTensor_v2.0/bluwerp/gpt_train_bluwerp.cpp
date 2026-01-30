@@ -269,13 +269,13 @@ int main(int argc, char** argv) {
         
         loss.backward();
 
-        // Compute norms
-        float grad_emb = compute_grad_norm(embedding.weight());
-        float grad_ln1 = compute_grad_norm(*ln1.parameters()[0]);
-        float grad_mlp1 = compute_grad_norm(mlp1.fc1().weight());
-        float grad_mlp2 = compute_grad_norm(mlp2.fc1().weight());
-        float grad_lnf = compute_grad_norm(*ln_f.parameters()[0]);
-        float grad_out = compute_grad_norm(out_proj.weight());
+        // Compute norms (GPU-side, much faster than CPU loop)
+        float grad_emb = embedding.weight().grad_norm();
+        float grad_ln1 = ln1.parameters()[0]->grad_norm();
+        float grad_mlp1 = mlp1.fc1().weight().grad_norm();
+        float grad_mlp2 = mlp2.fc1().weight().grad_norm();
+        float grad_lnf = ln_f.parameters()[0]->grad_norm();
+        float grad_out = out_proj.weight().grad_norm();
         
         float total_norm = std::sqrt(grad_emb * grad_emb + grad_ln1 * grad_ln1 + 
                                      grad_mlp1 * grad_mlp1 + grad_mlp2 * grad_mlp2 + 

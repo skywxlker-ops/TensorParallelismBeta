@@ -180,9 +180,10 @@ public:
      * - Column-parallel (Shard(1)) -> No sync needed
      * 
      * @param input Input DTensor
+     * @param no_sync If true, skip internal AllReduce (caller will sync later)
      * @return Output DTensor after linear transformation
      */
-    DTensor forward(const DTensor& input);
+    DTensor forward(const DTensor& input, bool no_sync = false);
     
     /**
      * @brief Get weight tensor

@@ -121,12 +121,13 @@ DLinear::DLinear(int64_t in_features,
     weight_->set_requires_grad(true);
 }
 
-DTensor DLinear::forward(const DTensor& input) {
+DTensor DLinear::forward(const DTensor& input, bool no_sync) {
     // Compute Y = X @ W
     DTensor output = input.matmul(*weight_);
     
     // Auto-sync: Row-parallel (Shard(0)) needs AllReduce to sum partial results
-    if (weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 0) {
+    // Skip sync if no_sync=true (caller will sync later for fused operations)
+    if (!no_sync && weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 0) {
         output.sync();  // AllReduce sum
     }
 
@@ -254,14 +255,17 @@ DMLP::DMLP(int64_t in_features,
 
 
 DTensor DMLP::forward(const DTensor& input) {
-    // Layer 1: Column-parallel matmul
+    // Layer 1: Column-parallel matmul (no sync needed)
     DTensor h = fc1_->forward(input);
     
     // Activation: GeLU (better for transformers)
     DTensor h_act = h.gelu();
     
-    // Layer 2: Row-parallel matmul (includes AllReduce)
-    DTensor output = fc2_->forward(h_act);
+    // Layer 2: Row-parallel matmul - skip internal sync for fused operation
+    DTensor output = fc2_->forward(h_act, true);  // no_sync=true
+    
+    // Single sync at the end (fused AllReduce)
+    output.sync();
     
     return output;
 }
