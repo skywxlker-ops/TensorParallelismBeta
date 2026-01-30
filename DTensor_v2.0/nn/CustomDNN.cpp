@@ -1,11 +1,12 @@
 #include "nn/CustomDNN.h"
 #include <unparalleled/unparalleled.h>
+#include "ops/helpers/AdamKernels.h"
 #include <cuda_runtime.h>
 #include <cmath>
 #include <iostream>
 
 namespace OwnTensor {
-namespace dnn {
+    namespace dnn {
 
 // =============================================================================
 // DLinear Implementation
@@ -43,6 +44,14 @@ DLinear::DLinear(std::shared_ptr<DeviceMesh> mesh,
         weight_ = std::make_unique<DTensor>(
             DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
     }
+
+    // Xavier/Kaiming-like initialization: std = 1/sqrt(in_features)
+    float std_scale = 1.0f / std::sqrt(static_cast<float>(in_features_));
+    auto w_data = weight_->getData();
+    for (size_t i = 0; i < w_data.size(); ++i) {
+        w_data[i] *= std_scale;
+    }
+    weight_->setData(w_data, weight_->layout());
     weight_->set_requires_grad(true);
     
     // Initialize bias if needed
@@ -63,7 +72,7 @@ DLinear::DLinear(std::shared_ptr<DeviceMesh> mesh,
                 DTensor::zeros({1, out_features_}, mesh, pg, b_layout));
         } else {
             // Row-parallel: Output is [B, N] (Replicated). Bias should be [1, N] (Replicated).
-            Layout b_layout = Layout::replicated(*mesh, {1, out_features_});  // 2D
+            Layout b_layout = Layout::replicated(*mesh, {1, out_features_});  // 2D  
             bias_ = std::make_unique<DTensor>(
                 DTensor::zeros({1, out_features_}, mesh, pg, b_layout));
         }
@@ -102,6 +111,13 @@ DLinear::DLinear(int64_t in_features,
         weight_ = std::make_unique<DTensor>(
             DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
     }
+    
+    // Xavier initialization: scale weights by 1/sqrt(in_features)
+    float scale = 1.0f / std::sqrt(static_cast<float>(in_features_));
+    auto w_data = weight_->getData();
+    for (auto& v : w_data) v *= scale;
+    weight_->setData(w_data, weight_->get_layout());
+    
     weight_->set_requires_grad(true);
 }
 
@@ -291,64 +307,41 @@ DEmbedding::DEmbedding(int64_t vocab_size,
     pg_ = pg;
     
     // Create replicated embedding weight [vocab_size, embedding_dim]
-    // We replicate for simplicity (sharding would require all-gather during lookup)
+    // std::cout << "[DEBUG] DEmbedding: Creating layout..." << std::endl;
     Layout weight_layout = Layout::replicated(*mesh, {vocab_size, embedding_dim});
     
+    // std::cout << "[DEBUG] DEmbedding: Creating weight DTensor..." << std::endl;
     weight_ = std::make_unique<DTensor>(
         DTensor::randn({vocab_size, embedding_dim}, mesh, pg, weight_layout)
     );
     
+    // std::cout << "[DEBUG] DEmbedding: Scaling weight..." << std::endl;
     // Scale initialization (Xavier-like)
     float scale = 1.0f / std::sqrt(static_cast<float>(embedding_dim));
     auto weight_data = weight_->getData();
     for (size_t i = 0; i < weight_data.size(); ++i) {
         weight_data[i] *= scale;
     }
+    // std::cout << "[DEBUG] DEmbedding: Setting weight data..." << std::endl;
     weight_->setData(weight_data, weight_layout);
     
+    // std::cout << "[DEBUG] DEmbedding: Setting requires_grad..." << std::endl;
     weight_->set_requires_grad(true);
+    // std::cout << "[DEBUG] DEmbedding: Constructor done." << std::endl;
 }
 
 DTensor DEmbedding::forward(const std::vector<int>& token_ids) {
     int batch_size = token_ids.size();
     
-    // MatMul-based Embedding: Output = OneHot(Input) @ Weight
-    // Input: [B] integers. OneHot: [B, Vocab]. Weight: [Vocab, Dim]. Output: [B, Dim].
+    // Create indices tensor on the same device as weight
+    OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{static_cast<int64_t>(batch_size)}}, 
+                                     OwnTensor::TensorOptions()
+                                         .with_device(weight_->local_tensor().device())
+                                         .with_dtype(OwnTensor::Dtype::Int32));
+    indices_tensor.set_data(token_ids.data(), token_ids.size());
     
-    // 1. Create One-Hot Tensor [B, Vocab] on GPU
-    // Replicated layout across batch dimension for inputs (since inputs are local per rank usually?)
-    // Actually, `input` here is local `std::vector<int>`.
-    // The `weight_` is Replicated [Vocab, Dim].
-    // We want Output [B, Dim] (local).
-    
-    // Create zero-filled one-hot buffer on CPU then upload (easiest logic, optimization later)
-    // Or set indices on GPU if OwnTensor supports it.
-    // Let's build a float vector on CPU. Warning: Large memory [B * Vocab].
-    // If B=128 (2*64), Vocab=50304 -> ~6.4M floats = 25MB. Acceptable.
-    
-    std::vector<float> one_hot_cpu(batch_size * vocab_size_, 0.0f);
-    for (int i = 0; i < batch_size; ++i) {
-        int token = token_ids[i];
-        if (token >= 0 && token < vocab_size_) {
-            one_hot_cpu[i * vocab_size_ + token] = 1.0f;
-        }
-    }
-    
-    // Create OneHot DTensor (Replicated layout)
-    // We treat the batch as just a local chunk.
-    // Global shape? If inputs are different on ranks, `DTensor` usually manages global view.
-    // But here we are returning a `DTensor` that result from local operations? 
-    // `DEmbedding` assumes Replicated weights.
-    // If we return a DTensor, it must have a Layout.
-    // Let's assume Replicated Layout for the input batch for now (simplest for `matmul` on replicated weights).
-    
-    Layout one_hot_layout = Layout::replicated(*mesh_, {static_cast<int64_t>(batch_size), vocab_size_});
-    DTensor one_hot = DTensor::zeros({static_cast<int64_t>(batch_size), vocab_size_}, mesh_, pg_, one_hot_layout);
-    one_hot.setData(one_hot_cpu, one_hot_layout);
-    
-    // 2. Perform Matmul: [B, V] @ [V, D] -> [B, D]
-    // Both are Replicated, so result is Replicated.
-    return one_hot.matmul(*weight_);
+    // Call efficient embedding lookup
+    return DTensor::embedding(indices_tensor, *weight_);
 }
 
 DTensor& DEmbedding::weight() {
@@ -360,7 +353,7 @@ void DEmbedding::set_requires_grad(bool requires) {
 }
 
 void DEmbedding::zero_grad() {
-    weight_->zero_grad();
+    weight_->zero_grad();   
 }
 
 std::vector<DTensor*> DEmbedding::parameters() {
@@ -371,48 +364,130 @@ std::vector<DTensor*> DEmbedding::parameters() {
 // SGD Optimizer Implementation
 // =============================================================================
 
-void SGD::step(std::vector<DTensor*> params) {
-    // Gradient clipping: compute global norm and scale if needed
+void AdamW::step(std::vector<DTensor*> params) {
+    if (params.empty()) return;
+    auto pg = params[0]->get_pg();
+    t_++;
+
+    float bias_corr1 = 1.0f - std::pow(beta1_, t_);
+    float bias_corr2 = 1.0f - std::pow(beta2_, t_);
+
+    // Gradient clipping for stability
     float global_norm_sq = 0.0f;
-    const float max_norm = 1000.0f;  // Balanced clip threshold
+    const float max_norm = 1.0f;
     
-    // First pass: compute global gradient norm
     for (DTensor* param : params) {
         if (!param->requires_grad()) continue;
-        auto grad_cpu = param->grad().to_cpu();
-        const float* g_ptr = grad_cpu.data<float>();
-        size_t numel = grad_cpu.numel();
-        for (size_t i = 0; i < numel; ++i) {
-            global_norm_sq += g_ptr[i] * g_ptr[i];
-        }
-    }
-    float global_norm = std::sqrt(global_norm_sq);
-    float clip_coef = (global_norm > max_norm) ? (max_norm / global_norm) : 1.0f;
-    
-    // Second pass: apply clipped gradient update
-    for (DTensor* param : params) {
-        if (!param->requires_grad()) continue;
-        
-        // Get gradient and weight tensors
         OwnTensor::Tensor grad = param->grad();
-        
-        // Copy weight to CPU for update (simple implementation)
-        OwnTensor::Tensor weight_cpu = param->local_tensor().to_cpu();
+        float local_norm_sq = 0.0f;
         auto grad_cpu = grad.to_cpu();
-        
-        float* w_ptr = weight_cpu.data<float>();
         const float* g_ptr = grad_cpu.data<float>();
-        size_t numel = weight_cpu.numel();
-        
-        // W = W - lr * clip_coef * grad
-        for (size_t i = 0; i < numel; ++i) {
-            w_ptr[i] -= lr_ * clip_coef * g_ptr[i];
+        for (size_t i = 0; i < grad.numel(); ++i) {
+            local_norm_sq += g_ptr[i] * g_ptr[i];
         }
-        
-        // Copy back to GPU using cudaMemcpy
-        cudaMemcpy(param->local_tensor().data<float>(), w_ptr, 
-                   numel * sizeof(float), cudaMemcpyHostToDevice);
+        global_norm_sq += local_norm_sq;
     }
+    
+    float global_sum_sq = 0.0f;
+    pg->all_reduce_cpu(&global_norm_sq, &global_sum_sq, 1, OwnTensor::Dtype::Float32, op_t::sum);
+    
+    float global_norm = std::sqrt(global_sum_sq);
+    float clip_coef = (global_norm > max_norm) ? (max_norm / global_norm) : 1.0f;
+
+    for (DTensor* param : params) {
+        if (!param->requires_grad()) continue;
+
+        OwnTensor::Tensor& weight = param->local_tensor();
+        OwnTensor::Tensor grad = param->grad();
+
+        // 1. Synchronize gradients for Replicated parameters
+        if (param->get_layout().is_replicated()) {
+             pg->all_reduce(grad.data<float>(), grad.data<float>(), 
+                            grad.numel(), OwnTensor::Dtype::Float32, op_t::sum, true);
+        }
+
+        // 2. Initialize state if needed
+        if (m_.find(param) == m_.end()) {
+            m_[param] = OwnTensor::Tensor::zeros(weight.shape(), weight.opts());
+            v_[param] = OwnTensor::Tensor::zeros(weight.shape(), weight.opts());
+        }
+
+        OwnTensor::Tensor& m = m_[param];
+        OwnTensor::Tensor& v = v_[param];
+
+        // 3. Launch fused AdamW kernel
+        // We use clip_coef * lr_ as the effective learning rate to incorporate clipping
+        OwnTensor::cuda::fused_adam_cuda(
+            weight.data<float>(),
+            grad.data<float>(),
+            m.data<float>(),
+            v.data<float>(),
+            weight.numel(),
+            lr_ * clip_coef,
+            beta1_,
+            beta2_,
+            eps_,
+            weight_decay_,
+            bias_corr1,
+            bias_corr2
+        );
+    }
+}
+
+// =============================================================================
+// CrossEntropyLoss Implementation
+// =============================================================================
+
+CrossEntropyLoss::CrossEntropyLoss(std::shared_ptr<DeviceMesh> mesh,
+                                   std::shared_ptr<ProcessGroupNCCL> pg)
+{
+    mesh_ = mesh;
+    pg_ = pg;
+}
+
+DTensor CrossEntropyLoss::forward(const DTensor& logits, const DTensor& targets) {
+    if (logits.get_layout().is_sharded()) {
+        return logits.distributed_sparse_cross_entropy_loss(targets);
+    }
+    return logits.sparse_cross_entropy_loss(targets);
+}
+
+// =============================================================================
+// DLayerNorm Implementation
+// =============================================================================
+
+DLayerNorm::DLayerNorm(int normalized_shape,
+                       std::shared_ptr<DeviceMesh> mesh,
+                       std::shared_ptr<ProcessGroupNCCL> pg,
+                       float eps)
+    : normalized_shape_(normalized_shape), eps_(eps)
+{
+    mesh_ = mesh;
+    pg_ = pg;
+
+    Layout repl_layout = Layout::replicated(*mesh_, {(int64_t)normalized_shape_});
+    
+    // Initialize weight to ones and bias to zeros
+    weight_ = std::make_unique<DTensor>(DTensor::ones({(int64_t)normalized_shape_}, mesh_, pg_, repl_layout));
+    bias_ = std::make_unique<DTensor>(DTensor::zeros({(int64_t)normalized_shape_}, mesh_, pg_, repl_layout));
+}
+
+DTensor DLayerNorm::forward(const DTensor& input) {
+    return input.layer_norm(*weight_, *bias_, eps_);
+}
+
+void DLayerNorm::set_requires_grad(bool requires) {
+    weight_->set_requires_grad(requires);
+    bias_->set_requires_grad(requires);
+}
+
+void DLayerNorm::zero_grad() {
+    weight_->zero_grad();
+    bias_->zero_grad();
+}
+
+std::vector<DTensor*> DLayerNorm::parameters() {
+    return {weight_.get(), bias_.get()};
 }
 
 } // namespace dnn

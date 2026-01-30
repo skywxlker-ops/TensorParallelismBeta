@@ -53,9 +53,9 @@ LIB_SRCS := \
     tensor/device_mesh.cpp \
     tensor/placement.cpp \
     tensor/fused_shard_kernel.cu \
+    tensor/distributed_loss_kernels.cu \
     process_group/processGroupNccl.cpp \
     process_group/reverse.cu \
-    memory/cachingAllocator.cpp \
     bridge/bridge.cpp \
     nn/nn.cpp \
     nn/CustomDNN.cpp
@@ -177,7 +177,6 @@ DMLP_EXAMPLE_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \
-    memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
 

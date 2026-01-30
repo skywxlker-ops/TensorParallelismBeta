@@ -63,11 +63,17 @@ float compute_grad_norm(DTensor& param) {
     auto grad = param.grad();
     auto grad_cpu = grad.to_cpu();
     const float* ptr = grad_cpu.data<float>();
-    float norm = 0.0f;
+    float local_norm_sq = 0.0f;
     for (size_t i = 0; i < grad_cpu.numel(); ++i) {
-        norm += ptr[i] * ptr[i];
+        local_norm_sq += ptr[i] * ptr[i];
     }
-    return std::sqrt(norm);
+    
+    // Sync across all ranks in the TP group.
+    float global_norm_sq = 0.0f;
+    auto pg = param.get_pg();
+    pg->all_reduce_cpu(&local_norm_sq, &global_norm_sq, 1, OwnTensor::Dtype::Float32, op_t::sum);
+    
+    return std::sqrt(global_norm_sq);
 }
 
 // =============================================================================
@@ -94,8 +100,8 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Hyperparameters
     // =========================================================================
-    const int B = 2;              // Batch size
-    const int T = 64;             // Sequence length
+    const int B = 8;              // Batch size
+    const int T = 1024;           // Sequence length
     const int vocab_size_raw = 50257;  // GPT-2 vocab size (standard for edufineweb)
     // Pad vocab_size to be divisible by world_size for even sharding if needed
     // Note: DLinearReplicated doesn't require padding, but DLinear might. 
@@ -105,10 +111,10 @@ int main(int argc, char** argv) {
     
     const int n_embd = 256;       // Embedding dimension
     const int hidden_dim = 512;   // MLP hidden dimension
-    const int max_steps = 2000;   // Training steps
-    const int warmup_steps = 100; // LR warmup steps
-    const float max_lr = 3e-5f;   // Balanced LR with gradient clipping
-    const float min_lr = 3e-6f;   // Min learning rate (10% of max)
+    const int max_steps = 200;   // Training steps
+    const int warmup_steps = 10;  // Short warmup
+    const float max_lr = 1e-3f;   // standard AdamW LR
+    const float min_lr = 1e-4f;
     
     if (rank == 0) {
         std::cout << "Config: B=" << B << ", T=" << T << ", n_embd=" << n_embd 
@@ -152,12 +158,19 @@ int main(int argc, char** argv) {
     {  // Begin scope for DTensor objects
     
     // Instantiate DataLoader with explicit files
-    DataLoaderLite loader(B, T, rank, world_size, train_files, rank==0);
+    // Instantiate DataLoader: For Tensor Parallelism, all ranks in the TP group
+    // MUST see the same samples so a single sample's forward/backward is distributed.
+    // If they saw different samples, the AllReduce in forward pass would sum unrelated samples.
+    DataLoaderLite loader(B, T, 0, 1, train_files, rank==0);
 
     // Embedding layer: token IDs -> embeddings [vocab_size, n_embd]
     DEmbedding embedding(vocab_size, n_embd, mesh, pg);
     embedding.set_requires_grad(true);
     
+    // LayerNorm 1: after embedding
+    DLayerNorm ln1(n_embd, mesh, pg);
+    ln1.set_requires_grad(true);
+
     // MLP Block 1 (layers 1-2)
     DMLP mlp1(n_embd, hidden_dim, n_embd, mesh, pg);
     mlp1.set_requires_grad(true);
@@ -166,20 +179,28 @@ int main(int argc, char** argv) {
     DMLP mlp2(n_embd, hidden_dim, n_embd, mesh, pg);
     mlp2.set_requires_grad(true);
     
+    // LayerNorm Final: before output projection
+    DLayerNorm ln_f(n_embd, mesh, pg);
+    ln_f.set_requires_grad(true);
+
     // Output projection: embeddings -> vocab logits [n_embd, vocab_size]
-    DLinearReplicated out_proj(n_embd, vocab_size, mesh, pg);
+    DLinear out_proj(mesh, pg, n_embd, vocab_size, ShardingType::Shard(1), ShardingType::Replicated(), false); 
+
     out_proj.set_requires_grad(true);
+
+    // Categorical Cross Entropy Loss
+    CrossEntropyLoss criterion(mesh, pg);
     
     // Scheduler & Optimizer
     LRScheduler lr_scheduler(max_lr, min_lr, warmup_steps, max_steps);
-    SGD optimizer(max_lr);
+    AdamW optimizer(max_lr);
     
     // =========================================================================
     // CSV Logging
     // =========================================================================
     std::ofstream csv_file;
     if (rank == 0) {
-        csv_file.open("training_log.csv");
+        csv_file.open("training_log_3.csv");
         csv_file << "step,loss,lr,norm,dt_ms,tok_sec\n";
     }
     
@@ -217,95 +238,56 @@ int main(int argc, char** argv) {
         // ---------------------------------------------------------------------
         
         // 1. Embedding lookup [B*T, n_embd]
-        // Convert to int for DEmbedding::forward (which handles uint16 conversion and upload safely)
         std::vector<int> input_ids(b.x.begin(), b.x.end());
-        auto X = embedding.forward(input_ids);
+        auto E = embedding.forward(input_ids);
         
-        // 2. MLP Block 1
+        auto X = ln1.forward(E);
         auto H1 = mlp1.forward(X);
+        auto H2 = mlp2.forward(H1);
+        auto H_final = ln_f.forward(H2);
+        auto logits = out_proj.forward(H_final);
         
-        // 3. MLP Block 2
-        auto H = mlp2.forward(H1);
-        
-        // 4. Output projection
-        auto logits = out_proj.forward(H);
-        
-        // 5. Softmax
-        auto probs = logits.softmax(-1);
-        
-        // 6. Loss & Gradient (Manual Cross Entropy)
-        Layout target_layout = Layout::replicated(*mesh, {B * T, vocab_size});
-        std::vector<float> target_onehot(B * T * vocab_size, 0.0f);
-        
-        // Construct one-hot target from b.y (which matches b.target data)
-        for (int i = 0; i < B * T; ++i) {
-            int tgt = b.y[i]; // Already clamped above
-            if (tgt >= 0 && tgt < vocab_size) {
-                 target_onehot[i * vocab_size + tgt] = 1.0f;
-            }
-        }
-        
-        auto Target = DTensor::zeros({B * T, vocab_size}, mesh, pg, target_layout);
-        Target.setData(target_onehot, target_layout);
-        
-        // Loss calculation
-        auto probs_data = probs.getData();
-        float loss_val = 0.0f;
-        for (int i = 0; i < B * T; ++i) {
-            int tgt = b.y[i];
-            float p = std::max(probs_data[i * vocab_size + tgt], 1e-10f);
-            loss_val -= std::log(p);
-        }
-        loss_val /= (B * T);
-        
-        // Gradient calculation: (probs - target) / (B * T)
-        std::vector<float> grad_logits(B * T * vocab_size);
-        for (int i = 0; i < B * T; ++i) {
-            for (int j = 0; j < vocab_size; ++j) {
-                float p = probs_data[i * vocab_size + j];
-                float t = target_onehot[i * vocab_size + j];
-                grad_logits[i * vocab_size + j] = (p - t) / (B * T);
-            }
-        }
-        
-        auto Grad = DTensor::zeros({B * T, vocab_size}, mesh, pg, target_layout);
-        Grad.setData(grad_logits, target_layout);
-        
+        std::vector<float> target_indices(B * T);
+        for(int i=0; i < B*T; ++i) target_indices[i] = static_cast<float>(b.y[i]);
+        Layout target_idx_layout = Layout::replicated(*mesh, {B * T});
+        auto TargetIdx = DTensor::zeros({B * T}, mesh, pg, target_idx_layout, Dtype::UInt16);
+        TargetIdx.setData(target_indices, target_idx_layout);
+        auto loss = criterion.forward(logits, TargetIdx);
+        float loss_val = loss.getData()[0];
+
         // ---------------------------------------------------------------------
         // Backward Pass
         // ---------------------------------------------------------------------
         embedding.zero_grad();
+        ln1.zero_grad();
         mlp1.zero_grad();
         mlp2.zero_grad();
+        ln_f.zero_grad();
         out_proj.zero_grad();
         
-        logits.backward(&Grad);
-        
+        loss.backward();
+
         // Compute norms
-        float grad_mlp1_fc1 = compute_grad_norm(mlp1.fc1().weight());
-        float grad_mlp1_fc2 = compute_grad_norm(mlp1.fc2().weight());
-        float grad_mlp2_fc1 = compute_grad_norm(mlp2.fc1().weight());
-        float grad_mlp2_fc2 = compute_grad_norm(mlp2.fc2().weight());
-        float total_norm = std::sqrt(grad_mlp1_fc1 * grad_mlp1_fc1 + 
-                                      grad_mlp1_fc2 * grad_mlp1_fc2 +
-                                      grad_mlp2_fc1 * grad_mlp2_fc1 +
-                                      grad_mlp2_fc2 * grad_mlp2_fc2);
+        float grad_emb = compute_grad_norm(embedding.weight());
+        float grad_ln1 = compute_grad_norm(*ln1.parameters()[0]);
+        float grad_mlp1 = compute_grad_norm(mlp1.fc1().weight());
+        float grad_mlp2 = compute_grad_norm(mlp2.fc1().weight());
+        float grad_lnf = compute_grad_norm(*ln_f.parameters()[0]);
+        float grad_out = compute_grad_norm(out_proj.weight());
         
-        // Clear graph
+        float total_norm = std::sqrt(grad_emb * grad_emb + grad_ln1 * grad_ln1 + 
+                                     grad_mlp1 * grad_mlp1 + grad_mlp2 * grad_mlp2 + 
+                                     grad_lnf * grad_lnf + grad_out * grad_out);
+
+        // 8. Clear graph connections manually to prevent memory leaks
+        E.local_tensor().set_grad_fn(nullptr);
         X.local_tensor().set_grad_fn(nullptr);  
         H1.local_tensor().set_grad_fn(nullptr);
-        H.local_tensor().set_grad_fn(nullptr);
+        H2.local_tensor().set_grad_fn(nullptr);
+        H_final.local_tensor().set_grad_fn(nullptr);
         logits.local_tensor().set_grad_fn(nullptr);
-        probs.local_tensor().set_grad_fn(nullptr);
-        Grad.local_tensor().set_grad_fn(nullptr);
-        Target.local_tensor().set_grad_fn(nullptr);
-        
-        embedding.weight().local_tensor().set_grad_fn(nullptr);
-        mlp1.fc1().weight().local_tensor().set_grad_fn(nullptr);
-        mlp1.fc2().weight().local_tensor().set_grad_fn(nullptr);
-        mlp2.fc1().weight().local_tensor().set_grad_fn(nullptr);
-        mlp2.fc2().weight().local_tensor().set_grad_fn(nullptr);
-        out_proj.weight().local_tensor().set_grad_fn(nullptr);
+        loss.local_tensor().set_grad_fn(nullptr);
+        TargetIdx.local_tensor().set_grad_fn(nullptr);
         
         cudaDeviceSynchronize();
         
@@ -314,10 +296,12 @@ int main(int argc, char** argv) {
         // ---------------------------------------------------------------------
         std::vector<DTensor*> params = {
             &embedding.weight(),
+            ln1.parameters()[0], ln1.parameters()[1],
             &mlp1.fc1().weight(), 
             &mlp1.fc2().weight(),
             &mlp2.fc1().weight(), 
             &mlp2.fc2().weight(),
+            ln_f.parameters()[0], ln_f.parameters()[1],
             &out_proj.weight()
         };
         optimizer.step(params);
@@ -341,6 +325,7 @@ int main(int argc, char** argv) {
                           << " | norm: " << std::fixed << std::setprecision(4) << total_norm
                           << " | dt: " << std::setprecision(2) << dt_ms << "ms"
                           << " | tok/sec: " << std::setprecision(2) << tokens_per_sec << std::endl;
+                // gAllocator.printStats();
             }
         }
     }
@@ -348,7 +333,7 @@ int main(int argc, char** argv) {
     if (rank == 0) {
         csv_file.close();
         std::cout << "\n=== Training Complete ===" << std::endl;
-        std::cout << "Training log saved to: training_log.csv" << std::endl;
+        std::cout << "Training log saved to: training_log_4.csv" << std::endl;
     }
     
     // =========================================================================

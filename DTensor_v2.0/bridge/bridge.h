@@ -81,12 +81,22 @@ OwnTensor::Tensor softmax(const OwnTensor::Tensor& x, int64_t dim = -1);
 OwnTensor::Tensor categorical_cross_entropy(const OwnTensor::Tensor& predictions, const OwnTensor::Tensor& targets);
 
 /**
+ * Autograd-aware sparse cross entropy loss (takes logits).
+ */
+OwnTensor::Tensor sparse_cross_entropy_loss(const OwnTensor::Tensor& logits, const OwnTensor::Tensor& targets);
+
+/**
  * Autograd-aware embedding lookup.
  * @param indices Tensor of token IDs (uint16)
  * @param weight Embedding weight matrix [vocab_size, embedding_dim]
  * @param padding_idx Index to treat as padding (-1 for none)
  */
 OwnTensor::Tensor embedding(const OwnTensor::Tensor& indices, const OwnTensor::Tensor& weight, int padding_idx = -1);
+
+/**
+ * Autograd-aware Layer Normalization.
+ */
+OwnTensor::Tensor layer_norm(const OwnTensor::Tensor& input, const OwnTensor::Tensor& weight, const OwnTensor::Tensor& bias, int normalized_shape, float eps = 1e-5);
 
 /**
  * Execute backward pass on a tensor.

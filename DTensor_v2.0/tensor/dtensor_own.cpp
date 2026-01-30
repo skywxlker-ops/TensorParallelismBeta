@@ -10,7 +10,7 @@
 #include <sstream>
 
 
-CachingAllocator gAllocator;
+// gAllocator is now OwnTensor::gAllocator, defined in Tensor-Implementations/src/device/cachingAllocator.cpp
 
 
 DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh, std::shared_ptr<ProcessGroup> pg)

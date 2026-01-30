@@ -74,36 +74,45 @@ public:
     // Calculates the shape of the local shard for a given rank
     std::vector<int64_t> get_local_shape(int rank) const {
         if (placement_->type() == PlacementType::REPLICATE) {
-            return global_shape_; // No sharding, return full shape
+            return global_shape_;
         }
     
-        int d = placement_->dim();
-        // Ensure d is valid before indexing global_shape_
-        if (d < 0 || (size_t)d >= global_shape_.size()) {
+        int shard_dim = get_shard_dim();
+        if (shard_dim < 0 || (size_t)shard_dim >= global_shape_.size()) {
             return global_shape_;
         }
 
         int world_size = mesh_->world_size();
-        // SAFETY: Prevent division by zero if mesh is uninitialized
         if (world_size <= 0) return global_shape_;
 
         std::vector<int64_t> local_shape = global_shape_;
+        int64_t global_dim_size = global_shape_[shard_dim];
+        int64_t base_size = global_dim_size / world_size;
+        int64_t remainder = global_dim_size % world_size;
 
-        // SAFETY: Check the shard dimension
-        int shard_dim = placement_->dim();
-        if (shard_dim < 0 || (size_t)shard_dim >= global_shape_.size()) {
-            return global_shape_; 
+        local_shape[shard_dim] = (rank < remainder) ? (base_size + 1) : base_size;
+        return local_shape;
+    }
+
+    // Calculates the offset of the local shard for a given rank
+    int64_t get_local_offset(int rank) const {
+        if (placement_->type() == PlacementType::REPLICATE) {
+            return 0;
         }
+
+        int shard_dim = get_shard_dim();
+        if (shard_dim < 0 || (size_t)shard_dim >= global_shape_.size()) {
+            return 0;
+        }
+
+        int world_size = mesh_->world_size();
+        if (world_size <= 0) return 0;
 
         int64_t global_dim_size = global_shape_[shard_dim];
         int64_t base_size = global_dim_size / world_size;
         int64_t remainder = global_dim_size % world_size;
 
-        int64_t local_dim_size = (rank < remainder) ? (base_size + 1) : base_size;
-
-        local_shape[shard_dim] = local_dim_size;
-
-        return local_shape;
+        return (int64_t)rank * base_size + std::min((int64_t)rank, remainder);
     }
 
 

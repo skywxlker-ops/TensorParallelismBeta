@@ -345,23 +345,87 @@ private:
 };
 
 // =============================================================================
+// Distributed Cross Entropy Loss
+// =============================================================================
+
+/**
+ * @class CrossEntropyLoss
+ * @brief Distributed Cross Entropy Loss module
+ * 
+ * Computes categorical cross entropy between logits and targets.
+ * Supports DTensor inputs and handles gradient calculation internally.
+ */
+class CrossEntropyLoss : public DModule {
+public:
+    CrossEntropyLoss(std::shared_ptr<DeviceMesh> mesh,
+                     std::shared_ptr<ProcessGroupNCCL> pg);
+    
+    /**
+     * @brief Forward pass: compute loss
+     * @param logits Prediction logits [B, Vocab]
+     * @param targets Target distributions or indices [B, Vocab] (one-hot)
+     * @return Scalar DTensor containing the loss
+     */
+    DTensor forward(const DTensor& logits, const DTensor& targets);
+
+    void set_requires_grad(bool requires) override {}
+    void zero_grad() override {}
+    std::vector<DTensor*> parameters() override { return {}; }
+};
+
+// =============================================================================
+// Distributed Layer Normalization
+// =============================================================================
+
+/**
+ * @class DLayerNorm
+ * @brief Distributed Layer Normalization
+ */
+class DLayerNorm : public DModule {
+public:
+    DLayerNorm(int normalized_shape,
+               std::shared_ptr<DeviceMesh> mesh,
+               std::shared_ptr<ProcessGroupNCCL> pg,
+               float eps = 1e-5);
+    
+    DTensor forward(const DTensor& input);
+    
+    void set_requires_grad(bool requires) override;
+    void zero_grad() override;
+    std::vector<DTensor*> parameters() override;
+
+private:
+    int normalized_shape_;
+    float eps_;
+    std::unique_ptr<DTensor> weight_; ///< [normalized_shape] replicated
+    std::unique_ptr<DTensor> bias_;   ///< [normalized_shape] replicated
+};
+
+// =============================================================================
 // Optimizers
 // =============================================================================
 
 /**
- * @class SGD
- * @brief Stochastic Gradient Descent optimizer with gradient clipping
+ * @class AdamW
+ * @brief AdamW optimizer with gradient clipping and weight decay
  */
-class SGD {
+class AdamW {
 public:
     /**
-     * @brief Construct SGD optimizer
+     * @brief Construct AdamW optimizer
      * @param lr Learning rate
+     * @param beta1 First moment decay
+     * @param beta2 Second moment decay
+     * @param eps Epsilon for numerical stability
+     * @param weight_decay Weight decay (L2 penalty)
      */
-    explicit SGD(float lr) : lr_(lr) {}
+    explicit AdamW(float lr, float beta1 = 0.9f, float beta2 = 0.999f, 
+                   float eps = 1e-8f, float weight_decay = 0.01f)
+        : lr_(lr), beta1_(beta1), beta2_(beta2), eps_(eps), 
+          weight_decay_(weight_decay), t_(0) {}
     
     /**
-     * @brief Perform optimization step with gradient clipping
+     * @brief Perform optimization step with AdamW logic
      * @param params Vector of parameter tensors
      */
     void step(std::vector<DTensor*> params);
@@ -370,7 +434,12 @@ public:
     float get_lr() const { return lr_; }
 
 private:
-    float lr_;
+    float lr_, beta1_, beta2_, eps_, weight_decay_;
+    int t_;
+    // State: first and second moments for each parameter
+    // Keys are DTensor pointers, values are local Tensor shards on GPU
+    std::unordered_map<DTensor*, OwnTensor::Tensor> m_;
+    std::unordered_map<DTensor*, OwnTensor::Tensor> v_;
 };
 
 } // namespace dnn

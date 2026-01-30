@@ -1,0 +1,8 @@
+training_log_1.csv - edufineweb 3000 steps
+
+training_log_2.csv - edufineweb 10000 steps
+
+training_log_bluwerp.csv - bluwerp 3000 steps
+
+training_log_bluwerp_2.csv - bluwerp 10000 steps
+
