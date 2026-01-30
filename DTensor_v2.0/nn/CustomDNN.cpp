@@ -1,6 +1,7 @@
 #include "nn/CustomDNN.h"
 #include <unparalleled/unparalleled.h>
 #include "ops/helpers/AdamKernels.h"
+#include "mlp/WeightInit.h"
 #include <cuda_runtime.h>
 #include <cmath>
 #include <iostream>
@@ -34,24 +35,28 @@ DLinear::DLinear(std::shared_ptr<DeviceMesh> mesh,
     pg_ = pg;
     
     // Initialize weight based on sharding type
+    // Use He normal initialization (better for GeLU/ReLU networks)
+    // He stddev = sqrt(2 / fan_in)
+    float he_std = std::sqrt(2.0f / static_cast<float>(in_features_));
+    
     if (weight_sharding_.is_shard()) {
         Layout w_layout(*mesh, {in_features_, out_features_}, weight_sharding_.shard_dim());
+        // Create DTensor with randn (mean=0, std=1), then scale by He factor
         weight_ = std::make_unique<DTensor>(
             DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
+        
+        // Scale by He standard deviation (in-place)
+        weight_->local_tensor() *= he_std;
+        
     } else {
         // Replicated weight
         Layout w_layout = Layout::replicated(*mesh, {in_features_, out_features_});
         weight_ = std::make_unique<DTensor>(
             DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
+        
+        // Scale by He standard deviation (in-place)
+        weight_->local_tensor() *= he_std;
     }
-
-    // Xavier/Kaiming-like initialization: std = 1/sqrt(in_features)
-    float std_scale = 1.0f / std::sqrt(static_cast<float>(in_features_));
-    auto w_data = weight_->getData();
-    for (size_t i = 0; i < w_data.size(); ++i) {
-        w_data[i] *= std_scale;
-    }
-    weight_->setData(w_data, weight_->layout());
     weight_->set_requires_grad(true);
     
     // Initialize bias if needed
