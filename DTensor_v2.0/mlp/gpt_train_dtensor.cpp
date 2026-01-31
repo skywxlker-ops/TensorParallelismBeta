@@ -164,7 +164,8 @@ int main(int argc, char** argv) {
     DataLoaderLite loader(B, T, 0, 1, train_files, rank==0);
 
     // Embedding layer: token IDs -> embeddings [vocab_size, n_embd]
-    DEmbedding embedding(vocab_size, n_embd, mesh, pg);
+    // Using Row Parallel (Shard(0)) to distribute vocab across GPUs for memory savings
+    DEmbedding embedding(vocab_size, n_embd, mesh, pg, ShardingType::Shard(0));
     embedding.set_requires_grad(true);
     
     // LayerNorm 1: after embedding
