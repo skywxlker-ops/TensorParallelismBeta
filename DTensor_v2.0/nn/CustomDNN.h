@@ -308,29 +308,36 @@ private:
 
 /**
  * @class DEmbedding
- * @brief Distributed embedding layer
+ * @brief Distributed embedding layer with optional vocab sharding
  * 
- * Stores embedding table replicated across GPUs for simplicity.
- * Advanced implementations could shard the vocabulary dimension.
+ * Supports two modes:
+ * - Replicated: Full embedding table on each GPU (default, backward compat)
+ * - Sharded (Row Parallel): Vocab sharded across GPUs, uses AllReduce in forward
+ * 
+ * Row Parallel sharding reduces memory: each GPU stores vocab_size/world_size rows.
  */
 class DEmbedding : public DModule {
 public:
     /**
      * @brief Construct a distributed embedding layer
-     * @param vocab_size Vocabulary size
+     * @param vocab_size Global vocabulary size
      * @param embedding_dim Embedding dimension
      * @param mesh Device mesh
      * @param pg Process group
+     * @param sharding Sharding type (Replicated or Shard(0) for vocab sharding)
      */
     DEmbedding(int64_t vocab_size,
                int64_t embedding_dim,
                std::shared_ptr<DeviceMesh> mesh,
-               std::shared_ptr<ProcessGroupNCCL> pg);
+               std::shared_ptr<ProcessGroupNCCL> pg,
+               ShardingType sharding = ShardingType::Replicated());
     
     /**
      * @brief Forward pass: lookup embeddings
      * @param token_ids Vector of token IDs [batch_size * seq_len]
      * @return DTensor of embeddings [batch_size * seq_len, embedding_dim]
+     * 
+     * If sharded, performs local lookup + AllReduce to combine partial results.
      */
     DTensor forward(const std::vector<int>& token_ids);
     
@@ -338,11 +345,20 @@ public:
     void set_requires_grad(bool requires) override;
     void zero_grad() override;
     std::vector<DTensor*> parameters() override;
+    
+    // Accessors
+    int64_t vocab_size() const { return vocab_size_; }
+    int64_t local_vocab_size() const { return local_vocab_size_; }
+    int64_t embedding_dim() const { return embedding_dim_; }
+    bool is_sharded() const { return sharding_.is_shard(); }
 
 private:
-    int64_t vocab_size_;
+    int64_t vocab_size_;        ///< Global vocab size
+    int64_t local_vocab_size_;  ///< Local vocab size (= global / world_size if sharded)
     int64_t embedding_dim_;
-    std::unique_ptr<DTensor> weight_;  ///< [vocab_size, embedding_dim] replicated
+    int64_t vocab_start_idx_;   ///< Start index of local vocab range
+    ShardingType sharding_;
+    std::unique_ptr<DTensor> weight_;  ///< [local_vocab_size, embedding_dim]
 };
 
 // =============================================================================

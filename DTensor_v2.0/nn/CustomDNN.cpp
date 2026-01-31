@@ -307,50 +307,144 @@ DLinear& DMLP::fc2() {
 DEmbedding::DEmbedding(int64_t vocab_size,
                        int64_t embedding_dim,
                        std::shared_ptr<DeviceMesh> mesh,
-                       std::shared_ptr<ProcessGroupNCCL> pg)
+                       std::shared_ptr<ProcessGroupNCCL> pg,
+                       ShardingType sharding)
     : vocab_size_(vocab_size),
       embedding_dim_(embedding_dim),
+      sharding_(sharding),
       weight_(nullptr)
 {
     mesh_ = mesh;
     pg_ = pg;
     
-    // Create replicated embedding weight [vocab_size, embedding_dim]
-    // std::cout << "[DEBUG] DEmbedding: Creating layout..." << std::endl;
-    Layout weight_layout = Layout::replicated(*mesh, {vocab_size, embedding_dim});
+    int world_size = mesh->size();
+    int rank = pg->get_rank();
     
-    // std::cout << "[DEBUG] DEmbedding: Creating weight DTensor..." << std::endl;
-    weight_ = std::make_unique<DTensor>(
-        DTensor::randn({vocab_size, embedding_dim}, mesh, pg, weight_layout)
-    );
-    
-    // std::cout << "[DEBUG] DEmbedding: Scaling weight..." << std::endl;
-    // Scale initialization (Xavier-like)
-    float scale = 1.0f / std::sqrt(static_cast<float>(embedding_dim));
-    auto weight_data = weight_->getData();
-    for (size_t i = 0; i < weight_data.size(); ++i) {
-        weight_data[i] *= scale;
+    if (sharding_.is_shard() && sharding_.shard_dim() == 0) {
+        // Row Parallel: shard vocab dimension
+        // Each rank gets [vocab_size / world_size, embedding_dim]
+        local_vocab_size_ = vocab_size_ / world_size;
+        vocab_start_idx_ = rank * local_vocab_size_;
+        
+        // Handle remainder if vocab_size not divisible
+        if (rank == world_size - 1) {
+            local_vocab_size_ = vocab_size_ - vocab_start_idx_;
+        }
+        
+        Layout weight_layout(*mesh, {vocab_size_, embedding_dim_}, 0);  // Shard on dim 0
+        weight_ = std::make_unique<DTensor>(
+            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout)
+        );
+    } else if (sharding_.is_shard() && sharding_.shard_dim() == 1) {
+        // Column Parallel: shard embedding dimension
+        // Each rank gets [vocab_size, embedding_dim / world_size]
+        local_vocab_size_ = vocab_size_;  // Full vocab on each rank
+        vocab_start_idx_ = 0;
+        
+        Layout weight_layout(*mesh, {vocab_size_, embedding_dim_}, 1);  // Shard on dim 1
+        weight_ = std::make_unique<DTensor>(
+            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout)
+        );
+    } else {
+        // Replicated mode (default)
+        local_vocab_size_ = vocab_size_;
+        vocab_start_idx_ = 0;
+        
+        Layout weight_layout = Layout::replicated(*mesh, {vocab_size_, embedding_dim_});
+        weight_ = std::make_unique<DTensor>(
+            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout)
+        );
     }
-    // std::cout << "[DEBUG] DEmbedding: Setting weight data..." << std::endl;
-    weight_->setData(weight_data, weight_layout);
     
-    // std::cout << "[DEBUG] DEmbedding: Setting requires_grad..." << std::endl;
+    // Xavier-like initialization: scale by 1/sqrt(embedding_dim)
+    float scale = 1.0f / std::sqrt(static_cast<float>(embedding_dim_));
+    weight_->local_tensor() *= scale;
+    
     weight_->set_requires_grad(true);
-    // std::cout << "[DEBUG] DEmbedding: Constructor done." << std::endl;
 }
 
 DTensor DEmbedding::forward(const std::vector<int>& token_ids) {
-    int batch_size = token_ids.size();
+    int64_t batch_size = static_cast<int64_t>(token_ids.size());
     
-    // Create indices tensor on the same device as weight
-    OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{static_cast<int64_t>(batch_size)}}, 
+    if (!sharding_.is_shard()) {
+        // Replicated path: simple lookup
+        OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{batch_size}}, 
+                                         OwnTensor::TensorOptions()
+                                             .with_device(weight_->local_tensor().device())
+                                             .with_dtype(OwnTensor::Dtype::Int32));
+        indices_tensor.set_data(token_ids.data(), token_ids.size());
+        return DTensor::embedding(indices_tensor, *weight_);
+    }
+    
+    if (sharding_.shard_dim() == 1) {
+        // Column Parallel: shard embedding dimension
+        // Each rank has full vocab but partial embedding dim [V, H/P]
+        // No masking needed - just do lookup, output is [B, H/P] sharded
+        OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{batch_size}}, 
+                                         OwnTensor::TensorOptions()
+                                             .with_device(weight_->local_tensor().device())
+                                             .with_dtype(OwnTensor::Dtype::Int32));
+        indices_tensor.set_data(token_ids.data(), token_ids.size());
+        
+        // Local lookup on sharded weight
+        OwnTensor::Tensor local_result = Bridge::autograd::embedding(
+            indices_tensor, weight_->local_tensor(), -1
+        );
+        
+        // Output is sharded on dim 1 (embedding dim)
+        int64_t local_embed_dim = embedding_dim_ / mesh_->size();
+        Layout out_layout(*mesh_, {batch_size, embedding_dim_}, 1);  // Shard(1)
+        return DTensor::from_local(local_result, mesh_, pg_, out_layout);
+    }
+    
+    // Sharded path: Row Parallel with AllReduce
+    // 1. Map global token IDs to local indices (or -1 if OOB for this rank)
+    std::vector<int> local_indices(batch_size);
+    std::vector<float> mask(batch_size);
+    
+    for (int64_t i = 0; i < batch_size; ++i) {
+        int global_id = token_ids[i];
+        if (global_id >= vocab_start_idx_ && global_id < vocab_start_idx_ + local_vocab_size_) {
+            // Token belongs to this rank
+            local_indices[i] = global_id - vocab_start_idx_;
+            mask[i] = 1.0f;
+        } else {
+            // Token belongs to another rank - use index 0 for lookup, mask out result
+            local_indices[i] = 0;
+            mask[i] = 0.0f;
+        }
+    }
+    
+    // 2. Create local indices tensor
+    OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{batch_size}}, 
                                      OwnTensor::TensorOptions()
                                          .with_device(weight_->local_tensor().device())
                                          .with_dtype(OwnTensor::Dtype::Int32));
-    indices_tensor.set_data(token_ids.data(), token_ids.size());
+    indices_tensor.set_data(local_indices.data(), local_indices.size());
     
-    // Call efficient embedding lookup
-    return DTensor::embedding(indices_tensor, *weight_);
+    // 3. Perform local lookup
+    OwnTensor::Tensor local_result = Bridge::autograd::embedding(
+        indices_tensor, weight_->local_tensor(), -1  // padding_idx = -1 (unused)
+    );
+    
+    // 4. Apply mask: zero out embeddings for tokens not on this rank
+    // mask is [batch_size], result is [batch_size, embedding_dim]
+    OwnTensor::Tensor mask_tensor(OwnTensor::Shape{{batch_size, 1}}, 
+                                  OwnTensor::TensorOptions()
+                                      .with_device(local_result.device())
+                                      .with_dtype(OwnTensor::Dtype::Float32));
+    mask_tensor.set_data(mask.data(), mask.size());
+    
+    // Broadcast mask and multiply
+    local_result = local_result * mask_tensor;
+    
+    // 5. AllReduce to combine partial results from all ranks
+    // Create output layout (replicated)
+    Layout out_layout = Layout::replicated(*mesh_, {batch_size, embedding_dim_});
+    DTensor output = DTensor::from_local(local_result, mesh_, pg_, out_layout);
+    output.sync();  // AllReduce sum
+    
+    return output;
 }
 
 DTensor& DEmbedding::weight() {
