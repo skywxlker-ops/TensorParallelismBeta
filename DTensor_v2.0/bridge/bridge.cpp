@@ -30,20 +30,14 @@ static std::vector<int64_t> toDims(const Shape& s) {
 // =============================================================================
 
 Tensor add(const Tensor& A, const Tensor& B) {
-    if (A.shape().dims != B.shape().dims)
-        throw std::runtime_error("add: shape mismatch between tensors");
     return A + B;
 }
 
 Tensor sub(const Tensor& A, const Tensor& B) {
-    if (A.shape().dims != B.shape().dims)
-        throw std::runtime_error("sub: shape mismatch between tensors");
     return A - B;
 }
 
 Tensor mul(const Tensor& A, const Tensor& B) {
-    if (A.shape().dims != B.shape().dims)
-        throw std::runtime_error("mul: shape mismatch between tensors");
     return A * B;
 }
 
@@ -53,8 +47,6 @@ Tensor mul(const Tensor& A, float scalar) {
 }
 
 Tensor div(const Tensor& A, const Tensor& B) {
-    if (A.shape().dims != B.shape().dims)
-        throw std::runtime_error("div: shape mismatch between tensors");
     return A / B;
 }
 

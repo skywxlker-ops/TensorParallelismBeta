@@ -199,6 +199,7 @@ public:
         pos_ = static_cast<size_t>(B_) * static_cast<size_t>(T_) * static_cast<size_t>(rank_);
     }
 
+
     Batch next_batch() {
         const size_t BT = static_cast<size_t>(B_) * static_cast<size_t>(T_);
         const size_t need = BT + 1; // because y is shifted by 1

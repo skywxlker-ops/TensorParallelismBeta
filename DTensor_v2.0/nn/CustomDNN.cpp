@@ -5,6 +5,9 @@
 #include <cuda_runtime.h>
 #include <cmath>
 #include <iostream>
+#include <fstream>
+#include <filesystem>
+#include <sstream>
 
 namespace OwnTensor {
     namespace dnn {
@@ -70,16 +73,16 @@ DLinear::DLinear(std::shared_ptr<DeviceMesh> mesh,
         // Bias shape is [N] (out_features)
         
         if (weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 1) {
-            // Column-parallel: Output is [B, N/P]. Bias should be [1, N/P] to broadcast correctly.
-            // We create a 2D bias tensor [1, N] sharded on dim 1: [1] -> [1], [N] -> [N/P] local.
-            Layout b_layout(*mesh, {1, out_features_}, 1);  // 2D, sharded on dim 1
+            // Column-parallel: Output is [B, N/P]. Bias should be [N/P] local.
+            // Global shape [N], Sharded on dim 0
+            Layout b_layout(*mesh, {out_features_}, 0); 
             bias_ = std::make_unique<DTensor>(
-                DTensor::zeros({1, out_features_}, mesh, pg, b_layout));
+                DTensor::zeros({out_features_}, mesh, pg, b_layout));
         } else {
-            // Row-parallel: Output is [B, N] (Replicated). Bias should be [1, N] (Replicated).
-            Layout b_layout = Layout::replicated(*mesh, {1, out_features_});  // 2D  
+            // Row-parallel: Output is [B, N] (Replicated). Bias should be [N] (Replicated).
+            Layout b_layout = Layout::replicated(*mesh, {out_features_});  // 1D  
             bias_ = std::make_unique<DTensor>(
-                DTensor::zeros({1, out_features_}, mesh, pg, b_layout));
+                DTensor::zeros({out_features_}, mesh, pg, b_layout));
         }
         bias_->set_requires_grad(true);
     }
@@ -130,11 +133,10 @@ DTensor DLinear::forward(const DTensor& input, bool no_sync) {
     // Compute Y = X @ W
     DTensor output = input.matmul(*weight_);
     
-    // Auto-sync: Row-parallel (Shard(0)) needs AllReduce to sum partial results
-    // Skip sync if no_sync=true (caller will sync later for fused operations)
-    if (!no_sync && weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 0) {
-        output.sync();  // AllReduce sum
-    }
+    // Note: matmul handles sync() for row-parallel case (Shard(1) @ Shard(0))
+    // in DTensor::_row_parallel_matmul. Calling it again here would result 
+    // in doubled values and potential NCCL synchronization hangs. 
+    // DTensor::matmul is designed to return a fully synchronized result where necessary.
 
     // Add bias if present
     // Note: Add bias AFTER sync for row-parallel to avoid adding bias multiple times
@@ -260,17 +262,14 @@ DMLP::DMLP(int64_t in_features,
 
 
 DTensor DMLP::forward(const DTensor& input) {
-    // Layer 1: Column-parallel matmul (no sync needed)
+    // Layer 1: Column-parallel matmul (no sync needed, output is sharded)
     DTensor h = fc1_->forward(input);
     
-    // Activation: GeLU (better for transformers)
+    // Activation: GeLU (operates on shards)
     DTensor h_act = h.gelu();
     
-    // Layer 2: Row-parallel matmul - skip internal sync for fused operation
-    DTensor output = fc2_->forward(h_act, true);  // no_sync=true
-    
-    // Single sync at the end (fused AllReduce)
-    output.sync();
+    // Layer 2: Row-parallel matmul - handles its own sync() inside fc2_->forward()
+    DTensor output = fc2_->forward(h_act);
     
     return output;
 }
@@ -392,7 +391,6 @@ DTensor DEmbedding::forward(const std::vector<int>& token_ids) {
         );
         
         // Output is sharded on dim 1 (embedding dim)
-        int64_t local_embed_dim = embedding_dim_ / mesh_->size();
         Layout out_layout(*mesh_, {batch_size, embedding_dim_}, 1);  // Shard(1)
         return DTensor::from_local(local_result, mesh_, pg_, out_layout);
     }
@@ -447,6 +445,33 @@ DTensor DEmbedding::forward(const std::vector<int>& token_ids) {
     return output;
 }
 
+DTensor DEmbedding::forward(const DTensor& indices) {
+    // For now, simpler implementation: convert DTensor indices to vector and use token_ids version
+    // In a high-performance setting, we would stay on GPU.
+    // However, if indices are small [B, T], the overhead is manageable.
+    auto local_indices = indices.local_tensor().to_cpu();
+    int64_t numel = local_indices.numel();
+    std::vector<int> token_ids(numel);
+    
+    if (local_indices.dtype() == OwnTensor::Dtype::Int64) {
+        const int64_t* data = local_indices.data<int64_t>();
+        for (int64_t i = 0; i < numel; ++i) token_ids[i] = static_cast<int>(data[i]);
+    } else if (local_indices.dtype() == OwnTensor::Dtype::Int32) {
+        const int* data = local_indices.data<int>();
+        for (int64_t i = 0; i < numel; ++i) token_ids[i] = data[i];
+    } else if (local_indices.dtype() == OwnTensor::Dtype::UInt16) {
+        const uint16_t* data = local_indices.data<uint16_t>();
+        for (int64_t i = 0; i < numel; ++i) token_ids[i] = static_cast<int>(data[i]);
+    }
+    
+    DTensor result = forward(token_ids);
+    
+    // Reshape result to [B, T, C]
+    auto shape = indices.shape();
+    shape.push_back(embedding_dim_);
+    return result.reshape(shape);
+}
+
 DTensor& DEmbedding::weight() {
     return *weight_;
 }
@@ -464,8 +489,26 @@ std::vector<DTensor*> DEmbedding::parameters() {
 }
 
 // =============================================================================
-// SGD Optimizer Implementation
-// =============================================================================
+void SGD::step(std::vector<DTensor*> params) {
+    if (params.empty()) return;
+    auto pg = params[0]->get_pg();
+    
+    for (DTensor* param : params) {
+        if (!param->requires_grad()) continue;
+
+        OwnTensor::Tensor& weight = param->local_tensor();
+        OwnTensor::Tensor grad = param->grad();
+
+        // Synchronize gradients for Replicated parameters
+        if (param->get_layout().is_replicated()) {
+             pg->all_reduce(grad.data<float>(), grad.data<float>(), 
+                            grad.numel(), OwnTensor::Dtype::Float32, op_t::sum, true);
+        }
+
+        // weight = weight - lr * grad
+        weight -= grad * lr_;
+    }
+}
 
 void AdamW::step(std::vector<DTensor*> params) {
     if (params.empty()) return;
@@ -536,6 +579,9 @@ void AdamW::step(std::vector<DTensor*> params) {
         );
     }
 }
+// =============================================================================
+
+
 
 // =============================================================================
 // CrossEntropyLoss Implementation
