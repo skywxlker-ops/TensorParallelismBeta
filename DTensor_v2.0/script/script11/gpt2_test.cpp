@@ -19,17 +19,19 @@
     #include "TensorLib.h"
     #include "autograd/AutogradOps.h"
     #include "autograd/operations/LossOps.h"
-    // #include "mlp/optimizer.h"
     #include "nn/optimizer/Optim.h"
-    #include "mlp/activation.h"
     #include "mlp/activation.h"
     #include "autograd/operations/EmbeddingOps.h"
     #include "nn/NN.h"
+    #include "nn/CustomDNN.h"
+    #include "process_group/ProcessGroupNCCL.h"
+    #include "tensor/dtensor.h"
 
     // Dataloader
     #include "dl_test.cpp"
 
     using namespace OwnTensor;
+    using namespace OwnTensor::dnn;
 
     // =============================================================================
     // Configuration
@@ -147,110 +149,110 @@
     // GPT Model
     // =============================================================================
 
+    // =============================================================================
+    // GPT Model
+    // =============================================================================
+
     class GPT {
     public:
         GPTConfig config;
-        Embedding wte;  // Token embedding
-        Embedding wpe;  // Position embedding
-        std::vector<MLP> mlps;
-        nn::LayerNorm ln_f; // Final LayerNorm
-        Embedding W_final;  // Final linear projection
+        std::unique_ptr<DEmbedding> wte;  // Token embedding
+        std::unique_ptr<DEmbedding> wpe;  // Position embedding
+        std::vector<std::unique_ptr<DLayerNorm>> lns;
+        std::vector<std::unique_ptr<DMLP>> mlps;
+        std::unique_ptr<DLayerNorm> ln_f; // Final LayerNorm
 
-        GPT(GPTConfig cfg, DeviceIndex device, uint64_t seed = 1234)
-            : config(cfg), 
-            wte(cfg.vocab_size, cfg.n_embd, device, seed),
-            wpe(cfg.context_length, cfg.n_embd, device, seed + 100),
-            ln_f(cfg.n_embd),
-            W_final(cfg.n_embd, cfg.vocab_size, device, seed)
-            
+        GPT(GPTConfig cfg, std::shared_ptr<DeviceMesh> mesh, std::shared_ptr<ProcessGroupNCCL> pg)
+            : config(cfg)
         {
-            ln_f.to(device);
-            // Create MLP blocks
+            // Token embedding: Shard(0) for vocab parallelism
+            wte = std::make_unique<DEmbedding>(cfg.vocab_size, cfg.n_embd, mesh, pg, ShardingType::Shard(0));
+            
+            // Position embedding: Replicated (small enough)
+            wpe = std::make_unique<DEmbedding>(cfg.context_length, cfg.n_embd, mesh, pg, ShardingType::Replicated());
+            
+            // Transformer blocks
             for (int i = 0; i < cfg.n_layers; ++i) {
-                mlps.emplace_back(cfg.n_embd, device, seed + 200 + i * 10);
+                lns.push_back(std::make_unique<DLayerNorm>(cfg.n_embd, mesh, pg));
+                mlps.push_back(std::make_unique<DMLP>(cfg.n_embd, 4 * cfg.n_embd, cfg.n_embd, mesh, pg));
             }
             
-            // Final linear layer (no bias like in the reference)
-            TensorOptions opts = TensorOptions().with_dtype(Dtype::Float32)
-                                            .with_device(device)
-                                            .with_req_grad(true);
-            float std_final = std::sqrt(2.0f / static_cast<float>(cfg.n_embd));
-            // W_final = Tensor::randn<float>(Shape{{cfg.n_embd, cfg.vocab_size}}, opts, seed + 1000, std_final);
-           W_final.weight = wte.weight.t();
+            ln_f = std::make_unique<DLayerNorm>(cfg.n_embd, mesh, pg);
         }
         
-        // Forward: indices [B, T] -> logits [B, T, vocab_size]
-        Tensor forward(const Tensor& idx) {
-            auto shape = idx.shape().dims;
+        // Forward: DTensor indices [B, T] -> DTensor logits [B, T, vocab_size]
+        DTensor forward(const DTensor& idx) {
+            if (idx.rank() == 0) std::cout << "[DEBUG]   Embedding lookups..." << std::endl;
+            auto shape = idx.shape();
             int64_t B = shape[0];
             int64_t T = shape[1];
             
-            // Create position indices [T]
-            Tensor pos = Tensor(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64).with_device(idx.device()));
-            {
-                Tensor pos_cpu(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64));
-                int64_t* pos_data = pos_cpu.data<int64_t>();
-                for (int64_t i = 0; i < T; ++i) {
-                    pos_data[i] = i;
-                }
-                if (idx.device().is_cuda()) {
-                    pos = pos_cpu.to(idx.device());
-                } else {
-                    pos = pos_cpu;
-                }
-            }
+            // Positional IDs [1, T]
+            OwnTensor::Tensor pos_local(OwnTensor::Shape{{1, T}}, {OwnTensor::Dtype::UInt16, OwnTensor::Device::CUDA});
+            std::vector<uint16_t> pos_data(T);
+            for (int i = 0; i < T; ++i) pos_data[i] = i;
+            pos_local.set_data(pos_data.data(), pos_data.size());
             
+            // Create DTensor for pos
+            Layout pos_layout = Layout::replicated(*idx.get_device_mesh(), std::vector<int64_t>{1, T});
+            DTensor pos = DTensor::from_local(pos_local, idx.get_device_mesh(), idx.get_pg(), pos_layout);
+            
+            if (idx.rank() == 0) std::cout << "[DEBUG]     DEmbedding lookups..." << std::endl;
             // Get embeddings [B, T, C]
-            Tensor tok_emb = wte.forward(idx);     // [B, T, C]
-            Tensor pos_emb = wpe.forward(pos);     // [1, T, C] - broadcasts
+            DTensor tok_emb = wte->forward(idx);     // [B, T, C]
+            DTensor pos_emb = wpe->forward(pos);     // [1, T, C]
             
             // Add embeddings
-            Tensor x = autograd::add(tok_emb, pos_emb);
+            DTensor x = tok_emb + pos_emb;
             
             // Apply MLP blocks with residual connections
-            for (auto& mlp : mlps) {
-                Tensor residual = mlp.forward(x);
-                x = autograd::add(x, residual);
+            for (size_t i = 0; i < mlps.size(); ++i) {
+                if (idx.rank() == 0) std::cout << "[DEBUG]   Block " << i << "..." << std::endl;
+                DTensor h = lns[i]->forward(x);
+                h = mlps[i]->forward(h);
+                x = x + h;
             }
             
+            if (idx.rank() == 0) std::cout << "[DEBUG]   Final LayerNorm..." << std::endl;
             // Final normalization
-            x = ln_f.forward(x);
+            x = ln_f->forward(x);
             
+            if (idx.rank() == 0) std::cout << "[DEBUG]   Output projection..." << std::endl;
             // Final projection to vocab size [B, T, vocab_size]
-            // Tensor logits = autograd::matmul(x, W_final.weight);
-            Tensor logits = autograd::matmul(x, wte.weight.t());
+            // Optimized: Use vocab-parallel matmul if wte is RowParallel (Shard(0))
+            // x is [B, T, C] (replicated), wte weight is [V/P, C] (sharded on 0)
+            // Weight Tying: logits = x @ wte.weight.t()
+            // x @ [C, V/P] -> [B, T, V/P] (sharded on last dim)
+            DTensor weight_t = wte->weight().t();
+            DTensor logits = x.matmul(weight_t);
             
             return logits;
         }
         
-        std::vector<Tensor*> parameters() {
-            std::vector<Tensor*> params;
-            
-            // Token and position embeddings
-            for (auto* p : wte.parameters()) params.push_back(p);
-            for (auto* p : wpe.parameters()) params.push_back(p);
-            
-            // MLP blocks
-            for (auto& mlp : mlps) {
-                for (auto* p : mlp.parameters()) params.push_back(p);
+        std::vector<DTensor*> parameters() {
+            std::vector<DTensor*> params;
+            for (auto* p : wte->parameters()) params.push_back(p);
+            for (auto* p : wpe->parameters()) params.push_back(p);
+            for (size_t i = 0; i < mlps.size(); ++i) {
+                for (auto* p : lns[i]->parameters()) params.push_back(p);
+                for (auto* p : mlps[i]->parameters()) params.push_back(p);
             }
-            
-            // Final LN
-            params.push_back(&ln_f.weight);
-            params.push_back(&ln_f.bias);
-            
-            // Final projection
-            // params.push_back(&W_final);
-            
+            for (auto* p : ln_f->parameters()) params.push_back(p);
             return params;
         }
         
         int64_t count_params() {
             int64_t total = 0;
             for (auto* p : parameters()) {
-                total += p->numel();
+                total += p->get_layout().global_numel();
             }
             return total;
+        }
+
+        void zero_grad() {
+            for (auto* p : parameters()) {
+                p->zero_grad();
+            }
         }
     };
 
@@ -270,200 +272,187 @@
         return min_lr + coeff * (max_lr - min_lr);
     }
 
+    float clip_grad_norm_dtensor(std::vector<DTensor*>& params, float max_norm, std::shared_ptr<ProcessGroupNCCL> pg) {
+        float total_sq_norm = 0.0f;
+        int world_size = pg->get_worldsize();
+        
+        for (auto* p : params) {
+            float n = p->grad_norm(); // This already does AllReduce internally
+            float n2 = n * n;
+            
+            // If replicated, p->grad_norm() sums world_size identical shards, 
+            // so n2 = world_size * local_norm^2. We need just local_norm^2.
+            if (p->get_layout().is_replicated()) {
+                n2 /= world_size;
+            }
+            total_sq_norm += n2;
+        }
+        
+        float global_norm = std::sqrt(total_sq_norm);
+        if (global_norm > max_norm) {
+            float clip_coef = max_norm / (global_norm + 1e-6f);
+            for (auto* p : params) {
+                auto g = p->grad();
+                if (g.numel() > 0) {
+                    p->local_tensor().grad_view() *= clip_coef;
+                }
+            }
+        }
+        return global_norm;
+    }
+
     // =============================================================================
     // Main Training Loop
     // =============================================================================
 
-    int main() {
+    int main(int argc, char** argv) {
+        // Initialize MPI
+        MPI_Init(&argc, &argv);
+        int rank, world_size;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+
         try {
-            std::cout << "=== GPT-2 Training Script (C++ Implementation) ===" << std::endl;
+            if (rank == 0) std::cout << "=== GPT-2 Training Script (Distributed CustomDNN Implementation) ===" << std::endl;
             
             // Configuration
             GPTConfig config;
             config.context_length = 1024;
             config.vocab_size = 50304;
             config.n_embd = 768;
-            config.n_layers = 6;
+            config.n_layers = 12; // GPT-2 Base
             
             // Training hyperparameters
-            const int B = 8;           // Batch size
+            const int B = 4;           // Batch size per rank
             const int T = 1024;        // Sequence length
-            const int global_batch = 65536;  // Global batch size
-            const int grad_accum_steps = global_batch / (B * T);
+            const int grad_accum_steps = 1; // FORCED TO 1 FOR DEBUGGING
             
-            // const float max_lr = 1e-4f;
-            const float max_lr = 1e-5f;
+            const float max_lr = 6e-4f; // GPT-2 Base LR
             const float min_lr = max_lr * 0.1f;
-            const int warmup_steps = 811;
-            const int max_steps = 8118;
+            const int warmup_steps = 5;
+            const int max_steps = 50;
             
-            std::cout << "Configuration:" << std::endl;
-            std::cout << "  vocab_size: " << config.vocab_size << std::endl;
-            std::cout << "  context_length: " << config.context_length << std::endl;
-            std::cout << "  n_embd: " << config.n_embd << std::endl;
-            std::cout << "  n_layers: " << config.n_layers << std::endl;
-            std::cout << "  B=" << B << ", T=" << T << std::endl;
-            std::cout << "  global_batch: " << global_batch << std::endl;
-            std::cout << "  grad_accum_steps: " << grad_accum_steps << std::endl;
+            // Distributed Setup
+            auto mesh = std::make_shared<DeviceMesh>(std::vector<int>{world_size});
+            auto pg = init_process_group(world_size, rank);
+            
+            if (rank == 0) {
+                std::cout << "Configuration:" << std::endl;
+                std::cout << "  vocab_size: " << config.vocab_size << std::endl;
+                std::cout << "  context_length: " << config.context_length << std::endl;
+                std::cout << "  n_embd: " << config.n_embd << std::endl;
+                std::cout << "  n_layers: " << config.n_layers << std::endl;
+                std::cout << "  World Size: " << world_size << std::endl;
+                std::cout << "  B=" << B << ", T=" << T << " per rank" << std::endl;
+                std::cout << "  grad_accum_steps: " << grad_accum_steps << std::endl;
+            }
             
             // Set device
-            int rank = 0;  // Single GPU for now
-            DeviceIndex device(Device::CUDA, rank);
             cudaSetDevice(rank);
-            
-            std::cout << "\nInitializing model on CUDA device " << rank << "..." << std::endl;
+            if (rank == 0) std::cout << "[DEBUG] Creating model..." << std::endl;
             
             // Create model
-            GPT model(config, device);
+            GPT model(config, mesh, pg);
+            if (rank == 0) std::cout << "[DEBUG] Model created." << std::endl;
             
-            // Print parameter count
-            int64_t num_params = model.count_params();
-            std::cout << "Number of parameters: " << num_params << std::endl;
-            
-            // Get all parameters
-            auto params = model.parameters();
+            if (rank == 0) {
+                int64_t num_params = model.count_params();
+                std::cout << "Number of parameters: " << num_params << std::endl;
+            }
             
             // Create optimizer
-            nn::Adam optimizer(params, max_lr, 0.9f, 0.95f, 1e-8f, 0.1f);
+            AdamW optimizer(max_lr, 0.9f, 0.95f, 1e-8f, 0.1f);
+            auto params = model.parameters();
             
             // Create data loaders
-            std::string data_root = "/home/blubridge-035/Desktop/Backup/parallelism/script11/";
-            DataLoaderLite train_loader(B, T, rank, 1, "train", data_root, true);
-            DataLoaderLite val_loader(B, T, rank, 1, "val", data_root, true);
+            if (rank == 0) std::cout << "[DEBUG] Creating data loaders..." << std::endl;
+            std::string data_root = "/home/blu-bridge005/Desktop/Anuj@BluBridge/Parallelism/Tensor Parallelism/beta/DTensor_v2.0/data/";
+            DataLoaderLite train_loader(B, T, rank, world_size, "train", data_root, rank == 0);
+            DataLoaderLite val_loader(B, T, rank, world_size, "val", data_root, rank == 0);
+            if (rank == 0) std::cout << "[DEBUG] Data loaders created." << std::endl;
             
-            std::cout << "\nStarting training..." << std::endl;
+            // Distributed Cross Entropy
+            CrossEntropyLoss criterion(mesh, pg);
+            
+            if (rank == 0) std::cout << "\nStarting training..." << std::endl;
             
             // Create CSV log file
-            std::ofstream log_file("training_log1.csv");
-            log_file << "step,loss,val_loss,lr,grtraining_logad_norm,dt_ms,tok_per_sec\n";
-            log_file << std::fixed << std::setprecision(6);
-            
-            float val_loss_accum_log = -1.0f;  // -1 indicates no validation this step
+            std::ofstream log_file;
+            if (rank == 0) {
+                log_file.open("training_log1.csv");
+                log_file << "step,loss,val_loss,lr,norm,dt_ms,tok_per_sec\n";
+                log_file << std::fixed << std::setprecision(6);
+            }
             
             for (int step = 0; step < max_steps; ++step) {
                 auto t0 = std::chrono::high_resolution_clock::now();
                 
-                // Validation every 1000 steps
-                if (step % 1000 == 0 || step == max_steps - 1) {
-                    val_loader.reset();
-                    float val_loss_accum = 0.0f;
-                    int val_loss_steps = 20;
-                    
-                    for (int val_step = 0; val_step < val_loss_steps; ++val_step) {
-                        Batch batch = val_loader.next_batch();
-                        Tensor x = batch.input;
-                        Tensor y = batch.target;
-                        
-                        Tensor logits = model.forward(x);
-                        Tensor loss = autograd::sparse_cross_entropy_loss(logits, y);
-                        
-                        Tensor loss_cpu = loss.to_cpu();
-                        val_loss_accum += loss_cpu.data<float>()[0] / static_cast<float>(val_loss_steps);
-                    }
-                    
-                    std::cout << "validation loss: " << std::fixed << std::setprecision(4) << val_loss_accum << std::endl;
-                    val_loss_accum_log = val_loss_accum;
-                }
-                
                 // Training step
-                optimizer.zero_grad();
+                optimizer.set_lr(get_lr(step, max_lr, min_lr, warmup_steps, max_steps));
+                model.zero_grad();
+                
                 float loss_accum = 0.0f;
                 
-                // Timing accumulators
-                double t_data = 0, t_forward = 0, t_backward = 0;
-                
-                // Optimized: Accumulate loss on GPU to avoid CPU syncs
-                Tensor loss_accum_gpu = Tensor::zeros(Shape{{1}}, TensorOptions().with_device(device));
-                
                 for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
+                    if (rank == 0) std::cout << "[DEBUG] Step " << step << " Micro " << micro_step << " starting..." << std::endl;
                     Batch batch = train_loader.next_batch();
-                    Tensor x = batch.input;
-                    Tensor y = batch.target;
                     
+                    // Convert local tensors to DTensors (Replicated on TP mesh)
+                    Layout input_layout = Layout::replicated(*mesh, {B, T});
+                    DTensor x = DTensor::from_local(batch.input, mesh, pg, input_layout);
+                    DTensor y = DTensor::from_local(batch.target, mesh, pg, input_layout);
+                    
+                    if (rank == 0) std::cout << "[DEBUG] Forward pass..." << std::endl;
                     // Forward
-                    Tensor logits = model.forward(x);
-                    Tensor loss = autograd::sparse_cross_entropy_loss(logits, y);
+                    DTensor logits = model.forward(x);
+                    DTensor loss = criterion.forward(logits, y);
                     
-                    // Accumulate loss on GPU (no graph tracking needed for logging)
-                    loss_accum_gpu = loss_accum_gpu + loss;
+                    if (rank == 0) std::cout << "[DEBUG] Backward pass..." << std::endl;
+                    // Scale loss for accumulation
+                    loss.scale(1.0f / grad_accum_steps);
                     
-                    // Backward with scaling
-                    Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 1.0f / grad_accum_steps);
-                    loss.backward(&grad_scale);
+                    // Backward
+                    loss.backward();
+                    
+                    // Log loss (sync once per step for logging)
+                    if (micro_step == grad_accum_steps - 1) {
+                         auto data = loss.getData();
+                         loss_accum = data[0] * grad_accum_steps;
+                    }
+                    if (rank == 0) std::cout << "[DEBUG] Micro step " << micro_step << " done." << std::endl;
                 }
                 
-                // Synchronize ONCE after all micro-steps for the whole step timing (if needed)
-                // or just for the data transfer we need
-                cudaDeviceSynchronize();
-            
-            // Transfer accumulated loss to CPU once per step
-            Tensor loss_cpu = loss_accum_gpu.to_cpu();
-            loss_accum = loss_cpu.data<float>()[0] / static_cast<float>(grad_accum_steps);
-                
                 // Clip gradients
-                auto t_c0 = std::chrono::high_resolution_clock::now();
-                // float norm = clip_grad_norm_(params, 1.0f);
-                float norm = clip_grad_norm_(params, 1.0f);
-                cudaDeviceSynchronize();
-                auto t_c1 = std::chrono::high_resolution_clock::now();
-                double t_clip = std::chrono::duration<double, std::milli>(t_c1 - t_c0).count();
-                
-                // Update learning rate
-                float lr = get_lr(step, max_lr, min_lr, warmup_steps, max_steps);
-                optimizer.set_lr(lr);
+                float norm = clip_grad_norm_dtensor(params, 1.0f, pg);
                 
                 // Optimizer step
-                auto t_o0 = std::chrono::high_resolution_clock::now();
-                optimizer.step();
-                cudaDeviceSynchronize();
-                auto t_o1 = std::chrono::high_resolution_clock::now();
-                double t_opt = std::chrono::duration<double, std::milli>(t_o1 - t_o0).count();
+                optimizer.step(params);
                 
                 auto t1 = std::chrono::high_resolution_clock::now();
                 double dt = std::chrono::duration<double>(t1 - t0).count();
                 
-                // Compute throughput
-                int64_t tokens_processed = static_cast<int64_t>(B) * T * grad_accum_steps;
-                double tokens_per_sec = static_cast<double>(tokens_processed) / dt;
-                
-                // Print training info with breakdown
-                std::cout << "step " << std::setw(5) << step 
-                        << " | loss: " << std::fixed << std::setprecision(6) << loss_accum 
-                        << " | lr " << std::scientific << std::setprecision(4) << lr 
-                        << " | norm: " << std::fixed << std::setprecision(4) << norm 
-                        << " | dt: " << std::fixed << std::setprecision(2) << (dt * 1000.0) << "ms"
-                        << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec 
-                        << std::endl;
-                
-                // Print timing breakdown every 10 steps
-                // if (step % 10 == 0) {
-                //     std::cout << "  [TIMING] data: " << std::fixed << std::setprecision(1) << t_data << "ms"
-                //             << " | forward: " << t_forward << "ms"
-                //             << " | backward: " << t_backward << "ms"
-                //             << " | clip: " << t_clip << "ms"
-                //             << " | opt: " << t_opt << "ms" << std::endl;
-                // }
-                
-                // Log metrics to CSV
-                log_file << step << "," 
-                         << loss_accum << ","
-                         << val_loss_accum_log << ","
-                         << lr << ","
-                         << norm << ","
-                         << (dt * 1000.0) << ","
-                         << tokens_per_sec << "\n";
-                log_file.flush();  // Write immediately for safety
-                val_loss_accum_log = -1.0f;  // Reset for next iteration
+                if (rank == 0) {
+                    int64_t tokens_processed = static_cast<int64_t>(B) * T * grad_accum_steps * world_size;
+                    double tokens_per_sec = static_cast<double>(tokens_processed) / dt;
+                    
+                    std::cout << "step " << std::setw(5) << step 
+                            << " | loss: " << std::fixed << std::setprecision(6) << loss_accum 
+                            << " | lr " << std::scientific << std::setprecision(4) << optimizer.get_lr() 
+                            << " | dt: " << std::fixed << std::setprecision(2) << (dt * 1000.0) << "ms"
+                            << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec 
+                            << std::endl;
+                    
+                    log_file << step << "," << loss_accum << ",-1," << optimizer.get_lr() << "," << norm << "," << (dt * 1000.0) << "," << tokens_per_sec << "\n";
+                    log_file.flush();
+                }
             }
             
-            log_file.close();
-            std::cout << "\nTraining log saved to: training_log1.csv" << std::endl;
-            
-            std::cout << "\n=== Training Complete ===" << std::endl;
-            return 0;
+            if (rank == 0) log_file.close();
             
         } catch (const std::exception& e) {
-            std::cerr << "ERROR: " << e.what() << std::endl;
-            return 1;
+            std::cerr << "RANK " << rank << " ERROR: " << e.what() << std::endl;
         }
+
+        MPI_Finalize();
+        return 0;
     }

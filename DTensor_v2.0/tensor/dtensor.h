@@ -143,6 +143,12 @@ public:
     DTensor sparse_cross_entropy_loss(const DTensor& target) const;
     DTensor distributed_sparse_cross_entropy_loss(const DTensor& target) const;
     DTensor layer_norm(const DTensor& weight, const DTensor& bias, float eps = 1e-5) const;
+    
+    // Operators
+    DTensor operator+(const DTensor& other) const { return add(other); }
+    DTensor operator-(const DTensor& other) const { return sub(other); }
+    DTensor operator*(const DTensor& other) const { return mul(other); }
+    DTensor operator/(const DTensor& other) const { return div(other); }
 
     Dtype dtype() const { return dtype_enum_; }
     Layout layout() const { return layout_; }
@@ -160,6 +166,8 @@ public:
                              int padding_idx = -1);
 
     DTensor reshape(const std::vector<int64_t>& new_global_shape) const;
+    DTensor transpose(int dim1, int dim2) const;
+    DTensor t() const { return transpose(0, 1); }
 
     /**
      * Redistribute tensor to a new layout.

@@ -340,6 +340,11 @@ public:
      * If sharded, performs local lookup + AllReduce to combine partial results.
      */
     DTensor forward(const std::vector<int>& token_ids);
+
+    /**
+     * @brief Forward pass: lookup embeddings using DTensor indices [B, T]
+     */
+    DTensor forward(const DTensor& indices);
     
     DTensor& weight();
     void set_requires_grad(bool requires) override;
@@ -423,6 +428,20 @@ private:
 // =============================================================================
 
 /**
+ * @class SGD
+ * @brief Simple Stochastic Gradient Descent optimizer
+ */
+class SGD {
+public:
+    explicit SGD(float lr = 0.01f) : lr_(lr) {}
+    void step(std::vector<DTensor*> params);
+    void set_lr(float lr) { lr_ = lr; }
+    float get_lr() const { return lr_; }
+private:
+    float lr_;
+};
+
+/**
  * @class AdamW
  * @brief AdamW optimizer with gradient clipping and weight decay
  */
@@ -449,6 +468,7 @@ public:
     
     void set_lr(float lr) { lr_ = lr; }
     float get_lr() const { return lr_; }
+    
 
 private:
     float lr_, beta1_, beta2_, eps_, weight_decay_;
@@ -458,6 +478,7 @@ private:
     std::unordered_map<DTensor*, OwnTensor::Tensor> m_;
     std::unordered_map<DTensor*, OwnTensor::Tensor> v_;
 };
+
 
 } // namespace dnn
 } // namespace OwnTensor

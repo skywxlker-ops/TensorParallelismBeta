@@ -53,7 +53,8 @@ MLPS = \
     test_dtensor_mlp \
     test_4layer_mlp \
     gpt_train_dtensor \
-    test_customdnn_mlp
+    test_customdnn_mlp \
+    test_colpar_embedding
 
 # =============================================================================
 # Build Rules

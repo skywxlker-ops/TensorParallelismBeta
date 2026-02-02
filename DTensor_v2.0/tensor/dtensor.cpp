@@ -335,11 +335,13 @@ void DTensor::broadcast(int root) {
 }
 
 void DTensor::sync() {
+    std::cout << "[DEBUG] Rank " << rank_ << " sync() enter for tensor of size " << size_ << " shape " << layout_.describe(rank_) << std::endl;
     recordComputeDone();
     waitForCompute();
     pg_->all_reduce(tensor_.data<float>(), tensor_.data<float>(),
                     size_, OwnTensor::Dtype::Float32, sum, true);
     recordCommDone();
+    std::cout << "[DEBUG] Rank " << rank_ << " sync() exit" << std::endl;
 }
 
 // ============================================================================
@@ -552,16 +554,18 @@ DTensor DTensor::matmul(const DTensor& other) const {
     auto a_placement = a_layout.get_placement(0);
     auto b_placement = b_layout.get_placement(0);
 
-    // Column-Parallel: X [M, K] @ W [K, N/P] -> Y [M, N/P]
+    // Column-Parallel: X [..., M, K] @ W [K, N/P] -> Y [..., M, N/P]
+    // Condition: X is replicated, W is sharded on last dimension (dim 1 since W is 2D)
     if (a_placement->type() == PlacementType::REPLICATE &&
         b_placement->type() == PlacementType::SHARD &&
-        static_cast<const Shard*>(b_placement.get())->dim() == 1) {
+        static_cast<const Shard*>(b_placement.get())->dim() == (int)other.get_layout().get_global_shape().size() - 1) {
         return _column_parallel_matmul(other);
     }
 
-    // Row-Parallel: X [M, K/P] @ W [K/P, N] -> Y_partial [M, N] -> AllReduce
+    // Row-Parallel: X [..., M, K/P] @ W [K/P, N] -> Y_partial [..., M, N] -> AllReduce
+    // Condition: X is sharded on its last dimension, W is sharded on its first dimension (dim 0)
     if (a_placement->type() == PlacementType::SHARD &&
-        static_cast<const Shard*>(a_placement.get())->dim() == 1 &&
+        static_cast<const Shard*>(a_placement.get())->dim() == (int)this->layout_.get_global_shape().size() - 1 &&
         b_placement->type() == PlacementType::SHARD &&
         static_cast<const Shard*>(b_placement.get())->dim() == 0) {
         return _row_parallel_matmul(other);
@@ -571,10 +575,11 @@ DTensor DTensor::matmul(const DTensor& other) const {
     if (a_placement->type() == PlacementType::REPLICATE &&
         b_placement->type() == PlacementType::REPLICATE) {
         OwnTensor::Tensor Y_local = Bridge::autograd::matmul(tensor_, other.tensor_);
-        std::vector<int64_t> Y_global_shape = {
-            a_layout.get_global_shape()[0],
-            b_layout.get_global_shape()[1]
-        };
+        
+        // Correct shape inference for ND: [..., M, K] @ [K, N] -> [..., M, N]
+        std::vector<int64_t> Y_global_shape = a_layout.get_global_shape();
+        Y_global_shape.back() = b_layout.get_global_shape().back();
+        
         Layout Y_layout = Layout::replicated(*device_mesh_, Y_global_shape);
         return DTensor(device_mesh_, pg_, Y_local, Y_layout);
     }
@@ -592,11 +597,12 @@ DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
     // so gradients accumulate to the actual weight tensor
     OwnTensor::Tensor Y_shard = Bridge::autograd::matmul(this->tensor_, other.tensor_);
 
-    std::vector<int64_t> Y_global_shape = {
-        this->layout_.get_global_shape()[0],
-        other.get_layout().get_global_shape()[1]
-    };
-    Layout Y_layout(*device_mesh_, std::vector<int64_t>(Y_global_shape.begin(), Y_global_shape.end()), 1);
+    // Correct shape inference for ND: [..., M, K] @ [K, N] -> [..., M, N]
+    std::vector<int64_t> Y_global_shape = this->layout_.get_global_shape();
+    Y_global_shape.back() = other.get_layout().get_global_shape().back();
+    
+    // Shard on the last dimension (columns/vocab)
+    Layout Y_layout(*device_mesh_, Y_global_shape, (int)Y_global_shape.size() - 1);
     
     return DTensor(device_mesh_, pg_, Y_shard, Y_layout);
 }
@@ -605,11 +611,11 @@ DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
     // Row-Parallel: H [M, N/P] @ W2 [N/P, K] -> Y_partial [M, K]
     OwnTensor::Tensor Y_partial = Bridge::autograd::matmul(this->tensor_, other.local_tensor());
 
-    std::vector<int64_t> Y_global_shape = {
-        this->layout_.get_global_shape()[0],
-        other.get_layout().get_global_shape()[1]
-    };
-    Layout Y_layout = Layout::replicated(*device_mesh_, std::vector<int64_t>(Y_global_shape.begin(), Y_global_shape.end()));
+    // Correct shape inference for ND: [..., M, K] @ [K, N] -> [..., M, N]
+    std::vector<int64_t> Y_global_shape = this->layout_.get_global_shape();
+    Y_global_shape.back() = other.get_layout().get_global_shape().back();
+    
+    Layout Y_layout = Layout::replicated(*device_mesh_, Y_global_shape);
     DTensor Y_out(device_mesh_, pg_, Y_partial, Y_layout);
 
     Y_out.sync();
@@ -846,7 +852,7 @@ void DTensor::saveCheckpoint(const std::string& path) const {
 
     int ndim = static_cast<int>(shape_.size());
     file.write(reinterpret_cast<const char*>(&ndim), sizeof(int));
-    file.write(reinterpret_cast<const char*>(shape_.data()), ndim * sizeof(int));
+    file.write(reinterpret_cast<const char*>(shape_.data()), ndim * sizeof(int64_t));
     // TODO: Update checkpoint to store Dtype enum
     std::string dtype_str = "float32"; 
     file.write(dtype_str.c_str(), dtype_str.size() + 1);
@@ -868,7 +874,7 @@ void DTensor::loadCheckpoint(const std::string& path) {
     file.read(reinterpret_cast<char*>(&ndim), sizeof(int));
     
     std::vector<int64_t> loaded_shape(ndim);
-    file.read(reinterpret_cast<char*>(loaded_shape.data()), ndim * sizeof(int));
+    file.read(reinterpret_cast<char*>(loaded_shape.data()), ndim * sizeof(int64_t));
     
     char dtype_buf[32];
     file.read(dtype_buf, sizeof(dtype_buf));
@@ -1149,6 +1155,25 @@ void DTensor::waitForCompute() {
 
 void DTensor::waitForComm() {
     cudaStreamWaitEvent(compute_stream_, comm_event_, 0);
+}
+
+DTensor DTensor::transpose(int dim1, int dim2) const {
+    std::vector<int64_t> new_global_shape = shape_;
+    std::swap(new_global_shape[dim1], new_global_shape[dim2]);
+    
+    // Transpose the local tensor
+    OwnTensor::Tensor local_T = tensor_.transpose(dim1, dim2);
+    
+    // Update layout
+    Layout new_layout = layout_;
+    new_layout.set_global_shape(new_global_shape);
+    if (layout_.is_sharded()) {
+        int old_shard_dim = layout_.get_shard_dim();
+        if (old_shard_dim == dim1) new_layout.set_shard_dim(dim2);
+        else if (old_shard_dim == dim2) new_layout.set_shard_dim(dim1);
+    }
+    
+    return DTensor::from_local(local_T, device_mesh_, pg_, new_layout);
 }
 
 // ============================================================================
