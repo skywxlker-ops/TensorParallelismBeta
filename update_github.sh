@@ -36,23 +36,28 @@ if [ -f .gitmodules ]; then
             (
                 cd "$submodule_path"
                 
-                # Check if a rebase is already in progress and abort it
-                if [ -d ".git/rebase-merge" ] || [ -d ".git/rebase-apply" ]; then
-                    echo "  Detected existing rebase in progress in $submodule_path. Aborting..."
-                    git rebase --abort
-                fi
+                # Attempt to abort any existing rebase to ensure a clean state
+                # We use || true to ignore errors if no rebase is in progress
+                git rebase --abort >/dev/null 2>&1 || true
 
                 # Detect current branch and remote
                 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
                 
-                if [ "$CURRENT_BRANCH" == "HEAD" ]; then
-                    echo "  Warning: Submodule $submodule_path is in detached HEAD state."
+                if [ "$CURRENT_BRANCH" == "HEAD" ] || [ -z "$CURRENT_BRANCH" ]; then
+                    echo "  Error: Submodule $submodule_path is in detached HEAD state. Skipping."
+                    exit 0
                 fi
 
                 REMOTE=$(git config branch."$CURRENT_BRANCH".remote || echo "origin")
                 
                 # Use rebase to keep a clean linear history
-                git pull --rebase "$REMOTE" "$CURRENT_BRANCH" || echo "Warning: Failed to update $submodule_path"
+                if ! git pull --rebase "$REMOTE" "$CURRENT_BRANCH"; then
+                    echo "  Error: Rebase failed in $submodule_path due to conflicts in:"
+                    git status --short | grep "^UU"
+                    echo "  Please resolve conflicts manually:"
+                    echo "  1. Fix files, 2. 'git add <files>', 3. 'git rebase --continue', 4. Re-run this script."
+                    exit 1
+                fi
 
                 # Stage all changes
                 git add .
@@ -68,12 +73,12 @@ if [ -f .gitmodules ]; then
                     
                 # Push to GitHub
                 # Determine current branch
-                if [ "$CURRENT_BRANCH" != "HEAD" ] && [ -n "$CURRENT_BRANCH" ]; then
-                    git push origin "$CURRENT_BRANCH" --force-with-lease
-                    echo "  Pushed $submodule_path to origin/$CURRENT_BRANCH."
-                else
+                if [ "$CURRENT_BRANCH" == "HEAD" ] || [ -z "$CURRENT_BRANCH" ]; then
                     echo "  Error: Cannot push while in detached HEAD state in $submodule_path."
                     echo "  Please run 'git checkout <branch_name>' inside the submodule manually."
+                else
+                    git push origin "$CURRENT_BRANCH" --force-with-lease
+                    echo "  Pushed $submodule_path to origin/$CURRENT_BRANCH."
                 fi
             )
             echo "Leave submodule: $submodule_path"
