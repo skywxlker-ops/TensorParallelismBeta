@@ -36,9 +36,23 @@ if [ -f .gitmodules ]; then
             (
                 cd "$submodule_path"
                 
-                # Pull remote changes to avoid conflicts (optional but recommended)
-                # We ignore errors here in case the branch setup is weird or detached head
-                git pull origin main --allow-unrelated-histories || echo "Warning: Failed to pull in $submodule_path"
+                # Check if a rebase is already in progress and abort it
+                if [ -d ".git/rebase-merge" ] || [ -d ".git/rebase-apply" ]; then
+                    echo "  Detected existing rebase in progress in $submodule_path. Aborting..."
+                    git rebase --abort
+                fi
+
+                # Detect current branch and remote
+                CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+                
+                if [ "$CURRENT_BRANCH" == "HEAD" ]; then
+                    echo "  Warning: Submodule $submodule_path is in detached HEAD state."
+                fi
+
+                REMOTE=$(git config branch."$CURRENT_BRANCH".remote || echo "origin")
+                
+                # Use rebase to keep a clean linear history
+                git pull --rebase "$REMOTE" "$CURRENT_BRANCH" || echo "Warning: Failed to update $submodule_path"
 
                 # Stage all changes
                 git add .
@@ -54,9 +68,13 @@ if [ -f .gitmodules ]; then
                     
                 # Push to GitHub
                 # Determine current branch
-                CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-                git push origin "$CURRENT_BRANCH"
-                echo "  Pushed $submodule_path to origin/$CURRENT_BRANCH."
+                if [ "$CURRENT_BRANCH" != "HEAD" ] && [ -n "$CURRENT_BRANCH" ]; then
+                    git push origin "$CURRENT_BRANCH" --force-with-lease
+                    echo "  Pushed $submodule_path to origin/$CURRENT_BRANCH."
+                else
+                    echo "  Error: Cannot push while in detached HEAD state in $submodule_path."
+                    echo "  Please run 'git checkout <branch_name>' inside the submodule manually."
+                fi
             )
             echo "Leave submodule: $submodule_path"
             echo "--------------------------------------------------"

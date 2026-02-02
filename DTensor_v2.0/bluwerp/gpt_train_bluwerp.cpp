@@ -102,19 +102,14 @@ int main(int argc, char** argv) {
     // =========================================================================
     const int B = 8;              // Batch size
     const int T = 1024;           // Sequence length
-    const int vocab_size_raw = 50257;  // GPT-2 vocab size (standard for edufineweb)
-    // Pad vocab_size to be divisible by world_size for even sharding if needed
-    // Note: DLinearReplicated doesn't require padding, but DLinear might. 
-    // We use Replicated output projection, so exact size is fine, 
-    // but let's keep it safe if we switch later.
-    const int vocab_size = ((vocab_size_raw + world_size - 1) / world_size) * world_size;
+    const int vocab_size = 50304;  // GPT-2 vocab size (standard for edufineweb)
     
     const int n_embd = 256;       // Embedding dimension
     const int hidden_dim = 512;   // MLP hidden dimension
-    const int max_steps = 200;   // Training steps
-    const int warmup_steps = 10;  // Short warmup
-    const float max_lr = 1e-3f;   // standard AdamW LR
-    const float min_lr = 1e-4f;
+    const int max_steps = 16042;   // Training steps
+    const int warmup_steps = 1604;  // Short warmup
+    const float max_lr = 5e-5f;   // standard AdamW LR
+    const float min_lr = 1e-6f;
     
     if (rank == 0) {
         std::cout << "Config: B=" << B << ", T=" << T << ", n_embd=" << n_embd 
@@ -134,19 +129,27 @@ int main(int argc, char** argv) {
         "train_shard_00004.bin",
         "train_shard_00005.bin"
     };
+    std::vector<std::string> val_files = {
+        "val_shard_00000.bin"
+    };
 
     // Verify files (optional, DataLoader does this too)
     if (rank == 0) {
         std::cout << "Dataset files:" << std::endl;
         bool all_exist = true;
-        for (const auto& f : train_files) {
-            if (!std::filesystem::exists(f)) {
-                std::cerr << "  [MISSING] " << f << std::endl;
-                all_exist = false;
-            } else {
-                std::cout << "  [OK] " << f << std::endl;
+        auto verify_files = [&](const std::vector<std::string>& files, const std::string& label) {
+            std::cout << "  " << label << ":" << std::endl;
+            for (const auto& f : files) {
+                if (!std::filesystem::exists(f)) {
+                    std::cerr << "    [MISSING] " << f << std::endl;
+                    all_exist = false;
+                } else {
+                    std::cout << "    [OK] " << f << std::endl;
+                }
             }
-        }
+        };
+        verify_files(train_files, "Train");
+        verify_files(val_files, "Val");
         if (!all_exist) {
              std::cerr << "Error: Some dataset files are missing." << std::endl;
              MPI_Finalize();
@@ -164,9 +167,11 @@ int main(int argc, char** argv) {
     // MUST see the same samples so a single sample's forward/backward is distributed.
     // If they saw different samples, the AllReduce in forward pass would sum unrelated samples.
     DataLoaderLite loader(B, T, 0, 1, train_files, rank==0);
+    DataLoaderLite val_loader(B, T, 0, 1, val_files, rank==0);
 
     // Embedding layer: token IDs -> embeddings [vocab_size, n_embd]
-    DEmbedding embedding(vocab_size, n_embd, mesh, pg);
+    // Using Row Parallel (Shard(0)) to distribute vocab across GPUs for memory savings
+    DEmbedding embedding(vocab_size, n_embd, mesh, pg, ShardingType::Shard(0));
     embedding.set_requires_grad(true);
     
     // LayerNorm 1: after embedding
@@ -203,7 +208,7 @@ int main(int argc, char** argv) {
     std::ofstream csv_file;
     if (rank == 0) {
         csv_file.open("training_log_bluwerp_3.csv");
-        csv_file << "step,loss,lr,norm,dt_ms,tok_sec\n";
+        csv_file << "step,loss,val_loss,lr,norm,dt_ms,tok_sec\n";
     }
     
     if (rank == 0) {
@@ -213,9 +218,48 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Training Loop
     // =========================================================================
+    float val_loss_all = 0.0f;
     for (int step = 0; step < max_steps; ++step) {
         auto t0 = std::chrono::high_resolution_clock::now();
         
+        // ---------------------------------------------------------------------
+        // Validation (every 100 steps)
+        // ---------------------------------------------------------------------
+        if (step % 100 == 0 || step == max_steps - 1) {
+            if (rank == 0) std::cout << "Running validation..." << std::endl;
+            const int val_steps = 20;
+            float val_loss_sum = 0.0f;
+            for (int vs = 0; vs < val_steps; ++vs) {
+                Batch vb = val_loader.next_batch();
+                // Minimal forward pass for validation
+                std::vector<int> v_ids(vb.x.begin(), vb.x.end());
+                auto VE = embedding.forward(v_ids);
+                auto VX = ln1.forward(VE);
+                auto VH = mlp2.forward(mlp1.forward(VX)); // Fused slightly
+                auto VLF = ln_f.forward(VH);
+                auto VLogits = out_proj.forward(VLF);
+                
+                std::vector<float> v_target_indices(B * T);
+                for(int i=0; i < B*T; ++i) v_target_indices[i] = static_cast<float>(vb.y[i]);
+                Layout v_target_idx_layout = Layout::replicated(*mesh, {B * T});
+                auto VTargetIdx = DTensor::zeros({B * T}, mesh, pg, v_target_idx_layout, Dtype::UInt16);
+                VTargetIdx.setData(v_target_indices, v_target_idx_layout);
+                auto v_loss = criterion.forward(VLogits, VTargetIdx);
+                val_loss_sum += v_loss.getData()[0];
+                
+                // Clear graph connections manually
+                VE.local_tensor().set_grad_fn(nullptr);
+                VX.local_tensor().set_grad_fn(nullptr);
+                VH.local_tensor().set_grad_fn(nullptr);
+                VLF.local_tensor().set_grad_fn(nullptr);
+                VLogits.local_tensor().set_grad_fn(nullptr);
+                v_loss.local_tensor().set_grad_fn(nullptr);
+                VTargetIdx.local_tensor().set_grad_fn(nullptr);
+            }
+            val_loss_all = val_loss_sum / val_steps;
+            if (rank == 0) std::cout << "Step " << step << " Validation Loss: " << val_loss_all << std::endl;
+        }
+
         // Update learning rate
         float current_lr = lr_scheduler.get_lr(step);
         optimizer.set_lr(current_lr);
@@ -317,13 +361,16 @@ int main(int argc, char** argv) {
         
         if (rank == 0) {
             csv_file << step << "," << std::fixed << std::setprecision(6) 
-                     << loss_val << "," << current_lr << "," << total_norm 
+                     << loss_val << "," << val_loss_all << "," << current_lr << "," << total_norm 
                      << "," << dt_ms << "," << tokens_per_sec << "\n";
             
             if (step % 10 == 0) {
                 std::cout << "step " << std::setw(5) << step 
-                          << " | loss: " << std::fixed << std::setprecision(4) << loss_val
-                          << " | lr: " << std::scientific << std::setprecision(2) << current_lr
+                          << " | loss: " << std::fixed << std::setprecision(4) << loss_val;
+                if (step % 100 == 0 || step == max_steps - 1) {
+                    std::cout << " | val: " << std::fixed << std::setprecision(4) << val_loss_all;
+                }
+                std::cout << " | lr: " << std::scientific << std::setprecision(2) << current_lr
                           << " | norm: " << std::fixed << std::setprecision(4) << total_norm
                           << " | dt: " << std::setprecision(2) << dt_ms << "ms"
                           << " | tok/sec: " << std::setprecision(2) << tokens_per_sec << std::endl;
@@ -363,51 +410,41 @@ int main(int argc, char** argv) {
             std::vector<int> generated = prompt_tokens;
             
             for (int i = 0; i < max_new_tokens; ++i) {
+                // Get the context (up to max context length T)
                 int context_len = std::min(static_cast<int>(generated.size()), T);
                 int start_idx = generated.size() - context_len;
+                std::vector<int> context_tokens(generated.begin() + start_idx, generated.end());
                 
-                // For generation, we use manual embeddings on CPU and copy since we process 1 sequence
-                std::vector<float> ctx_embeddings(context_len * n_embd, 0.0f);
-                for (int t = 0; t < context_len; ++t) {
-                    int tok = generated[start_idx + t];
-                    // Simple sinusoidal embedding for demo (replace with learned embedding lookup if you want correct generation)
-                    // Note: In training we learned 'embedding', but here we are using a dummy sinusoidal? 
-                    // The original code used sinusoidal for generation! 
-                    // Let's stick to original behavior or try to use the learned embedding?
-                    // Original code: "ctx_embeddings[...] = std::sin(...)"
-                    // Using the learned embedding would be better, but requires copying weights to CPU or doing lookups on GPU.
-                    // For simplicity, sticking to original demo behavior (even if nonsensical) or better: use learned embedding.
-                    // Let's use learned embedding to actually test what we trained!
-                    
-                    // Actually, fetching embedding weight from GPU for every token is slow.
-                    // Let's just keep the original "demo" generation logic to avoid breaking it, 
-                    // unless requested to fix generation too.
-                    float token_f = static_cast<float>(tok % vocab_size) / vocab_size;
-                    for (int e = 0; e < n_embd; ++e) {
-                         ctx_embeddings[t * n_embd + e] = std::sin(token_f * (e + 1) * 0.1f);
-                    }
-                }
+                // Forward pass using the actual learned layers
+                auto GE = embedding.forward(context_tokens);
+                auto GX = ln1.forward(GE);
+                auto GH1 = mlp1.forward(GX);
+                auto GH2 = mlp2.forward(GH1);
                 
-                Layout ctx_layout = Layout::replicated(*mesh, {context_len, n_embd});
-                auto Ctx = DTensor::zeros({context_len, n_embd}, mesh, pg, ctx_layout);
-                Ctx.setData(ctx_embeddings, ctx_layout);
-                
-                auto H1_gen = mlp1.forward(Ctx);
-                auto Y = mlp2.forward(H1_gen);
-                auto Y_data = Y.getData(); // CPU sync implicitly
+                // For simplicity and since out_proj output is sharded, 
+                // we'll use the last output of GH2 as a representation to pick next token.
+                // Note: Ideally use out_proj and handle distribution, but GH2 is replicated (row-parallel output).
+                auto Y_data = GH2.getData(); // [context_len, n_embd]
                 
                 int last_pos_offset = (context_len - 1) * n_embd;
-                int next_token = 0;
+                int next_token_idx = 0;
                 float max_val = Y_data[last_pos_offset];
                 for (int e = 1; e < n_embd; ++e) {
                     if (Y_data[last_pos_offset + e] > max_val) {
                         max_val = Y_data[last_pos_offset + e];
-                        next_token = e;
+                        next_token_idx = e;
                     }
                 }
                 
-                next_token = 32 + (next_token % 95);
+                // Map the embedding index to a printable character for this demo
+                int next_token = 32 + (next_token_idx % 95);
                 generated.push_back(next_token);
+
+                // Cleanup graph to avoid leaks during generation
+                GE.local_tensor().set_grad_fn(nullptr);
+                GX.local_tensor().set_grad_fn(nullptr);
+                GH1.local_tensor().set_grad_fn(nullptr);
+                GH2.local_tensor().set_grad_fn(nullptr);
             }
             return generated;
         };

@@ -182,7 +182,6 @@
         
         // Forward: DTensor indices [B, T] -> DTensor logits [B, T, vocab_size]
         DTensor forward(const DTensor& idx) {
-            if (idx.rank() == 0) std::cout << "[DEBUG]   Embedding lookups..." << std::endl;
             auto shape = idx.shape();
             int64_t B = shape[0];
             int64_t T = shape[1];
@@ -197,7 +196,6 @@
             Layout pos_layout = Layout::replicated(*idx.get_device_mesh(), std::vector<int64_t>{1, T});
             DTensor pos = DTensor::from_local(pos_local, idx.get_device_mesh(), idx.get_pg(), pos_layout);
             
-            if (idx.rank() == 0) std::cout << "[DEBUG]     DEmbedding lookups..." << std::endl;
             // Get embeddings [B, T, C]
             DTensor tok_emb = wte->forward(idx);     // [B, T, C]
             DTensor pos_emb = wpe->forward(pos);     // [1, T, C]
@@ -207,17 +205,17 @@
             
             // Apply MLP blocks with residual connections
             for (size_t i = 0; i < mlps.size(); ++i) {
-                if (idx.rank() == 0) std::cout << "[DEBUG]   Block " << i << "..." << std::endl;
                 DTensor h = lns[i]->forward(x);
                 h = mlps[i]->forward(h);
                 x = x + h;
             }
             
-            if (idx.rank() == 0) std::cout << "[DEBUG]   Final LayerNorm..." << std::endl;
+            
             // Final normalization
             x = ln_f->forward(x);
             
-            if (idx.rank() == 0) std::cout << "[DEBUG]   Output projection..." << std::endl;
+            x = ln_f->forward(x);
+            
             // Final projection to vocab size [B, T, vocab_size]
             // Optimized: Use vocab-parallel matmul if wte is RowParallel (Shard(0))
             // x is [B, T, C] (replicated), wte weight is [V/P, C] (sharded on 0)
@@ -349,11 +347,9 @@
             
             // Set device
             cudaSetDevice(rank);
-            if (rank == 0) std::cout << "[DEBUG] Creating model..." << std::endl;
             
             // Create model
             GPT model(config, mesh, pg);
-            if (rank == 0) std::cout << "[DEBUG] Model created." << std::endl;
             
             if (rank == 0) {
                 int64_t num_params = model.count_params();
@@ -365,11 +361,9 @@
             auto params = model.parameters();
             
             // Create data loaders
-            if (rank == 0) std::cout << "[DEBUG] Creating data loaders..." << std::endl;
             std::string data_root = "/home/blu-bridge005/Desktop/Anuj@BluBridge/Parallelism/Tensor Parallelism/beta/DTensor_v2.0/data/";
             DataLoaderLite train_loader(B, T, rank, world_size, "train", data_root, rank == 0);
             DataLoaderLite val_loader(B, T, rank, world_size, "val", data_root, rank == 0);
-            if (rank == 0) std::cout << "[DEBUG] Data loaders created." << std::endl;
             
             // Distributed Cross Entropy
             CrossEntropyLoss criterion(mesh, pg);
@@ -394,7 +388,6 @@
                 float loss_accum = 0.0f;
                 
                 for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
-                    if (rank == 0) std::cout << "[DEBUG] Step " << step << " Micro " << micro_step << " starting..." << std::endl;
                     Batch batch = train_loader.next_batch();
                     
                     // Convert local tensors to DTensors (Replicated on TP mesh)
@@ -402,12 +395,10 @@
                     DTensor x = DTensor::from_local(batch.input, mesh, pg, input_layout);
                     DTensor y = DTensor::from_local(batch.target, mesh, pg, input_layout);
                     
-                    if (rank == 0) std::cout << "[DEBUG] Forward pass..." << std::endl;
                     // Forward
                     DTensor logits = model.forward(x);
                     DTensor loss = criterion.forward(logits, y);
                     
-                    if (rank == 0) std::cout << "[DEBUG] Backward pass..." << std::endl;
                     // Scale loss for accumulation
                     loss.scale(1.0f / grad_accum_steps);
                     
@@ -419,7 +410,6 @@
                          auto data = loss.getData();
                          loss_accum = data[0] * grad_accum_steps;
                     }
-                    if (rank == 0) std::cout << "[DEBUG] Micro step " << micro_step << " done." << std::endl;
                 }
                 
                 // Clip gradients

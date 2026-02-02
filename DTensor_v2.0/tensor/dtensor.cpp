@@ -335,13 +335,11 @@ void DTensor::broadcast(int root) {
 }
 
 void DTensor::sync() {
-    std::cout << "[DEBUG] Rank " << rank_ << " sync() enter for tensor of size " << size_ << " shape " << layout_.describe(rank_) << std::endl;
     recordComputeDone();
     waitForCompute();
     pg_->all_reduce(tensor_.data<float>(), tensor_.data<float>(),
                     size_, OwnTensor::Dtype::Float32, sum, true);
     recordCommDone();
-    std::cout << "[DEBUG] Rank " << rank_ << " sync() exit" << std::endl;
 }
 
 // ============================================================================

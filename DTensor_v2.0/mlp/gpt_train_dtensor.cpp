@@ -113,8 +113,8 @@ int main(int argc, char** argv) {
     const int hidden_dim = 512;   // MLP hidden dimension
     const int max_steps = 16042;   // Training steps
     const int warmup_steps = 1604;  // Short warmup
-    const float max_lr = 1e-4f;   // standard AdamW LR
-    const float min_lr = 1e-5f;
+    const float max_lr = 5e-5f;   // standard AdamW LR
+    const float min_lr = 1e-6f;
     
     if (rank == 0) {
         std::cout << "Config: B=" << B << ", T=" << T << ", n_embd=" << n_embd 
