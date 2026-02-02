@@ -52,10 +52,11 @@ if [ -f .gitmodules ]; then
                 
                 # Use rebase to keep a clean linear history
                 if ! git pull --rebase "$REMOTE" "$CURRENT_BRANCH"; then
-                    echo "  Error: Rebase failed in $submodule_path due to conflicts in:"
-                    git status --short | grep "^UU"
-                    echo "  Please resolve conflicts manually:"
-                    echo "  1. Fix files, 2. 'git add <files>', 3. 'git rebase --continue', 4. Re-run this script."
+                    echo "  Error: Rebase failed in $submodule_path due to conflicts."
+                    echo "  Conflicted files:"
+                    git diff --name-only --diff-filter=U
+                    echo "  Please resolve conflicts manually in $submodule_path,"
+                    echo "  then run 'git rebase --continue' before running this script again."
                     exit 1
                 fi
 
