@@ -11,197 +11,8 @@ NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -ccbin=/home/blu-bridge25/.
 TARGET = main
 
 CUDA_HOME      := /usr/local/cuda
-TENSOR_LIB_DIR := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations
-TENSOR_LIB_A   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib/libtensor.a
-# CGADIMPL_LIB   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build/libcgadimpl.a
-
-# # --- Autograd / Nova / MLIR Configuration ---
-# LLVM_PROJECT_BUILD := /home/blu-bridge25/llvm-project/build
-# NOVA_INSTALL_DIR   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/install
-# NOVA_BUILD_DIR     := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/build
-
-# AUTOGRAD_INCLUDES := \
-#     -I$(NOVA_INSTALL_DIR)/include \
-#     -I$(LLVM_PROJECT_BUILD)/include \
-#     -I/home/blu-bridge25/llvm-project/llvm/include \
-#     -I/home/blu-bridge25/llvm-project/mlir/include
-
-# AUTOGRAD_LIB_PATHS := \
-#     -L$(NOVA_INSTALL_DIR)/lib \
-#     -L$(NOVA_BUILD_DIR)/lib/Runtime/Core \
-#     -L$(NOVA_BUILD_DIR)/lib/Runtime/Executor \
-#     -L$(LLVM_PROJECT_BUILD)/lib
-
-# # Nova Libraries
-# NOVA_LIBS := \
-#     -lNovaPipelines \
-#     -lNovaCompilerAPI \
-#     -lMLIRNova \
-#     -lMLIRNovaToTosaTransforms \
-#     -lMLIRNovaToLinalgTransforms \
-#     -lMLIRNovaToArithTransforms \
-#     -lCompilerTransforms \
-#     -lAffineTransforms \
-#     -lNovaRuntimeCore \
-#     -lNovaRuntimeExecutor
-
-# # MLIR Transforms & Conversion
-# MLIR_TRANSFORMS_LIBS := \
-#     -lMLIRReconcileUnrealizedCasts \
-#     -lMLIRTosaToTensor \
-#     -lMLIRTosaToLinalg \
-#     -lMLIRTosaTransforms \
-#     -lMLIRLinalgTransforms \
-#     -lMLIRLinalgUtils \
-#     -lMLIRBufferizationTransforms \
-#     -lMLIRBufferizationToMemRef \
-#     -lMLIRBufferizationPipelines \
-#     -lMLIRArithTransforms \
-#     -lMLIRArithToLLVM \
-#     -lMLIRArithAttrToLLVMConversion \
-#     -lMLIRMathToLLVM \
-#     -lMLIRTensorTransforms \
-#     -lMLIRTensorUtils \
-#     -lMLIRMemRefTransforms \
-#     -lMLIRMemRefUtils \
-#     -lMLIRVectorTransforms \
-#     -lMLIRAffineTransforms \
-#     -lMLIRAffineUtils \
-#     -lMLIRAffineAnalysis \
-#     -lMLIRSCFTransforms \
-#     -lMLIRSCFUtils \
-#     -lMLIRSCFToControlFlow \
-#     -lMLIRControlFlowToLLVM \
-#     -lMLIRGPUTransforms \
-#     -lMLIRGPUToNVVMTransforms \
-#     -lMLIRMemRefToLLVM \
-#     -lMLIRFuncToLLVM \
-#     -lMLIRLLVMCommonConversion \
-#     -lMLIRLLVMIRTransforms \
-#     -lMLIRTargetLLVM \
-#     -lMLIRTargetLLVMIRExport \
-#     -lMLIRTargetLLVMIRImport \
-#     -lMLIRNVVMToLLVMIRTranslation \
-#     -lMLIRArmNeonToLLVMIRTranslation \
-#     -lMLIRArmSMEToLLVMIRTranslation \
-#     -lMLIRArmSVEToLLVMIRTranslation \
-#     -lMLIRVCIXToLLVMIRTranslation \
-#     -lMLIRGPUToLLVMIRTranslation \
-#     -lMLIROpenMPToLLVMIRTranslation \
-#     -lMLIROpenACCToLLVMIRTranslation \
-#     -lMLIRROCDLToLLVMIRTranslation \
-#     -lMLIRSPIRVToLLVMIRTranslation \
-#     -lMLIRToLLVMIRTranslationRegistration \
-#     -lMLIRBuiltinToLLVMIRTranslation \
-#     -lMLIRLLVMToLLVMIRTranslation
-
-# # MLIR Dialects
-# MLIR_DIALECT_LIBS := \
-#     -lMLIRLinalgDialect \
-#     -lMLIRIndexDialect \
-#     -lMLIRSparseTensorDialect \
-#     -lMLIRBufferizationDialect \
-#     -lMLIRTosaDialect \
-#     -lMLIRArithDialect \
-#     -lMLIRMathDialect \
-#     -lMLIRMemRefDialect \
-#     -lMLIRComplexDialect \
-#     -lMLIRQuantDialect \
-#     -lMLIRSCFDialect \
-#     -lMLIRControlFlowDialect \
-#     -lMLIRTensorDialect \
-#     -lMLIRAffineDialect \
-#     -lMLIRFuncDialect \
-#     -lMLIRLLVMDialect \
-#     -lMLIRUBDialect \
-#     -lMLIRPDLDialect \
-#     -lMLIRPDLInterpDialect \
-#     -lMLIRVectorDialect \
-#     -lMLIROpenMPDialect \
-#     -lMLIRROCDLDialect \
-#     -lMLIRNVVMDialect \
-#     -lMLIROpenACCDialect \
-#     -lMLIROpenACCMPCommon \
-#     -lMLIRDLTIDialect \
-#     -lMLIRGPUDialect \
-#     -lMLIRVCIXDialect \
-#     -lMLIRArmNeonDialect \
-#     -lMLIRArmSMEDialect \
-#     -lMLIRArmSVEDialect \
-#     -lMLIRSPIRVDialect \
-#     -lMLIRSPIRVImageInterfaces \
-#     -lMLIRSPIRVUtils
-
-# # MLIR Interfaces
-# MLIR_INTERFACES_LIBS := \
-#     -lMLIRControlFlowInterfaces \
-#     -lMLIRFunctionInterfaces \
-#     -lMLIRCallInterfaces \
-#     -lMLIRDataLayoutInterfaces \
-#     -lMLIRViewLikeInterface \
-#     -lMLIRDestinationStyleOpInterface \
-#     -lMLIRVectorInterfaces \
-#     -lMLIRInferIntRangeInterface \
-#     -lMLIRInferIntRangeCommon \
-#     -lMLIRMaskableOpInterface \
-#     -lMLIRMaskingOpInterface \
-#     -lMLIRIndexingMapOpInterface \
-#     -lMLIRMemorySlotInterfaces \
-#     -lMLIRShapedOpInterfaces \
-#     -lMLIRLoopLikeInterface \
-#     -lMLIRParallelCombiningOpInterface \
-#     -lMLIRSubsetOpInterface \
-#     -lMLIRCastInterfaces
-
-# # MLIR Core
-# MLIR_CORE_LIBS := \
-#     -lMLIRDialect \
-#     -lMLIRIR \
-#     -lMLIRArithUtils \
-#     -lMLIRDialectUtils \
-#     -lMLIRQuantUtils \
-#     -lMLIRArithValueBoundsOpInterfaceImpl \
-#     -lMLIRTransforms \
-#     -lMLIRTransformUtils \
-#     -lMLIRPass \
-#     -lMLIRSupport \
-#     -lMLIRSideEffectInterfaces \
-#     -lMLIRInferTypeOpInterface \
-#     -lMLIRAnalysis \
-#     -lMLIRPresburger \
-#     -lMLIRValueBoundsOpInterface \
-#     -lMLIRAsmParser \
-#     -lMLIRParser \
-#     -lMLIRBytecodeWriter \
-#     -lMLIRBytecodeReader \
-#     -lMLIRRewrite \
-#     -lMLIRRewritePDL \
-#     -lMLIRPDLToPDLInterp
-
-# # LLVM Libraries
-# LLVM_LIBS := \
-#     -lLLVMFrontendOpenMP \
-#     -lLLVMFrontendAtomic \
-#     -lLLVMFrontendOffloading \
-#     -lLLVMCodeGen \
-#     -lLLVMScalarOpts \
-#     -lLLVMTransformUtils \
-#     -lLLVMAnalysis \
-#     -lLLVMObject \
-#     -lLLVMObjectYAML \
-#     -lLLVMMC \
-#     -lLLVMBitWriter \
-#     -lLLVMProfileData \
-#     -lLLVMCore \
-#     -lLLVMTargetParser \
-#     -lLLVMSupport \
-#     -lLLVMDemangle \
-#     -lLLVMBinaryFormat \
-#     -lLLVMBitReader \
-#     -lLLVMBitstreamReader \
-#     -lLLVMRemarks
-
-# AUTOGRAD_LIBS := $(NOVA_LIBS) $(MLIR_TRANSFORMS_LIBS) $(MLIR_DIALECT_LIBS) $(MLIR_INTERFACES_LIBS) $(MLIR_CORE_LIBS) $(LLVM_LIBS)
+TENSOR_LIB_DIR := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Tensor-Implementations
+TENSOR_LIB_A   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Tensor-Implementations/lib/libtensor.a
 
 INCLUDES = \
     -I. \
@@ -215,7 +26,7 @@ INCLUDES = \
     $(AUTOGRAD_INCLUDES)
 
 LIB_PATHS = \
-    -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations/lib \
+    -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Tensor-Implementations/lib \
 #     -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib \
@@ -706,7 +517,7 @@ GPT2_ENTROPY_PARALLEL_TEST_SRCS = \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
-GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingSctipts/MaskOps.o
+GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingSctipts/EntropyKernels.o
 
 gpt2_entropy_parallel_test: $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: $@"
@@ -750,3 +561,21 @@ gpt2_mlp_parallel_test: $(GPT2_MLP_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 MLP Parallel Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_mlp_parallel_test\n"
 
+
+# GPT2 Tensor Parallel Test
+GPT2_TENSOR_PARALLEL_TEST_SRCS = \
+    TrainingSctipts/GPT2_TesnorParallel_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+GPT2_TENSOR_PARALLEL_TEST_OBJS = $(GPT2_TENSOR_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+gpt2_tensor_parallel_test: $(GPT2_TENSOR_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_TENSOR_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Tensor Parallel Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_tensor_parallel_test\n"

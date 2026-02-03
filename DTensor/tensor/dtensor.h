@@ -29,6 +29,7 @@ extern CachingAllocator gAllocator;
 class DTensor {
 public:
 
+    DTensor();  // Default constructor for member initialization
     DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name = "");
     ~DTensor();
 
@@ -46,6 +47,7 @@ public:
     
     // Autograd-enabled linear layer for gradient tracking
     void linear_w_autograd(DTensor& Input, DTensor& Weights, DTensor& Bias);
+    void linear_w_autograd(DTensor& Input, DTensor& Weights);  // No-bias overload
     
     // Backward pass - computes gradients for tensors with requires_grad=true
     void backward();
@@ -73,10 +75,10 @@ public:
 
     void sync();              // All-reduce with wait (blocking)
     void sync_async();         // All-reduce without wait (async)
-    void sync_async_backward_hook();
-    void sync_w_autograd();     // Autograd-aware sync (registers backward for gradient all-reduce)
+    // void sync_async_backward_hook();
+    void sync_w_autograd(op_t op = sum);     // Autograd-aware sync (registers backward for gradient all-reduce)
     void wait();               // Wait for pending async collective
-    void wait_backward_hook();
+    // void wait_backward_hook();
     bool has_pending_collective() const;  // Check if async collective pending
 
     void assemble(int dim, int root, DTensor &sharded_tensor ); 

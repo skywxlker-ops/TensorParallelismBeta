@@ -1,0 +1,363 @@
+[1mdiff --git a/DTensor_v2.0/tensor/dtensor.cpp b/DTensor_v2.0/tensor/dtensor.cpp[m
+[1mindex bfd8059..705663c 100644[m
+[1m--- a/DTensor_v2.0/tensor/dtensor.cpp[m
+[1m+++ b/DTensor_v2.0/tensor/dtensor.cpp[m
+[36m@@ -14,6 +14,7 @@[m
+ #include <nvtx3/nvtx3.hpp>[m
+ #include <nvtx3/nvToolsExt.h>[m
+ #include "process_group/fused_transpose_kernel.cuh"[m
+[32m+[m[32m#include "process_group/shard_fused_transpose_kernel.cuh"[m
+ #include "process_group/fused_rotate_kernel.cuh"[m
+ // #include "process_group/fused_transpose_kernel.cuh"[m
+ [m
+[36m@@ -21,7 +22,7 @@[m
+ CachingAllocator gAllocator;[m
+ // using namespace OwnTensor;[m
+ [m
+[31m-DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout)[m
+[32m+[m[32mDTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name)[m
+     : rank_(pg->get_rank()),[m
+       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.[m
+       device_mesh_(device_mesh),[m
+[36m@@ -64,8 +65,15 @@[m [mDTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL[m
+         size_ = 1;[m
+         for (int d : layout_.get_global_shape()) size_ *= d;  [m
+         [m
+[31m-        value_ = ag::make_tensor(tensor_, "");[m
+[31m-      [m
+[32m+[m[32m        // value_ = ag::make_tensor(tensor_, name);[m
+[32m+[m[41m        [m
+[32m+[m[32m        // // Enable gradients for this tensor and initialize grad[m
+[32m+[m[32m        // if (value_.node) {[m
+[32m+[m[32m        //     value_.node->requires_grad_flag_ = true;[m
+[32m+[m[32m        //     // Node constructor only inits grad if requires_grad was true at construction[m
+[32m+[m[32m        //     // Since we set it after, we must init grad manually[m
+[32m+[m[32m        //     value_.node->grad = OwnTensor::Tensor::zeros(tensor_.shape(), ag::options(tensor_));[m
+[32m+[m[32m        // }[m
+     }[m
+ [m
+ // DTensor::DTensor(std::shared_ptr<DeviceMesh> device_mesh,[m
+[36m@@ -92,6 +100,8 @@[m [mDTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL[m
+     [m
+ // }[m
+ [m
+[32m+[m
+[32m+[m
+ DTensor::~DTensor() {[m
+   [m
+     cudaStreamSynchronize(stream_); [m
+[36m@@ -524,9 +534,7 @@[m [mvoid DTensor::shard(int dim, int root, DTensor &parent_tensor) {[m
+     cudaStreamSynchronize(stream_);[m
+     }[m
+     [m
+[31m-    [m
+     // parent_tensor.tensor_.release();[m
+[31m-[m
+ }[m
+ [m
+ [m
+[36m@@ -682,146 +690,146 @@[m [mvoid DTensor::shard_transpose(int dim, int root, DTensor &parent_tensor){[m
+     setShape(tensor_.shape().dims);[m
+ }[m
+ [m
+[31m-// void DTensor::shard_transpose_fused(int dim, int root, DTensor &parent_tensor){[m
+[31m-//     #ifdef WITH_CUDA[m
+[31m-//     OwnTensor::cuda::setCurrentStream(stream_);[m
+[31m-//     #endif[m
+[32m+[m[32mvoid DTensor::shard_transpose_fused(int dim, int root, DTensor &parent_tensor){[m
+[32m+[m[32m    #ifdef WITH_CUDA[m
+[32m+[m[32m    OwnTensor::cuda::setCurrentStream(stream_);[m
+[32m+[m[32m    #endif[m
+     [m
+[31m-//     std::vector<int64_t> global_shape = parent_tensor.shape_;[m
+[32m+[m[32m    std::vector<int64_t> global_shape = parent_tensor.shape_;[m
+     [m
+[31m-//     size_t shard_numel = 1;[m
+[31m-//     for (int64_t d : shape_) shard_numel *= d;[m
+[32m+[m[32m    size_t shard_numel = 1;[m
+[32m+[m[32m    for (int64_t d : shape_) shard_numel *= d;[m
+     [m
+[31m-//     int64_t X = global_shape[0], Y = global_shape[1], Z = global_shape[2];[m
+[31m-//     int64_t total_elements = X * Y * Z;[m
+[32m+[m[32m    int64_t X = global_shape[0], Y = global_shape[1], Z = global_shape[2];[m
+[32m+[m[32m    int64_t total_elements = X * Y * Z;[m
+ [m
+[31m-//     if (dim == 0) {[m
+[31m-//         // Direct scatter - dim 0 is already contiguous[m
+[31m-//         pg_->scatter_async([m
+[31m-//             parent_tensor.tensor_.data<float>(),[m
+[31m-//             tensor_.data<float>(),[m
+[31m-//             shard_numel,[m
+[31m-//             OwnTensor::Dtype::Float32,[m
+[31m-//             root,[m
+[31m-//             true[m
+[31m-//         )->wait();[m
+[31m-//     }[m
+[31m-//     else if (dim == 2) {[m
+[31m-//         // Fused transpose [X, Y, Z] -> [Z, Y, X] and make contiguous[m
+[31m-//         int64_t Z_local = Z / world_size_;[m
+[32m+[m[32m    if (dim == 0) {[m
+[32m+[m[32m        // Direct scatter - dim 0 is already contiguous[m
+[32m+[m[32m        pg_->scatter_async([m
+[32m+[m[32m            parent_tensor.tensor_.data<float>(),[m
+[32m+[m[32m            tensor_.data<float>(),[m
+[32m+[m[32m            shard_numel,[m
+[32m+[m[32m            OwnTensor::Dtype::Float32,[m
+[32m+[m[32m            root,[m
+[32m+[m[32m            true[m
+[32m+[m[32m        )->wait();[m
+[32m+[m[32m    }[m
+[32m+[m[32m    else if (dim == 2) {[m
+[32m+[m[32m        // Fused transpose [X, Y, Z] -> [Z, Y, X] and make contiguous[m
+[32m+[m[32m        int64_t Z_local = Z / world_size_;[m
+         [m
+[31m-//         // Source strides (contiguous [X, Y, Z])[m
+[31m-//         int64_t s0 = Y * Z;[m
+[31m-//         int64_t s1 = Z;[m
+[31m-//         int64_t s2 = 1;[m
+[32m+[m[32m        // Source strides (contiguous [X, Y, Z])[m
+[32m+[m[32m        int64_t s0 = Y * Z;[m
+[32m+[m[32m        int64_t s1 = Z;[m
+[32m+[m[32m        int64_t s2 = 1;[m
+         [m
+[31m-//         // Allocate transposed contiguous buffer[m
+[31m-//         OwnTensor::Shape transposed_shape;[m
+[31m-//         transposed_shape.dims = {Z, Y, X};[m
+[31m-//         OwnTensor::Tensor transposed_buf(transposed_shape, parent_tensor.tensor_.dtype(), parent_tensor.tensor_.device());[m
+[32m+[m[32m        // Allocate transposed contiguous buffer[m
+[32m+[m[32m        OwnTensor::Shape transposed_shape;[m
+[32m+[m[32m        transposed_shape.dims = {Z, Y, X};[m
+[32m+[m[32m        OwnTensor::Tensor transposed_buf(transposed_shape, parent_tensor.tensor_.dtype(), parent_tensor.tensor_.device());[m
+         [m
+[31m-//         // Launch fused transpose kernel[m
+[31m-//         launch_fused_transpose_contiguous_kernel([m
+[31m-//             parent_tensor.tensor_.data<float>(),[m
+[31m-//             transposed_buf.data<float>(),[m
+[31m-//             X, Y, Z,[m
+[31m-//             s0, s1, s2,[m
+[31m-//             0, 2,  // transpose dim 0 and 2[m
+[31m-//             total_elements,[m
+[31m-//             stream_[m
+[31m-//         );[m
+[32m+[m[32m        // Launch fused transpose kernel[m
+[32m+[m[32m        launch_fused_transpose_contiguous_kernel([m
+[32m+[m[32m            parent_tensor.tensor_.data<float>(),[m
+[32m+[m[32m            transposed_buf.data<float>(),[m
+[32m+[m[32m            X, Y, Z,[m
+[32m+[m[32m            s0, s1, s2,[m
+[32m+[m[32m            0, 2,  // transpose dim 0 and 2[m
+[32m+[m[32m            total_elements,[m
+[32m+[m[32m            stream_[m
+[32m+[m[32m        );[m
+         [m
+[31m-//         // Reshape tensor_ for receiving transposed shard[m
+[31m-//         tensor_.reshape({{Z_local, Y, X}});[m
+[32m+[m[32m        // Reshape tensor_ for receiving transposed shard[m
+[32m+[m[32m        tensor_.reshape({{Z_local, Y, X}});[m
+         [m
+[31m-//         // Scatter from transposed buffer[m
+[31m-//         pg_->scatter_async([m
+[31m-//             transposed_buf.data<float>(),[m
+[31m-//             tensor_.data<float>(),[m
+[31m-//             shard_numel,[m
+[31m-//             OwnTensor::Dtype::Float32,[m
+[31m-//             root,[m
+[31m-//             true[m
+[31m-//         )->wait();[m
+[32m+[m[32m        // Scatter from transposed buffer[m
+[32m+[m[32m        pg_->scatter_async([m
+[32m+[m[32m            transposed_buf.data<float>(),[m
+[32m+[m[32m            tensor_.data<float>(),[m
+[32m+[m[32m            shard_numel,[m
+[32m+[m[32m            OwnTensor::Dtype::Float32,[m
+[32m+[m[32m            root,[m
+[32m+[m[32m            true[m
+[32m+[m[32m        )->wait();[m
+         [m
+[31m-//         // Fused transpose back [Z_local, Y, X] -> [X, Y, Z_local][m
+[31m-//         int64_t rs0 = Y * X;[m
+[31m-//         int64_t rs1 = X;[m
+[31m-//         int64_t rs2 = 1;[m
+[32m+[m[32m        // Fused transpose back [Z_local, Y, X] -> [X, Y, Z_local][m
+[32m+[m[32m        int64_t rs0 = Y * X;[m
+[32m+[m[32m        int64_t rs1 = X;[m
+[32m+[m[32m        int64_t rs2 = 1;[m
+         [m
+[31m-//         OwnTensor::Shape result_shape;[m
+[31m-//         result_shape.dims = shape_;[m
+[31m-//         OwnTensor::Tensor result_buf(result_shape, tensor_.dtype(), tensor_.device());[m
+[32m+[m[32m        OwnTensor::Shape result_shape;[m
+[32m+[m[32m        result_shape.dims = shape_;[m
+[32m+[m[32m        OwnTensor::Tensor result_buf(result_shape, tensor_.dtype(), tensor_.device());[m
+         [m
+[31m-//         launch_fused_transpose_contiguous_kernel([m
+[31m-//             tensor_.data<float>(),[m
+[31m-//             result_buf.data<float>(),[m
+[31m-//             Z_local, Y, X,[m
+[31m-//             rs0, rs1, rs2,[m
+[31m-//             0, 2,[m
+[31m-//             shard_numel,[m
+[31m-//             stream_[m
+[31m-//         );[m
+[32m+[m[32m        launch_fused_transpose_contiguous_kernel([m
+[32m+[m[32m            tensor_.data<float>(),[m
+[32m+[m[32m            result_buf.data<float>(),[m
+[32m+[m[32m            Z_local, Y, X,[m
+[32m+[m[32m            rs0, rs1, rs2,[m
+[32m+[m[32m            0, 2,[m
+[32m+[m[32m            shard_numel,[m
+[32m+[m[32m            stream_[m
+[32m+[m[32m        );[m
+         [m
+[31m-//         tensor_ = result_buf;[m
+[31m-//     }[m
+[31m-//     else if (dim == 1) {[m
+[31m-//         // Fused transpose [X, Y, Z] -> [Y, X, Z][m
+[31m-//         int64_t Y_local = Y / world_size_;[m
+[32m+[m[32m        tensor_ = result_buf;[m
+[32m+[m[32m    }[m
+[32m+[m[32m    else if (dim == 1) {[m
+[32m+[m[32m        // Fused transpose [X, Y, Z] -> [Y, X, Z][m
+[32m+[m[32m        int64_t Y_local = Y / world_size_;[m
+         [m
+[31m-//         int64_t s0 = Y * Z;[m
+[31m-//         int64_t s1 = Z;[m
+[31m-//         int64_t s2 = 1;[m
+[32m+[m[32m        int64_t s0 = Y * Z;[m
+[32m+[m[32m        int64_t s1 = Z;[m
+[32m+[m[32m        int64_t s2 = 1;[m
+         [m
+[31m-//         OwnTensor::Shape transposed_shape;[m
+[31m-//         transposed_shape.dims = {Y, X, Z};[m
+[31m-//         OwnTensor::Tensor transposed_buf(transposed_shape, parent_tensor.tensor_.dtype(), parent_tensor.tensor_.device());[m
+[32m+[m[32m        OwnTensor::Shape transposed_shape;[m
+[32m+[m[32m        transposed_shape.dims = {Y, X, Z};[m
+[32m+[m[32m        OwnTensor::Tensor transposed_buf(transposed_shape, parent_tensor.tensor_.dtype(), parent_tensor.tensor_.device());[m
+         [m
+[31m-//         launch_fused_transpose_contiguous_kernel([m
+[31m-//             parent_tensor.tensor_.data<float>(),[m
+[31m-//             transposed_buf.data<float>(),[m
+[31m-//             X, Y, Z,[m
+[31m-//             s0, s1, s2,[m
+[31m-//             0, 1,[m
+[31m-//             total_elements,[m
+[31m-//             stream_[m
+[31m-//         );[m
+[32m+[m[32m        launch_fused_transpose_contiguous_kernel([m
+[32m+[m[32m            parent_tensor.tensor_.data<float>(),[m
+[32m+[m[32m            transposed_buf.data<float>(),[m
+[32m+[m[32m            X, Y, Z,[m
+[32m+[m[32m            s0, s1, s2,[m
+[32m+[m[32m            0, 1,[m
+[32m+[m[32m            total_elements,[m
+[32m+[m[32m            stream_[m
+[32m+[m[32m        );[m
+         [m
+[31m-//         tensor_.reshape({{Y_local, X, Z}});[m
+[32m+[m[32m        tensor_.reshape({{Y_local, X, Z}});[m
+         [m
+[31m-//         pg_->scatter_async([m
+[31m-//             transposed_buf.data<float>(),[m
+[31m-//             tensor_.data<float>(),[m
+[31m-//             shard_numel,[m
+[31m-//             OwnTensor::Dtype::Float32,[m
+[31m-//             root,[m
+[31m-//             true[m
+[31m-//         )->wait();[m
+[32m+[m[32m        pg_->scatter_async([m
+[32m+[m[32m            transposed_buf.data<float>(),[m
+[32m+[m[32m            tensor_.data<float>(),[m
+[32m+[m[32m            shard_numel,[m
+[32m+[m[32m            OwnTensor::Dtype::Float32,[m
+[32m+[m[32m            root,[m
+[32m+[m[32m            true[m
+[32m+[m[32m        )->wait();[m
+         [m
+[31m-//         // Transpose back [Y_local, X, Z] -> [X, Y_local, Z][m
+[31m-//         int64_t rs0 = X * Z;[m
+[31m-//         int64_t rs1 = Z;[m
+[31m-//         int64_t rs2 = 1;[m
+[32m+[m[32m        // Transpose back [Y_local, X, Z] -> [X, Y_local, Z][m
+[32m+[m[32m        int64_t rs0 = X * Z;[m
+[32m+[m[32m        int64_t rs1 = Z;[m
+[32m+[m[32m        int64_t rs2 = 1;[m
+         [m
+[31m-//         OwnTensor::Shape result_shape;[m
+[31m-//         result_shape.dims = shape_;[m
+[31m-//         OwnTensor::Tensor result_buf(result_shape, tensor_.dtype(), tensor_.device());[m
+[32m+[m[32m        OwnTensor::Shape result_shape;[m
+[32m+[m[32m        result_shape.dims = shape_;[m
+[32m+[m[32m        OwnTensor::Tensor result_buf(result_shape, tensor_.dtype(), tensor_.device());[m
+         [m
+[31m-//         launch_fused_transpose_contiguous_kernel([m
+[31m-//             tensor_.data<float>(),[m
+[31m-//             result_buf.data<float>(),[m
+[31m-//             Y_local, X, Z,[m
+[31m-//             rs0, rs1, rs2,[m
+[31m-//             0, 1,[m
+[31m-//             shard_numel,[m
+[31m-//             stream_[m
+[31m-//         );[m
+[32m+[m[32m        launch_fused_transpose_contiguous_kernel([m
+[32m+[m[32m            tensor_.data<float>(),[m
+[32m+[m[32m            result_buf.data<float>(),[m
+[32m+[m[32m            Y_local, X, Z,[m
+[32m+[m[32m            rs0, rs1, rs2,[m
+[32m+[m[32m            0, 1,[m
+[32m+[m[32m            shard_numel,[m
+[32m+[m[32m            stream_[m
+[32m+[m[32m        );[m
+         [m
+[31m-//         tensor_ = result_buf;[m
+[31m-//     }[m
+[32m+[m[32m        tensor_ = result_buf;[m
+[32m+[m[32m    }[m
+     [m
+[31m-//     setShape(tensor_.shape().dims);[m
+[31m-// }[m
+[32m+[m[32m    setShape(tensor_.shape().dims);[m
+[32m+[m[32m}[m
+ [m
+ void launch_reverse_kernel(float* d_src, float* d_dst, int nx, int ny, int nz, int dim, cudaStream_t stream);[m
+ [m
+[36m@@ -1102,6 +1110,11 @@[m [mvoid DTensor::shard_default(int dim, int root, DTensor &parent_tensor) {[m
+     // Note: Don't release parent tensor here - it will be freed when it goes out of scope[m
+     // Calling release() here causes memory corruption when parent_tensor destructor runs[m
+     parent_tensor.tensor_.reset();[m
+[32m+[m[32m    // [Temporarily disabled] Add dependency edge for autograd[m
+[32m+[m[32m    // if (value_.node && parent_tensor.value_.node) {[m
+[32m+[m[32m    //     value_.node->inputs.push_back(parent_tensor.value_.node);[m
+[32m+[m[32m    //     value_.node->is_leaf = false;[m
+[32m+[m[32m    // }[m
+ }[m
+ [m
+ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {[m
+[36m@@ -1210,8 +1223,15 @@[m [mvoid DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {[m
+     // Record event on NCCL stream and make our stream wait for it (GPU-side sync)[m
+     work->event_record();[m
+     work->streamWait(stream_);[m
+[32m+[m
+[32m+[m[32m    // [Temporarily disabled] Add dependency edge for autograd[m
+[32m+[m[32m    // if (value_.node && parent_tensor.value_.node) {[m
+[32m+[m[32m    //     value_.node->inputs.push_back(parent_tensor.value_.node);[m
+[32m+[m[32m    //     value_.node->is_leaf = false; // Fix deadlock: allow node to be processed in backward[m
+[32m+[m[32m    // }[m
+ }[m
+ [m
+[32m+[m
+ // void DTensor::shard_own_transpose(int dim, int root, DTensor &parent_tensor) {[m
+ //     // Shard using OwnTensor's transpose to make target dim contiguous[m
+ //     // Only supports dim 2 for now[m
+[36m@@ -1683,4 +1703,10 @@[m [mvoid DTensor::rand() {[m
+         opts.dtype = OwnTensor::Dtype::Float32;[m
+         opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_);[m
+     tensor_  = OwnTensor::Tensor::rand({shape_}, opts, 0.0f, 0.1f);[m
+[31m-}[m
+\ No newline at end of file[m
+[32m+[m[32m    if(value_.node) value_.val() = tensor_;[m
+[32m+[m[32m}[m
+[32m+[m[32m// void DTensor::enable_grad() {[m
+[32m+[m
+[32m+[m[32m// }[m
+[41m+[m
+[41m+[m

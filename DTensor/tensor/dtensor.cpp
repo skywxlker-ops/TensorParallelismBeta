@@ -60,6 +60,20 @@ public:
 // CachingAllocator gAllocator;
 // using namespace OwnTensor;
 
+// Default constructor for member initialization
+DTensor::DTensor()
+    : rank_(0),
+      world_size_(1),
+      device_mesh_(nullptr),
+      pg_(nullptr),
+      stream_(nullptr),
+      layout_(),
+      size_(0),
+      shape_(),
+      tensor_()
+{
+}
+
 DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name)
     : rank_(pg->get_rank()),
       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
@@ -1252,6 +1266,9 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
             cudaStreamSynchronize(stream_);
             nvtxRangePop();
             
+            // DEBUG: Force device sync before NCCL collective
+            cudaDeviceSynchronize();
+            
             work = pg_->scatter_async(
                 send_buffer.data<float>(),
                 tensor_.data<float>(),
@@ -1405,13 +1422,16 @@ void DTensor::sync_async() {
     has_pending_collective_ = true;
 }
 
-void DTensor::sync_w_autograd() {
+
+
+
+void DTensor::sync_w_autograd(op_t op) {
     // Autograd-aware sync: performs all-reduce and sets up backward graph
     // Forward: Y = all_reduce_sum(X) - sum partial results across GPUs
     // Backward: automatically all-reduces gradient dY before flowing to previous ops
     
     // 1. Forward: Blocking all-reduce
-    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false)->wait();
+    pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, op, false)->wait();
     
     // 2. Set up backward graph if tensor requires grad
     if (tensor_.requires_grad()) {
@@ -1626,6 +1646,11 @@ void DTensor::linear_w_autograd(DTensor& Input, DTensor& Weights, DTensor& Bias)
     
     OwnTensor::Tensor out = OwnTensor::autograd::matmul(Input.tensor_, Weights.tensor_);
     tensor_ = OwnTensor::autograd::add(out, Bias.tensor_);
+}
+
+void DTensor::linear_w_autograd(DTensor& Input, DTensor& Weights) {
+    // No-bias version: just matmul
+    tensor_ = OwnTensor::autograd::matmul(Input.tensor_, Weights.tensor_);
 }
 
 void DTensor::backward() {

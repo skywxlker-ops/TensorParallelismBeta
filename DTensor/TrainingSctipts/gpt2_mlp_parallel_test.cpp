@@ -42,6 +42,18 @@
     using namespace OwnTensor;
     // using ProcessGroup = ProcessGroupNCCL;
 
+    // GPU Memory Debugging Helper
+    void print_gpu_memory(const std::string& label, int rank) {
+        size_t free_bytes, total_bytes;
+        cudaMemGetInfo(&free_bytes, &total_bytes);
+        float used_mb = (total_bytes - free_bytes) / (1024.0f * 1024.0f);
+        float total_mb = total_bytes / (1024.0f * 1024.0f);
+        if (rank == 0) {
+            std::cout << "[GPU MEM] " << label << ": " << std::fixed << std::setprecision(1)
+                      << used_mb << " / " << total_mb << " MB used" << std::endl;
+        }
+    }
+
   
     int rank, world_size;
 
@@ -54,7 +66,7 @@
         int64_t T = 1024;
         int64_t V = 50304;  // GPT-2 vocab size (padded to 64)  
         int64_t C = 768;    // Matches GPT-2 Small
-        int64_t n_layers = 6;
+        int64_t n_layers = 3;
         int64_t F = 4 * 768;
     };
 
@@ -113,15 +125,53 @@
         
         // Forward: x [B, T, C] -> [B, T, C]
         Tensor forward(const Tensor& x) {
+            int rank_local;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rank_local);
+            
+            auto print_shape = [](const Tensor& t, const std::string& name, int r) {
+                auto dims = t.shape().dims;
+                std::cerr << "[RANK " << r << "]     " << name << " shape: [";
+                for (size_t i = 0; i < dims.size(); i++) {
+                    std::cerr << dims[i];
+                    if (i < dims.size() - 1) std::cerr << ", ";
+                }
+                std::cerr << "], numel=" << t.numel() 
+                          << ", dev=" << (t.device().is_cuda() ? "CUDA:" : "CPU:")
+                          << t.device().index << std::endl;
+            };
+            
+            print_shape(x, "input x", rank_local);
+            print_shape(ln.weight, "ln.weight", rank_local);
+            
+            int cuda_dev;
+            cudaGetDevice(&cuda_dev);
+            std::cerr << "[RANK " << rank_local << "]   Current CUDA device: " << cuda_dev << std::endl;
+            
+            std::cerr << "[RANK " << rank_local << "]   MLP: LayerNorm START" << std::endl;
             h.mutable_tensor() = ln.forward(x);
+            cudaDeviceSynchronize();
+            print_shape(h.mutable_tensor(), "after LayerNorm", rank_local);
+            std::cerr << "[RANK " << rank_local << "]   MLP: LayerNorm DONE" << std::endl;
              
+            std::cerr << "[RANK " << rank_local << "]   MLP: fc1 (ColumnLinear) START" << std::endl;
+            print_shape(fc1.weight->mutable_tensor(), "fc1.weight", rank_local);
             DTensor h1 = fc1.forward(h);
+            cudaDeviceSynchronize();
+            print_shape(h1.mutable_tensor(), "after fc1", rank_local);
+            std::cerr << "[RANK " << rank_local << "]   MLP: fc1 DONE" << std::endl;
             
+            std::cerr << "[RANK " << rank_local << "]   MLP: GeLU START" << std::endl;
             dnn::DGeLU gelu;
-            
             h1 = gelu.forward(h1);
+            cudaDeviceSynchronize();
+            std::cerr << "[RANK " << rank_local << "]   MLP: GeLU DONE" << std::endl;
             
+            std::cerr << "[RANK " << rank_local << "]   MLP: fc4 (RowLinear) START" << std::endl;
+            print_shape(fc4.weight->mutable_tensor(), "fc4.weight", rank_local);
             DTensor y = fc4.forward(h1);
+            cudaDeviceSynchronize();
+            print_shape(y.mutable_tensor(), "after fc4", rank_local);
+            std::cerr << "[RANK " << rank_local << "]   MLP: fc4 DONE" << std::endl;
 
             return y.mutable_tensor();
         }
@@ -164,7 +214,7 @@
     class GPT {
     public:
         GPTConfig config;
-        dnn::DEmbeddingVParallel wte;  // Token embedding (Sharded)
+        dnn::DEmbedding wte;  // Token embedding
         dnn::DEmbedding wpe;  // Position embedding
         std::vector<MLP> mlps;
         nn::LayerNorm ln_f; // Final LayerNorm
@@ -209,11 +259,17 @@
         
         // Forward: indices [B, T] -> logits [B, T, V]
         Tensor forward(const Tensor& idx) {
+            int rank = pg->get_rank();
+            std::cerr << "[RANK " << rank << "] forward() START" << std::endl;
+            cudaDeviceSynchronize();
+            
             auto shape = idx.shape().dims;
             int64_t B = shape[0];
             int64_t T = shape[1];
+            std::cerr << "[RANK " << rank << "] idx shape: [" << B << ", " << T << "]" << std::endl;
             
             // Create position indices [T]
+            std::cerr << "[RANK " << rank << "] Creating position indices..." << std::endl;
             Tensor pos = Tensor(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64).with_device(idx.device()));
             {
                 Tensor pos_cpu(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64));
@@ -227,7 +283,10 @@
                     pos = pos_cpu;
                 }
             }
+            std::cerr << "[RANK " << rank << "] Position indices created" << std::endl;
+            cudaDeviceSynchronize();
 
+            std::cerr << "[RANK " << rank << "] Creating DTensor wrappers..." << std::endl;
             Layout in_layout(mesh, {B,T});
             DTensor Dpos(mesh,pg,in_layout,"emb_id");
             Dpos.mutable_tensor() = pos.to(idx.device());
@@ -235,30 +294,82 @@
             Layout pos_layout(mesh, {1,T});
             DTensor Didx(mesh,pg,pos_layout,"pos_id");
             Didx.mutable_tensor() = idx;
+            std::cerr << "[RANK " << rank << "] DTensor wrappers created" << std::endl;
+            cudaDeviceSynchronize();
 
 
             // Get embeddings [B, T, C]
+            std::cerr << "[RANK " << rank << "] Token embedding forward START..." << std::endl;
             DTensor tok_emb = wte.forward(Didx);     // [B, T, C]
             cudaDeviceSynchronize();
+            {
+                cudaError_t e = cudaGetLastError();
+                if (e != cudaSuccess) std::cerr << "[RANK " << rank << "] CUDA ERR after tok_emb: " << cudaGetErrorString(e) << std::endl;
+            }
+            std::cerr << "[RANK " << rank << "] Token embedding forward DONE" << std::endl;
+            
+            std::cerr << "[RANK " << rank << "] Position embedding forward START..." << std::endl;
             DTensor pos_emb = wpe.forward(Dpos);     // [1, T, C] - broadcasts
             cudaDeviceSynchronize();
+            {
+                cudaError_t e = cudaGetLastError();
+                if (e != cudaSuccess) std::cerr << "[RANK " << rank << "] CUDA ERR after pos_emb: " << cudaGetErrorString(e) << std::endl;
+            }
+            std::cerr << "[RANK " << rank << "] Position embedding forward DONE" << std::endl;
             
             
             // Add embeddings
-            Tensor x = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
+            std::cerr << "[RANK " << rank << "] Adding embeddings..." << std::endl;
+            std::cerr << "[RANK " << rank << "]   tok_emb shape: ";
+            for (auto d : tok_emb.mutable_tensor().shape().dims) std::cerr << d << " ";
+            std::cerr << ", dev=" << tok_emb.mutable_tensor().device().index << std::endl;
+            std::cerr << "[RANK " << rank << "]   pos_emb shape: ";
+            for (auto d : pos_emb.mutable_tensor().shape().dims) std::cerr << d << " ";
+            std::cerr << ", dev=" << pos_emb.mutable_tensor().device().index << std::endl;
+            pos_emb.display();
+            tok_emb.display();
+            std::cout << "Done" << std::endl;
+            // Tensor x = tok_emb.mutable_tensor() + pos_emb.mutable_tensor();
+            Tensor x = tok_emb.mutable_tensor();
+            std::cout << "Completed. line: 334" << std::endl;
+            cudaDeviceSynchronize();
+            {
+                cudaError_t e = cudaGetLastError();
+                if (e != cudaSuccess) std::cerr << "[RANK " << rank << "] CUDA ERR after add: " << cudaGetErrorString(e) << std::endl;
+            }
+            std::cerr << "[RANK " << rank << "] Embeddings added" << std::endl;
+            
+            // Check for any CUDA errors from previous async operations
+            cudaError_t err = cudaGetLastError();
+            if (err != cudaSuccess) {
+                std::cerr << "[RANK " << rank << "] CUDA ERROR after embeddings: " 
+                          << cudaGetErrorString(err) << std::endl;
+            }
             
             // Apply MLP blocks with residual connections
+            int block_idx = 0;
             for (auto& mlp : mlps) {
+                std::cerr << "[RANK " << rank << "] MLP block " << block_idx << " START..." << std::endl;
                 Tensor residual = mlp.forward(x);
                 x = autograd::add(x, residual);
+                cudaDeviceSynchronize();
+                std::cerr << "[RANK " << rank << "] MLP block " << block_idx << " DONE" << std::endl;
+                block_idx++;
             }
             
             // Final normalization
+            std::cerr << "[RANK " << rank << "] Final LayerNorm START..." << std::endl;
             y.mutable_tensor() = ln_f.forward(x);
+            cudaDeviceSynchronize();
+            std::cerr << "[RANK " << rank << "] Final LayerNorm DONE" << std::endl;
             
             // Final projection to vocab size [B, T, V]
+            std::cerr << "[RANK " << rank << "] LM Head forward START..." << std::endl;
             logits = lm_head.forward(y);
+            cudaDeviceSynchronize();
+            std::cerr << "[RANK " << rank << "] LM Head forward DONE" << std::endl;
             
+            std::cerr << "[RANK " << rank << "] forward() COMPLETE" << std::endl;
             return logits.mutable_tensor();
         }
         
@@ -266,8 +377,8 @@
             std::vector<Tensor*> params;
             
             // Token and position embeddings
-            for (auto* p : wte.parameters()) params.push_back(p);
-            for (auto* p : wpe.parameters()) params.push_back(p);
+            for (auto* p : wte.parameters()) params.push_back( p );
+            for (auto* p : wpe.parameters()) params.push_back( p );
             
             // MLP blocks
             for (auto& mlp : mlps) {
@@ -407,9 +518,18 @@
             if (rank == 0) {
                 std::cout << "\nInitializing model on CUDA device " << rank << "..." << std::endl;
             }
-            
+            // std::c
             // Create model
             GPT model(mesh, pg, device);
+            
+            // Force sync and check for CUDA errors from model initialization
+            cudaDeviceSynchronize();
+            {
+                cudaError_t e = cudaGetLastError();
+                if (e != cudaSuccess) {
+                    std::cerr << "[RANK " << rank << "] CUDA ERR after model init: " << cudaGetErrorString(e) << std::endl;
+                }
+            }
             
             // Print parameter count
             if (rank == 0) {
@@ -425,7 +545,7 @@
             
             if (rank == 0) {
             }
-            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Data_Loader/BluWERP_data/";
+            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/BluWERP_data/";
             DataLoaderLite train_loader(config.B, config.T, 0, 1, "train", data_root, rank == 0, rank);
             
             DataLoaderLite val_loader(config.B, config.T, 0, 1, "val", data_root, rank == 0, rank);
@@ -488,6 +608,7 @@
                 }
                 
                 // Training step
+                print_gpu_memory("Step " + std::to_string(step) + " START", rank);
                 optimizer.zero_grad();
                 float loss_accum = 0.0f;
                 const int grad_accum_steps = 1; // Forced to 1 for isolation
@@ -521,12 +642,12 @@
                     if (world_size > 1) {
                         auto model_params = model.parameters();
                         for (size_t i = 0; i < model_params.size(); ++i) {
-                            auto* p = model_params[i];
-                            if (p->has_grad()) {
-                                float* grad_ptr = p->grad<float>();
-                                int64_t count = p->numel();
+                            auto& p = *model_params[i];
+                            if (p.has_grad()) {
+                                void* grad_ptr = p.grad();
+                                int64_t count = p.numel();
                                 pg->all_reduce_async(grad_ptr, grad_ptr, count, OwnTensor::Dtype::Float32, sum, false)->wait();
-                                Tensor grad_tensor = p->grad_view();
+                                Tensor grad_tensor = p.grad_view();
                                 grad_tensor *= (1.0f / world_size);
                             }
                         }
@@ -638,6 +759,7 @@
                 model.y.mutable_tensor().release();
                 // Optional: clear grads early to free memory if optimizer supports it
                 // optimizer.zero_grad(); 
+                print_gpu_memory("Step " + std::to_string(step) + " END", rank);
             }
             
             if (rank == 0) {

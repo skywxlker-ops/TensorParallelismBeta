@@ -344,7 +344,7 @@
             auto params = model.parameters();
             nn::Adam optimizer(params, 1e-4f);
 
-            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Data_Loader/BluWERP_data/";
+            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/BluWERP_data/";
             DataLoaderLite train_loader(config.B, config.T, 0, 1, "train", data_root, rank == 0, rank);
 
             int grad_accum_steps = 2; // Small accumulation steps

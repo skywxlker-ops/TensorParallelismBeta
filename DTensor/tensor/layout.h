@@ -21,6 +21,9 @@ class Layout {
     std::vector<int64_t> global_shape_;
 
 public: 
+    // Default constructor for member initialization
+    Layout() : mesh_(nullptr), global_shape_(), placement_(std::make_shared<Replicate>()) {}
+    
     Layout(const DeviceMesh& mesh, const std::vector<int64_t> global_shape) : mesh_(&mesh), global_shape_(global_shape), placement_(std::make_shared<Replicate>()) {}
 
     // Constructor for a new layout

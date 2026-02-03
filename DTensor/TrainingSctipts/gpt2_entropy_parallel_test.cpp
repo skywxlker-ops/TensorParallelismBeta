@@ -248,18 +248,37 @@
 
             // Get embeddings [B, T, C]
             DTensor tok_emb = wte.forward(Didx);     // [B, T, C]
+            check_cuda("wte.forward");
+            std::cout << "  [FWD] tok_emb done" << std::endl;
+            
             DTensor pos_emb = wpe.forward(Dpos);     // [1, T, C] - broadcasts
+            check_cuda("wpe.forward");
+            std::cout << "  [FWD] pos_emb done" << std::endl;
 
             // Combine token and position embeddings
-            Tensor x = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
+            auto tok_shape = tok_emb.mutable_tensor().shape().dims;
+            auto pos_shape = pos_emb.mutable_tensor().shape().dims;
+            std::cout << "  tok_emb device: " << tok_emb.mutable_tensor().device().index 
+                      << " shape: [" << tok_shape[0] << "," << tok_shape[1] << "," << tok_shape[2] << "]" << std::endl;
+            std::cout << "  pos_emb device: " << pos_emb.mutable_tensor().device().index 
+                      << " shape: [" << pos_shape[0] << "," << pos_shape[1] << "," << pos_shape[2] << "]" << std::endl;
+            std::cout.flush();
+            
+            Tensor x = tok_emb.mutable_tensor() + pos_emb.mutable_tensor();
+            check_cuda("autograd::add tok+pos");
+            std::cout << "  [FWD] add done" << std::endl;
 
             // Apply MLP blocks with residual connections
             int i = 0;
             for (auto& mlp : mlps) {
                 Tensor residual = mlp.forward(x);
+                check_cuda("mlp.forward");
                 x = autograd::add(x, residual);
+                check_cuda("mlp residual add");
+                std::cout << "  [FWD] MLP block " << i << " done" << std::endl;
                 i++;
             }
+            std::cout << "  [FWD] All MLP blocks done" << std::endl;
 
             // Final normalization
             Tensor y_local = ln_f.forward(x);
@@ -578,7 +597,7 @@
         Tensor local_max = OwnTensor::reduce_max(local_logits, {2}, true); 
         DTensor global_max_dt(logits_dt.get_device_mesh(), logits_dt.get_pg(), Layout(logits_dt.get_device_mesh(), {logits_dt.mutable_tensor().shape().dims[0], logits_dt.mutable_tensor().shape().dims[1], 1}), "global_max");
         global_max_dt.mutable_tensor() = local_max; 
-        global_max_dt.sync_w_autograd((op_t)1); // MAX
+        global_max_dt.sync_w_autograd((op_t)1); // MAX  
         Tensor global_max = global_max_dt.mutable_tensor(); 
         
         // 2. Global SumExp (Raw)
@@ -707,7 +726,7 @@
 
             if (rank == 0) {
             }
-            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor_v2.0/Data_Loader/BluWERP_data/";
+            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/BluWERP_data/";
             DataLoaderLite train_loader(config.B, config.T, 0, 1, "train", data_root, rank == 0, rank);
 
             DataLoaderLite val_loader(config.B, config.T, 0, 1, "val", data_root, rank == 0, rank);
@@ -736,7 +755,7 @@
 
             float val_loss_accum_log = -1.0f;  // -1 indicates no validation this step
 
-            for (int step = 0; step < max_steps; ++step) {
+            for (int step = 0; step < 1; ++step) {
                 auto t0 = std::chrono::high_resolution_clock::now();
 
                 // Validation every 1000 steps
@@ -754,14 +773,28 @@
                     }
 
                     for (int val_step = 0; val_step < val_loss_steps; ++val_step) {
+                        // CRITICAL: Set device before any GPU operations including to()
+                        cudaSetDevice(device.index);
+                        if (rank == 0) std::cout << "Val step " << val_step << " - starting" << std::endl;
+                        
                         Batch batch = val_loader.next_batch();
+                        if (rank == 0) std::cout << "  batch loaded" << std::endl;
+                        
                         Tensor x = batch.input.to(device);
+                        check_cuda("x.to(device)");
+                        if (rank == 0) std::cout << "  x.to done" << std::endl;
+                        
                         Tensor y = batch.target.to(device);
-                        // x.set_requires_grad(false);
-                        // y.set_requires_grad(false);
+                        check_cuda("y.to(device)");
+                        if (rank == 0) std::cout << "  y.to done" << std::endl;
 
                         model.forward(x); // This updates model.logits
+                        check_cuda("model.forward");
+                        if (rank == 0) std::cout << "  forward done" << std::endl;
+                        
                         Tensor loss = vocab_parallel_cross_entropy(*model.logits, y);
+                        check_cuda("vocab_parallel_cross_entropy");
+                        if (rank == 0) std::cout << "  cross_entropy done" << std::endl;
 
                         val_loss_accum += loss.to_cpu().data<float>()[0] / static_cast<float>(val_loss_steps);
 
@@ -796,6 +829,9 @@
 
                 float loss_accum_cpu = 0.0f;
                 for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
+                    // CRITICAL: Set device before any GPU operations including to()
+                    cudaSetDevice(device.index);
+                    
                     Batch batch = train_loader.next_batch();
                     Tensor x = batch.input.to(device);
                     Tensor y = batch.target.to(device);
@@ -824,12 +860,12 @@
                 if (world_size > 1) {
                     auto model_params = model.parameters();
                     for (size_t i = 0; i < model_params.size(); ++i) {
-                        auto* p = model_params[i];
-                        if (p->has_grad()) {
-                            float* grad_ptr = p->grad<float>();
-                            int64_t count = p->numel();
+                        auto& p = *model_params[i];
+                        if (p.has_grad()) {
+                            void* grad_ptr = p.grad();
+                            int64_t count = p.numel();
                             pg->all_reduce_async(grad_ptr, grad_ptr, count, OwnTensor::Dtype::Float32, sum, false)->wait();
-                            Tensor grad_tensor = p->grad_view();
+                            Tensor grad_tensor = p.grad_view();
                             grad_tensor *= (1.0f / world_size);
                         }
                     }

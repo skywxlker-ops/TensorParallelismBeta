@@ -164,7 +164,7 @@
     class GPT {
     public:
         GPTConfig config;
-        dnn::DEmbedding wte;  // Token embedding
+        dnn::DEmbeddingVParallel wte;  // Token embedding (Sharded)
         dnn::DEmbedding wpe;  // Position embedding
         std::vector<MLP> mlps;
         nn::LayerNorm ln_f; // Final LayerNorm
@@ -266,8 +266,8 @@
             std::vector<Tensor*> params;
             
             // Token and position embeddings
-            for (auto* p : wte.parameters()) params.push_back( p );
-            for (auto* p : wpe.parameters()) params.push_back( p );
+            for (auto* p : wte.parameters()) params.push_back(p);
+            for (auto* p : wpe.parameters()) params.push_back(p);
             
             // MLP blocks
             for (auto& mlp : mlps) {
@@ -371,13 +371,13 @@
             
             // Training hyperparameters
             const int global_batch = 65536;  // Global batch size
-            const int grad_accum_steps = 1;  // Force to 1 for isolation
+            const int grad_accum_steps = 20;  // Force to 1 for isolation
             
             // const float max_lr = 1e-4f;
-            const float max_lr = 1e-5f;
+            const float max_lr = 2e-5f;
             const float min_lr = max_lr * 0.1f;
             const int warmup_steps = 811;
-            const int max_steps = 8118;
+            const int max_steps = 3695;
             
             if (rank == 0) {
                 std::cout << "Configuration:" << std::endl;
