@@ -101,7 +101,7 @@ clean:
 	@echo "[CLEAN] Removing object files and executables..."
 	rm -f $(OBJS) $(TARGET) $(TEST_MLP_OBJS) test_mlp_forward
 	rm -f tests/*.o tests/test_device_mesh tests/test_matmul
-	rm -f TrainingSctipts/*.o
+	rm -f TrainingScripts/*.o
 	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom benchmarks/shard_benchmarking
 	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
 
@@ -491,7 +491,7 @@ dmlp_full: $(DMLP_FULL_OBJS) $(TENSOR_LIB_A)
 
 # GPT2 Parallel Test
 GPT2_PARALLEL_TEST_SRCS = \
-    TrainingSctipts/gpt2_parallel_test.cpp \
+    TrainingScripts/gpt2_parallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \
@@ -509,7 +509,7 @@ gpt2_parallel_test: $(GPT2_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 
 # GPT2 Entropy Parallel Test
 GPT2_ENTROPY_PARALLEL_TEST_SRCS = \
-    TrainingSctipts/gpt2_entropy_parallel_test.cpp \
+    TrainingScripts/gpt2_entropy_parallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \
@@ -517,7 +517,7 @@ GPT2_ENTROPY_PARALLEL_TEST_SRCS = \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
-GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingSctipts/EntropyKernels.o
+GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
 
 gpt2_entropy_parallel_test: $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: $@"
@@ -527,7 +527,7 @@ gpt2_entropy_parallel_test: $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 
 # GPT2 Sync Verification Test
 GPT2_SYNC_VERIFY_TEST_SRCS = \
-    TrainingSctipts/gpt2_sync_verify_test.cpp \
+    TrainingScripts/gpt2_sync_verify_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \
@@ -535,7 +535,7 @@ GPT2_SYNC_VERIFY_TEST_SRCS = \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
-GPT2_SYNC_VERIFY_TEST_OBJS = $(GPT2_SYNC_VERIFY_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingSctipts/MaskOps.o
+GPT2_SYNC_VERIFY_TEST_OBJS = $(GPT2_SYNC_VERIFY_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/MaskOps.o
 
 gpt2_sync_verify_test: $(GPT2_SYNC_VERIFY_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: $@"
@@ -545,7 +545,7 @@ gpt2_sync_verify_test: $(GPT2_SYNC_VERIFY_TEST_OBJS) $(TENSOR_LIB_A)
 
 # GPT2 MLP Parallel Test (Non-parallel Embedding/LM Head)
 GPT2_MLP_PARALLEL_TEST_SRCS = \
-    TrainingSctipts/gpt2_mlp_parallel_test.cpp \
+    TrainingScripts/gpt2_mlp_parallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \
@@ -564,7 +564,7 @@ gpt2_mlp_parallel_test: $(GPT2_MLP_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 
 # GPT2 Tensor Parallel Test
 GPT2_TENSOR_PARALLEL_TEST_SRCS = \
-    TrainingSctipts/GPT2_TesnorParallel_test.cpp \
+    TrainingScripts/GPT2_TesnorParallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl_new.cpp \

@@ -30,7 +30,7 @@ class DTensor {
 public:
 
     DTensor();  // Default constructor for member initialization
-    DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name = "");
+    DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name = "",int sd = 0.2);
     ~DTensor();
 
     void setData(const std::vector<float>& host_data) ;
@@ -132,6 +132,7 @@ private:
     Layout layout_;
     
     OwnTensor::Tensor tensor_;      
+    
     // OwnTensor::Tensor temp_tensor_; 
 
 

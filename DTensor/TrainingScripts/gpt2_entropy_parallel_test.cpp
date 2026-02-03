@@ -123,8 +123,8 @@
             h = DTensor(mesh, pg, in_layout,"Input");
 
             auto device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank);
-            fc1 = dnn::DColumnLinear(mesh, pg, 1, T_, C_, F_, {}, true);
-            fc4 = dnn::DRowLinear(mesh, pg, 1, T_, F_, C_, {}, true);
+            fc1 = dnn::DColumnLinear(mesh, pg, B_, T_, C_, F_, {}, true);
+            fc4 = dnn::DRowLinear(mesh, pg, B_, T_, F_, C_, {}, true);
             ln.to(device);
         }
 
@@ -144,7 +144,12 @@
         }
 
         std::vector<Tensor*> parameters() {
-            std::vector<Tensor*> params = {&fc1.weight.get()->mutable_tensor(), &fc1.bias.get()->mutable_tensor(), &fc4.weight.get()->mutable_tensor(), &fc4.bias.get()->mutable_tensor()};
+            std::vector<Tensor*> params = {&fc1.weight.get()->mutable_tensor(), &fc4.weight.get()->mutable_tensor(), &fc4.bias.get()->mutable_tensor()};
+            if (fc1.use_bias() == true && fc4.use_bias() == true){
+                params.push_back(&fc1.bias.get()->mutable_tensor());
+                params.push_back(&fc4.bias.get()->mutable_tensor());
+            }
+
             for (auto& p : ln.parameters()) {
                 // We need to const_cast or store pointers.
                 // Since NN module returns by value, we need to access members directly.
@@ -155,6 +160,7 @@
             // But gpt2_test expects Tensor*.
             // I should just accept that I need pointers to the member tensors.
             params.push_back(&ln.weight);
+
             params.push_back(&ln.bias);
             return params;
         }
@@ -218,7 +224,7 @@
             float std_init = 0.02f;
             wte.weight->mutable_tensor().copy_(mlp_forward::norm_rand_weight(wte.weight->mutable_tensor().shape(), Dtype::Float32, Device::CPU, false, std_init));
             wpe.weight->mutable_tensor().copy_(mlp_forward::norm_rand_weight(wpe.weight->mutable_tensor().shape(), Dtype::Float32, Device::CPU, false, std_init));
-
+            std::cout << "  [GPT Constructor] weight initializtion done" << std::endl;
             float std_final = std::sqrt(2.0f / static_cast<float>(config.C));
             // W_final = Tensor::randn<float>(Shape{{config.C, config.V}}, opts, seed + 1000, std_final);
         //    W_final.weight = wte.weight.t();
@@ -235,7 +241,7 @@
             std::iota(pos_idx.begin(), pos_idx.end(), 0);
             DTensor Dpos(mesh, pg, Layout(mesh, {1, T}), "PositionIndices");
             Dpos.setData(pos_idx);
-
+           std::cout << "  [FWD] pod_emb done" << std::endl;
             // Shard input indices across batch/replicate?
             // In TP, we usually replicate indices.
             Layout in_layout(mesh, {B, T});
@@ -316,6 +322,7 @@
         int64_t count_params() {
             int64_t total = 0;
             for (auto* p : parameters()) {
+                p->display();
                 total += p->numel();
             }
             return total;
@@ -765,12 +772,12 @@
                     int val_loss_steps = 20;
 
                     // Disable gradients for validation to save memory
-                    auto params = model.parameters();
-                    std::vector<bool> orig_requires_grad;
-                    for (auto* p : params) {
-                        orig_requires_grad.push_back(p->requires_grad());
-                        p->set_requires_grad(false);
-                    }
+                    // auto params = model.parameters();
+                    // std::vector<bool> orig_requires_grad;
+                    // for (auto* p : params) {
+                    //     orig_requires_grad.push_back(p->requires_grad());
+                    //     p->set_requires_grad(false);
+                    // }
 
                     for (int val_step = 0; val_step < val_loss_steps; ++val_step) {
                         // CRITICAL: Set device before any GPU operations including to()
@@ -806,9 +813,9 @@
                     }
 
                     // Restore gradients
-                    for (size_t i = 0; i < params.size(); ++i) {
-                        params[i]->set_requires_grad(orig_requires_grad[i]);
-                    }
+                    // for (size_t i = 0; i < params.size(); ++i) {
+                    //     params[i]->set_requires_grad(orig_requires_grad[i]);
+                    // }
 
                     if (rank == 0) {
                         std::cout << "validation loss: " << std::fixed << std::setprecision(4) << val_loss_accum << std::endl;
@@ -957,4 +964,4 @@
             std::cerr << "ERROR: " << e.what() << std::endl;
             return 1;
         }
-    }
+    } 

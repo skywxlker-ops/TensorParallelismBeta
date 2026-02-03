@@ -74,7 +74,7 @@ DTensor::DTensor()
 {
 }
 
-DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name)
+DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name, int sd)
     : rank_(pg->get_rank()),
       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
       device_mesh_(&device_mesh),
@@ -118,8 +118,8 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
         size_ = 1;
         for (int d : layout_.get_global_shape()) size_ *= d;  
         
-
-        tensor_ = OwnTensor::Tensor::rand<float>( shape, opts) ;
+    
+        tensor_ = OwnTensor::Tensor::randn<float>( shape, opts, 42, sd) ;
         
 
         // value_ = ag::make_tensor(tensor_, name);

@@ -571,11 +571,11 @@
 
                     // Disable gradients for validation to save memory
                     auto params = model.parameters();
-                    std::vector<bool> orig_requires_grad;
-                    for (auto* p : params) {
-                        orig_requires_grad.push_back(p->requires_grad());
-                        p->set_requires_grad(false);
-                    }
+                    // std::vector<bool> orig_requires_grad;
+                    // for (auto* p : params) {
+                    //     orig_requires_grad.push_back(p->requires_grad());
+                    //     p->set_requires_grad(false);
+                    // }
                     
                     for (int val_step = 0; val_step < val_loss_steps; ++val_step) {
                         Batch batch = val_loader.next_batch();
@@ -597,9 +597,9 @@
                     }
 
                     // Restore gradients
-                    for (size_t i = 0; i < params.size(); ++i) {
-                        params[i]->set_requires_grad(orig_requires_grad[i]);
-                    }
+                    // for (size_t i = 0; i < params.size(); ++i) {
+                    //     params[i]->set_requires_grad(orig_requires_grad[i]);
+                    // }
 
                     if (rank == 0) {
                         std::cout << "validation loss: " << std::fixed << std::setprecision(4) << val_loss_accum << std::endl;
