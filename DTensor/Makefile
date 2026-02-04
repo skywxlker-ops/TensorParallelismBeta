@@ -2,11 +2,11 @@ CXX = /home/blu-bridge25/.local/bin/mpic++
 
 NVCC_LINKER = /usr/local/cuda/bin/nvcc
 NVCC = /usr/local/cuda/bin/nvcc
-NVCC_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -ccbin=$(CXX)
+NVCC_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -G -arch=sm_86 -ccbin=$(CXX)
 
 CXXFLAGS += -fPIC -std=c++17 -O3 -g -DWITH_CUDA
 
-NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -ccbin=/home/blu-bridge25/.local/bin/mpic++
+NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -G -arch=sm_86 -ccbin=/home/blu-bridge25/.local/bin/mpic++
 
 TARGET = main
 

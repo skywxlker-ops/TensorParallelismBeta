@@ -116,15 +116,15 @@
     class MLP {
         public:
 
-        MLP(int64_t B, int64_t T, int64_t C, int64_t F, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg, uint64_t seed = 1234)
-        : B_(B), T_(T), C_(C), F_(F), ln(C)
+        MLP(GPTConfig config, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg, uint64_t seed = 1234)
+        : B_(config.B), T_(config.T), C_(config.C), F_(config.F), ln(config.C)
         {
-            Layout in_layout(mesh, {B,T,C});
+            Layout in_layout(mesh, {B_,T_,C_});
             h = DTensor(mesh, pg, in_layout,"Input");
 
             auto device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank);
             fc1 = dnn::DColumnLinear(mesh, pg, B_, T_, C_, F_, {}, true);
-            fc4 = dnn::DRowLinear(mesh, pg, B_, T_, F_, C_, {}, true);
+            fc4 = dnn::DRowLinear(mesh, pg, B_, T_, F_, C_, {}, true, (0.2 * std::pow(( 2 * config.n_layers), -0.5)));
             ln.to(device);
         }
 
@@ -194,6 +194,9 @@
         dnn::DLMHead lm_head;
         std::unique_ptr<DTensor> y;
         std::unique_ptr<DTensor> logits;
+        Layout in_layout;
+        DTensor Didx;
+        DTensor Dpos;
     private:
         DeviceMesh& mesh;
         std::shared_ptr<ProcessGroupNCCL> pg;
@@ -211,19 +214,22 @@
             ln_f.to(device);
             // Create MLP blocks
             for (int i = 0; i < config.n_layers; ++i) {
-                mlps.emplace_back(config.B, config.T, config.C, config.F, mesh, pg, seed + 200 + i * 10);
+                mlps.emplace_back(config, mesh, pg, seed + 200 + i * 10);
             }
 
             // Final linear layer (no bias like in the reference)
             TensorOptions opts = TensorOptions().with_dtype(Dtype::Float32)
                                             .with_device(device)
                                             .with_req_grad(true);
-
+            DTensor Dpos(mesh, pg, Layout(mesh, {1, config.F}), "PositionIndices");
+            Layout in_layout(mesh, {config.B, config.T});
+            DTensor Didx(mesh, pg, in_layout, "InputIndices"); 
             // Initialize embeddings with normal distribution using helper
             // Use same seed (42 internally) on all ranks for replicated parameters
             float std_init = 0.02f;
-            wte.weight->mutable_tensor().copy_(mlp_forward::norm_rand_weight(wte.weight->mutable_tensor().shape(), Dtype::Float32, Device::CPU, false, std_init));
-            wpe.weight->mutable_tensor().copy_(mlp_forward::norm_rand_weight(wpe.weight->mutable_tensor().shape(), Dtype::Float32, Device::CPU, false, std_init));
+            std::cout << (device.device == Device::CUDA ? "CUDA" : "CPU") << device.index << std::endl;
+            mlp_forward::norm_rand_weight(wte.weight->mutable_tensor().shape(), Dtype::Float32, device, false, std_init);
+            mlp_forward::norm_rand_weight(wpe.weight->mutable_tensor().shape(), Dtype::Float32, device, false, std_init);
             std::cout << "  [GPT Constructor] weight initializtion done" << std::endl;
             float std_final = std::sqrt(2.0f / static_cast<float>(config.C));
             // W_final = Tensor::randn<float>(Shape{{config.C, config.V}}, opts, seed + 1000, std_final);
@@ -239,18 +245,19 @@
             // Build position indices [1, T]
             std::vector<float> pos_idx(T);
             std::iota(pos_idx.begin(), pos_idx.end(), 0);
-            DTensor Dpos(mesh, pg, Layout(mesh, {1, T}), "PositionIndices");
+            
             Dpos.setData(pos_idx);
-           std::cout << "  [FWD] pod_emb done" << std::endl;
+            std::cout<<" \n\n Set Data for pos_emb done \n\n"<<std::endl;
+            std::cout << "  [FWD] pod_emb done" << std::endl;
             // Shard input indices across batch/replicate?
             // In TP, we usually replicate indices.
-            Layout in_layout(mesh, {B, T});
-            DTensor Didx(mesh, pg, in_layout, "InputIndices");
+        
             Tensor idx_cpu = idx.to_cpu().as_type(Dtype::Float32);
             std::vector<float> idx_vec(idx_cpu.numel());
             float* ptr = idx_cpu.data<float>();
             for(size_t i=0; i<idx_cpu.numel(); ++i) idx_vec[i] = ptr[i];
             Didx.setData(idx_vec);
+            std::cout<<" \n\n Set Data for idx_emb done \n\n"<<std::endl;
 
             // Get embeddings [B, T, C]
             DTensor tok_emb = wte.forward(Didx);     // [B, T, C]
@@ -322,7 +329,7 @@
         int64_t count_params() {
             int64_t total = 0;
             for (auto* p : parameters()) {
-                p->display();
+                // p->display();
                 total += p->numel();
             }
             return total;
@@ -700,6 +707,7 @@
 
             // Set device
             // int rank = 0;  // Single GPU for now
+            std::cout<<"\n\n\n\n\n rank = "<<rank<<"\n\n\n\n\n"<<std::endl;
             DeviceIndex device(Device::CUDA, rank);
             cudaSetDevice(rank);
 
@@ -718,6 +726,8 @@
 
             // Create model
             GPT model(mesh, pg, device);
+
+            std::cout << "\n\n\n\n\n Completed \n\n\n\n\n" << std::endl;
 
             // Print parameter count
             if (rank == 0) {
@@ -762,7 +772,7 @@
 
             float val_loss_accum_log = -1.0f;  // -1 indicates no validation this step
 
-            for (int step = 0; step < 1; ++step) {
+            for (int step = 0; step < max_steps; ++step) {
                 auto t0 = std::chrono::high_resolution_clock::now();
 
                 // Validation every 1000 steps
@@ -835,8 +845,19 @@
                 Tensor loss_accum_gpu = Tensor::zeros(Shape{{1}}, TensorOptions().with_device(device));
 
                 float loss_accum_cpu = 0.0f;
+
+                Tensor loss;
+
                 for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
                     // CRITICAL: Set device before any GPU operations including to()
+
+                    std::cout<<"\n microstep = "<<micro_step<<std::endl;
+                    if (micro_step > 0) {
+                        if (loss.is_valid()) loss.release();
+                        if (model.logits) model.logits->mutable_tensor().release();
+                        if (model.y) model.y->mutable_tensor().release();
+                    }
+
                     cudaSetDevice(device.index);
                     
                     Batch batch = train_loader.next_batch();
@@ -845,7 +866,7 @@
 
                     // Forward
                     model.forward(x);
-                    Tensor loss = vocab_parallel_cross_entropy(*model.logits, y);
+                    loss = vocab_parallel_cross_entropy(*model.logits, y);
 
                     float loss_val = loss.to_cpu().data<float>()[0];
                     loss_accum_cpu += loss_val;
@@ -857,26 +878,18 @@
                     // Crucial: Sync BEFORE release to ensure GPU is done with buffers
                     cudaDeviceSynchronize();
 
+                    model.count_params();
                     // Release refs to clear Autograd graph - MUST happen every micro-step
-                    loss.release();
-                    if (model.logits) model.logits->mutable_tensor().release();
-                    if (model.y) model.y->mutable_tensor().release();
+                    // loss.release();
+                    // if (model.logits) model.logits->mutable_tensor().release();
+                    // if (model.y) model.y->mutable_tensor().release();
                 } // End of micro-step loop
 
-                // Manual Gradient Synchronization for all parameters - ONCE per global step
-                if (world_size > 1) {
-                    auto model_params = model.parameters();
-                    for (size_t i = 0; i < model_params.size(); ++i) {
-                        auto& p = *model_params[i];
-                        if (p.has_grad()) {
-                            void* grad_ptr = p.grad();
-                            int64_t count = p.numel();
-                            pg->all_reduce_async(grad_ptr, grad_ptr, count, OwnTensor::Dtype::Float32, sum, false)->wait();
-                            Tensor grad_tensor = p.grad_view();
-                            grad_tensor *= (1.0f / world_size);
-                        }
-                    }
-                }
+                // Final cleanup after all micro-steps complete
+                if (model.logits) model.logits->mutable_tensor().release();
+                if (model.y) model.y->mutable_tensor().release();
+               
+
 
                 loss_accum_gpu.fill(loss_accum_cpu / grad_accum_steps);
 
@@ -947,8 +960,8 @@
                 val_loss_accum_log = -1.0f;  // Reset for next iteration
 
                 // CRITICAL FIX: Release graph holding tensors
-                if (model.logits) model.logits->mutable_tensor().release();
-                if (model.y) model.y->mutable_tensor().release();
+                // if (model.logits) model.logits->mutable_tensor().release();
+                // if (model.y) model.y->mutable_tensor().release();
                 // Optional: clear grads early to free memory if optimizer supports it
                 // optimizer.zero_grad();
             }
