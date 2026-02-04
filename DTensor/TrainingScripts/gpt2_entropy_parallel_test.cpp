@@ -150,11 +150,11 @@
                 params.push_back(&fc4.bias.get()->mutable_tensor());
             }
 
-            for (auto& p : ln.parameters()) {
+            // for (auto& p : ln.parameters()) {
                 // We need to const_cast or store pointers.
                 // Since NN module returns by value, we need to access members directly.
                 // But LayerNorm members are public.
-            }
+            // }
             // Wait, LayerNorm parameters() returns copies? Module::parameters returns vector<Tensor>.
             // Tensor is a shared_ptr wrapper, so copies are fine.
             // But gpt2_test expects Tensor*.
@@ -162,6 +162,7 @@
             params.push_back(&ln.weight);
 
             params.push_back(&ln.bias);
+
             return params;
         }
 
@@ -221,9 +222,13 @@
             TensorOptions opts = TensorOptions().with_dtype(Dtype::Float32)
                                             .with_device(device)
                                             .with_req_grad(true);
-            DTensor Dpos(mesh, pg, Layout(mesh, {1, config.F}), "PositionIndices");
+            Dpos = DTensor(mesh, pg, Layout(mesh, {1, config.T}), "PositionIndices");
+            std::cout<<"\n\n B = "<<config.B<<"\n\n"<<std::endl;
+            std::cout<<"\n\n T = "<<config.T<<"\n\n"<<std::endl;
+            std::cout<<"\n\n C = "<<config.C<<"\n\n"<<std::endl;
+            std::cout<<"\n\n Dpos global shape = [ "<<Dpos.get_layout().get_global_shape()[0]<<" , "<<Dpos.get_layout().get_global_shape()[1]<<" ] \n\n"<<std::endl;            
             Layout in_layout(mesh, {config.B, config.T});
-            DTensor Didx(mesh, pg, in_layout, "InputIndices"); 
+            Didx = DTensor(mesh, pg, in_layout, "InputIndices"); 
             // Initialize embeddings with normal distribution using helper
             // Use same seed (42 internally) on all ranks for replicated parameters
             float std_init = 0.02f;
@@ -242,12 +247,23 @@
             int64_t B = shape[0];
             int64_t T = shape[1];
 
+            std::cout<<"\n\n idx shape = [ "<<shape[0]<<" , "<<shape[1]<<" ] \n\n"<<std::endl; 
+            std::cout<<"\n\n Didx shape = [ "<<Didx.mutable_tensor().shape().dims[0]<<" , "<<Didx.mutable_tensor().shape().dims[1]<<" ] \n\n"<<std::endl; 
+           
+            std::cout<<"\n\n Didx size = [ "<<Didx.mutable_tensor().numel()<<" \n\n"<<std::endl; 
+
+            std::cout<<"\n\n Dpos shape = [ "<<Dpos.mutable_tensor().shape().dims[0]<<" , "<<Dpos.mutable_tensor().shape().dims[1]<<" ] \n\n"<<std::endl; 
             // Build position indices [1, T]
+
+            std::cout<<"\n\n Dpos size = [ "<<Dpos.getSize()<<" ] \n\n"<<std::endl; 
+            
             std::vector<float> pos_idx(T);
             std::iota(pos_idx.begin(), pos_idx.end(), 0);
             
+            std::cout<<"\n\n pos_idx shape = [ "<<pos_idx.size() <<" ] \n\n"<<std::endl; 
+            std::cout<<" \n\n Set Data for pos_emb not done \n\n"<<std::endl;
             Dpos.setData(pos_idx);
-            std::cout<<" \n\n Set Data for pos_emb done \n\n"<<std::endl;
+
             std::cout << "  [FWD] pod_emb done" << std::endl;
             // Shard input indices across batch/replicate?
             // In TP, we usually replicate indices.
@@ -256,8 +272,9 @@
             std::vector<float> idx_vec(idx_cpu.numel());
             float* ptr = idx_cpu.data<float>();
             for(size_t i=0; i<idx_cpu.numel(); ++i) idx_vec[i] = ptr[i];
+            std::cout<<" \n\n Set Data for idx_emb not done \n\n"<<std::endl;
+            
             Didx.setData(idx_vec);
-            std::cout<<" \n\n Set Data for idx_emb done \n\n"<<std::endl;
 
             // Get embeddings [B, T, C]
             DTensor tok_emb = wte.forward(Didx);     // [B, T, C]

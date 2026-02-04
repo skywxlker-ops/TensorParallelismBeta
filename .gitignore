@@ -36,3 +36,4 @@ DTensor/examples/gpt2_tensor_parallel_test
 DTensor/examples/gpt2_mlp_parallel_test
 DTensor/examples/gpt2_entropy_parallel_test
 DTensor/tests/summa
+*.nvcudmp

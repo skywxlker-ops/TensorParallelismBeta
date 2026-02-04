@@ -72,6 +72,7 @@ DTensor::DTensor()
       shape_(),
       tensor_()
 {
+    std::cout<<"default DTensor contructor :  size = "<< size_<< " rank =  "<< rank_ << std::endl;
 }
 
 DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name, int sd)
@@ -113,15 +114,19 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
         opts.dtype = OwnTensor::Dtype::Float32;
         opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, local_gpu);
         OwnTensor::Shape shape{shape_};
-        tensor_ = OwnTensor::Tensor(shape, opts);
+        // tensor_ = OwnTensor::Tensor(shape, opts);
         // opts.with_req_grad(true);    
-        size_ = 1;
-        for (int d : layout_.get_global_shape()) size_ *= d;  
         
-    
+        
+        // for (int d : layout_.get_global_shape()) size_ *= d;  
+        
+        
         tensor_ = OwnTensor::Tensor::randn<float>( shape, opts, 42, sd) ;
         
-
+        size_ = tensor_.numel();
+        std::cout<<"\n\n shape = [ "<<tensor_.shape().dims[0]<<" , "<<tensor_.shape().dims[1]<<" ] \n\n"<<std::endl; 
+        
+        std::cout<<" size = "<< size_<< " rank =  "<< rank_ << " name = "<< name <<std::endl;
         // value_ = ag::make_tensor(tensor_, name);
         
         // // Enable gradients for this tensor and initialize grad
