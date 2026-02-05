@@ -281,24 +281,23 @@
             int64_t B = shape[0];
             int64_t T = shape[1];
 
+            // Debug prints removed for cleaner output
+            /*
             std::cout<<"\n\n idx shape = [ "<<shape[0]<<" , "<<shape[1]<<" ] \n\n"<<std::endl; 
             std::cout<<"\n\n Didx shape = [ "<<Didx.mutable_tensor().shape().dims[0]<<" , "<<Didx.mutable_tensor().shape().dims[1]<<" ] \n\n"<<std::endl; 
-           
             std::cout<<"\n\n Didx size = [ "<<Didx.mutable_tensor().numel()<<" \n\n"<<std::endl; 
-
             std::cout<<"\n\n Dpos shape = [ "<<Dpos.mutable_tensor().shape().dims[0]<<" , "<<Dpos.mutable_tensor().shape().dims[1]<<" ] \n\n"<<std::endl; 
-            // Build position indices [1, T]
-
             std::cout<<"\n\n Dpos size = [ "<<Dpos.getSize()<<" ] \n\n"<<std::endl; 
+            */
             
             std::vector<float> pos_idx(T);
             std::iota(pos_idx.begin(), pos_idx.end(), 0);
             
-            std::cout<<"\n\n pos_idx shape = [ "<<pos_idx.size() <<" ] \n\n"<<std::endl; 
-            std::cout<<" \n\n Set Data for pos_emb not done \n\n"<<std::endl;
+            // std::cout<<"\n\n pos_idx shape = [ "<<pos_idx.size() <<" ] \n\n"<<std::endl; 
+            // std::cout<<" \n\n Set Data for pos_emb not done \n\n"<<std::endl;
             Dpos.setData(pos_idx);
 
-            std::cout << "  [FWD] pod_emb done" << std::endl;
+            // std::cout << "  [FWD] pod_emb done" << std::endl;
             // Shard input indices across batch/replicate?
             // In TP, we usually replicate indices.
         
@@ -306,31 +305,31 @@
             std::vector<float> idx_vec(idx_cpu.numel());
             float* ptr = idx_cpu.data<float>();
             for(size_t i=0; i<idx_cpu.numel(); ++i) idx_vec[i] = ptr[i];
-            std::cout<<" \n\n Set Data for idx_emb not done \n\n"<<std::endl;
+            // std::cout<<" \n\n Set Data for idx_emb not done \n\n"<<std::endl;
             
             Didx.setData(idx_vec);
 
             // Get embeddings [B, T, C]
             DTensor tok_emb = wte.forward(Didx);     // [B, T, C]
             check_cuda("wte.forward");
-            print_gpu_mem("After tok_emb");
+            // print_gpu_mem("After tok_emb");
             
             DTensor pos_emb = wpe.forward(Dpos);     // [1, T, C] - broadcasts
             check_cuda("wpe.forward");
-            print_gpu_mem("After pos_emb");
+            // print_gpu_mem("After pos_emb");
 
             // Combine token and position embeddings
             auto tok_shape = tok_emb.mutable_tensor().shape().dims;
             auto pos_shape = pos_emb.mutable_tensor().shape().dims;
-            std::cout << "  tok_emb device: " << tok_emb.mutable_tensor().device().index 
-                      << " shape: [" << tok_shape[0] << "," << tok_shape[1] << "," << tok_shape[2] << "]" << std::endl;
-            std::cout << "  pos_emb device: " << pos_emb.mutable_tensor().device().index 
-                      << " shape: [" << pos_shape[0] << "," << pos_shape[1] << "," << pos_shape[2] << "]" << std::endl;
-            std::cout.flush();
+            // std::cout << "  tok_emb device: " << tok_emb.mutable_tensor().device().index 
+            //           << " shape: [" << tok_shape[0] << "," << tok_shape[1] << "," << tok_shape[2] << "]" << std::endl;
+            // std::cout << "  pos_emb device: " << pos_emb.mutable_tensor().device().index 
+            //           << " shape: [" << pos_shape[0] << "," << pos_shape[1] << "," << pos_shape[2] << "]" << std::endl;
+            // std::cout.flush();
             
-            Tensor x = tok_emb.mutable_tensor() + pos_emb.mutable_tensor();
+            Tensor x = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
             check_cuda("autograd::add tok+pos");
-            print_gpu_mem("After tok+pos add");
+            // print_gpu_mem("After tok+pos add");
 
             // Apply MLP blocks with residual connections
             int i = 0;
@@ -339,29 +338,29 @@
                 check_cuda("mlp.forward");
                 x = autograd::add(x, residual);
                 check_cuda("mlp residual add");
-                print_gpu_mem("After MLP block " + std::to_string(i));
+                // print_gpu_mem("After MLP block " + std::to_string(i));
                 i++;
             }
-            std::cout << "  [FWD] All MLP blocks done" << std::endl;
+            // std::cout << "  [FWD] All MLP blocks done" << std::endl;
 
             // Final normalization
-            print_gpu_mem("Before ln_f");
+            // print_gpu_mem("Before ln_f");
             Tensor y_local = ln_f.forward(x);
             // Reuse existing DTensor or create on first call only
             if (!y) {
                 y = std::make_unique<DTensor>(mesh, pg, Layout(mesh, {B, T, config.C}), "ln_f_output");
             }
             y->mutable_tensor() = y_local;
-            print_gpu_mem("After ln_f");
+            // print_gpu_mem("After ln_f");
 
             // Final projection to vocab size [B, T, V]
-            print_gpu_mem("Before lm_head");
+            // print_gpu_mem("Before lm_head");
             DTensor logits_out = lm_head.forward(*y);
             if (!logits) {
                 logits = std::make_unique<DTensor>(mesh, pg, logits_out.get_layout(), "logits");
             }
             logits->mutable_tensor() = logits_out.mutable_tensor();
-            print_gpu_mem("After lm_head");
+            // print_gpu_mem("After lm_head");
 
             return logits->mutable_tensor();
         }
@@ -615,7 +614,7 @@
                                     const Tensor& sum_exp, const Tensor& max_logits,
                                     int64_t start_v)
             : Node(1), // One input: logits
-              logits_(logits), targets_(targets.detach()), 
+              logits_(logits.detach()), targets_(targets.detach()), 
               sum_exp_(sum_exp.detach()), max_logits_(max_logits.detach()),
               start_v_(start_v) {
             B_ = logits.shape().dims[0];
@@ -770,13 +769,13 @@
 
             // Training hyperparameters
             const int global_batch = 65536;  // Global batch size
-            const int grad_accum_steps = 4; // Hardcoded for leak testing
+            const int grad_accum_steps = global_batch / ( config.B * config.T );  // Accumulate gradients
 
             // const float max_lr = 1e-4f;
             const float max_lr = 3e-5f;
             const float min_lr = max_lr * 0.1f;
             const int warmup_steps = 811;
-            const int max_steps = 5; // Reduced for leak testing
+            const int max_steps = 8118;
 
             if (rank == 0) {
                 std::cout << "Configuration:" << std::endl;
@@ -813,7 +812,7 @@
             // Create model
             GPT model(mesh, pg, device);
 
-            std::cout << "\n\n\n\n\n Completed \n\n\n\n\n" << std::endl;
+            // std::cout << "\n\n\n\n\n Completed \n\n\n\n\n" << std::endl;
 
             // Print parameter count
             if (rank == 0) {
@@ -860,8 +859,8 @@
 
             for (int step = 0; step < max_steps; ++step) {
                 // Check leak at start of step (when previous step's vars should be gone)
-                std::cout << "\n=== START OF STEP " << step << " ===" << std::endl;
-                OwnTensor::TensorImpl::print_active_tensors();
+                if (rank == 0) std::cout << "\n=== START OF STEP " << step << " ===" << std::endl;
+                // OwnTensor::TensorImpl::print_active_tensors();
                 
                 auto t0 = std::chrono::high_resolution_clock::now();
 
@@ -872,36 +871,36 @@
                     int val_loss_steps = 20;
 
                     // Disable gradients for validation to save memory
-                    // auto params = model.parameters();
-                    // std::vector<bool> orig_requires_grad;
-                    // for (auto* p : params) {
-                    //     orig_requires_grad.push_back(p->requires_grad());
-                    //     p->set_requires_grad(false);
-                    // }
+                    auto params = model.parameters();
+                    std::vector<bool> orig_requires_grad;
+                    for (auto* p : params) {
+                        orig_requires_grad.push_back(p->requires_grad());
+                        p->set_requires_grad(false);
+                    }
 
                     for (int val_step = 0; val_step < val_loss_steps; ++val_step) {
                         // CRITICAL: Set device before any GPU operations including to()
                         cudaSetDevice(device.index);
-                        if (rank == 0) std::cout << "Val step " << val_step << " - starting" << std::endl;
+                        // if (rank == 0) std::cout << "Val step " << val_step << " - starting" << std::endl;
                         
                         Batch batch = val_loader.next_batch();
-                        if (rank == 0) std::cout << "  batch loaded" << std::endl;
+                        // if (rank == 0) std::cout << "  batch loaded" << std::endl;
                         
                         Tensor x = batch.input.to(device);
                         check_cuda("x.to(device)");
-                        if (rank == 0) std::cout << "  x.to done" << std::endl;
+                        // if (rank == 0) std::cout << "  x.to done" << std::endl;
                         
                         Tensor y = batch.target.to(device);
                         check_cuda("y.to(device)");
-                        if (rank == 0) std::cout << "  y.to done" << std::endl;
+                        // if (rank == 0) std::cout << "  y.to done" << std::endl;
 
                         model.forward(x); // This updates model.logits
                         check_cuda("model.forward");
-                        if (rank == 0) std::cout << "  forward done" << std::endl;
+                        // if (rank == 0) std::cout << "  forward done" << std::endl;
                         
                         Tensor loss = vocab_parallel_cross_entropy(*model.logits, y);
                         check_cuda("vocab_parallel_cross_entropy");
-                        if (rank == 0) std::cout << "  cross_entropy done" << std::endl;
+                        // if (rank == 0) std::cout << "  cross_entropy done" << std::endl;
 
                         val_loss_accum += loss.to_cpu().data<float>()[0] / static_cast<float>(val_loss_steps);
 
@@ -913,9 +912,9 @@
                     }
 
                     // Restore gradients
-                    // for (size_t i = 0; i < params.size(); ++i) {
-                    //     params[i]->set_requires_grad(orig_requires_grad[i]);
-                    // }
+                    for (size_t i = 0; i < params.size(); ++i) {
+                        params[i]->set_requires_grad(orig_requires_grad[i]);
+                    }
 
                     if (rank == 0) {
                         std::cout << "validation loss: " << std::fixed << std::setprecision(4) << val_loss_accum << std::endl;
@@ -941,8 +940,9 @@
                 for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
                     // CRITICAL: Set device before any GPU operations including to()
 
-                    std::cout<<"\n microstep = "<<micro_step<<std::endl;
-                    print_gpu_mem("Start of micro_step " + std::to_string(micro_step));
+                    if (rank == 0) {
+                        std::cout << "Micro " << micro_step << " Tensors: " << OwnTensor::Tensor::get_active_tensor_count() << std::endl;
+                    }
 
                     cudaSetDevice(device.index);
                     
@@ -960,20 +960,52 @@
                     float loss_val = loss.to_cpu().data<float>()[0];
                     loss_accum_cpu += loss_val;
 
+                    if (rank == 0 && micro_step == 0) {
+                        std::cout << "  loss requires_grad: " << (loss.requires_grad() ? "true" : "false") << std::endl;
+                    }
+
                     // Backward with scaling
                     Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 1.0f / grad_accum_steps);
                     loss.backward(&grad_scale);
 
+                    if (rank == 0 && micro_step == 0) {
+                        auto params = model.parameters();
+                        std::cout << "  [DEBUG] model.parameters() size: " << params.size() << std::endl;
+                        if (!params.empty()) {
+                            if (params[0]->has_grad()) {
+                                Tensor g = params[0]->grad_view();
+                                float g0 = g.to_cpu().data<float>()[1]; // Peek 2nd element
+                                std::cout << "  [DEBUG] Param 0 grad[1] peek: " << g0 << std::endl;
+                            } else {
+                                std::cout << "  [DEBUG] Param 0 HAS NO GRAD" << std::endl;
+                            }
+                        }
+                    }
+
+                    // Detach parameter gradients to prevent history accumulation
+                    for (auto* p : model.parameters()) {
+                        if (p->has_grad()) {
+                            p->set_grad(p->grad_view().detach());
+                        }
+                    }
+
                     // Crucial: Sync BEFORE release to ensure GPU is done with buffers
                     cudaDeviceSynchronize();
 
-                    print_gpu_mem("After backward, before release");
+                    // print_gpu_mem("After backward, before release");
 
                     // CRITICAL: Clear grad_fn FIRST to break the autograd node chain
                     // Without this, the grad_fn shared_ptr keeps nodes alive, which keep
                     // their saved tensors alive (even after release_saved_variables)
                     loss.set_grad_fn(nullptr);
                     grad_scale.set_grad_fn(nullptr);
+                    
+                    // Crucial: Clear all persistent outputs in the graph
+                    if (model.logits) model.logits->mutable_tensor().set_grad_fn(nullptr);
+                    if (model.y) model.y->mutable_tensor().set_grad_fn(nullptr);
+                    for (auto& mlp : model.mlps) {
+                        mlp.cleanup(); // Clears h.mutable_tensor()
+                    }
                     // x and y are references to batch.input/target, so clear on batch tensors
                     batch.input.set_grad_fn(nullptr);
                     batch.target.set_grad_fn(nullptr);
@@ -983,13 +1015,13 @@
                     if (model.y) model.y->mutable_tensor().set_grad_fn(nullptr);
 
                     // DEBUG: Print refcounts to identify dangling references
-                    std::cout << "=== REFCOUNTS BEFORE RELEASE ===" << std::endl;
-                    print_tensor_refcount("loss", loss);
-                    print_tensor_refcount("grad_scale", grad_scale);
-                    print_tensor_refcount("batch.input (x)", batch.input);
-                    print_tensor_refcount("batch.target (y)", batch.target);
-                    if (model.logits) print_tensor_refcount("model.logits", model.logits->mutable_tensor());
-                    if (model.y) print_tensor_refcount("model.y", model.y->mutable_tensor());
+                    // std::cout << "=== REFCOUNTS BEFORE RELEASE ===" << std::endl;
+                    // print_tensor_refcount("loss", loss);
+                    // print_tensor_refcount("grad_scale", grad_scale);
+                    // print_tensor_refcount("batch.input (x)", batch.input);
+                    // print_tensor_refcount("batch.target (y)", batch.target);
+                    // if (model.logits) print_tensor_refcount("model.logits", model.logits->mutable_tensor());
+                    // if (model.y) print_tensor_refcount("model.y", model.y->mutable_tensor());
 
                     // Release ALL refs to clear Autograd graph - MUST happen every micro-step
                     loss.release();
@@ -1007,9 +1039,9 @@
                         mlp.cleanup();
                     }
                     
-                    print_gpu_mem("After all releases");
+                    // print_gpu_mem("After all releases");
 
-                    std::cout << "Micro " << micro_step << " Active Tensors: " << OwnTensor::TensorImpl::get_active_count() << std::endl;
+                    // std::cout << "Micro " << micro_step << " Active Tensors: " << OwnTensor::TensorImpl::get_active_count() << std::endl;
                     // OwnTensor::TensorImpl::print_active_tensors(); // Too verbose inside micro-loop
 
                 } // End of micro-step loop

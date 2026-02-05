@@ -77,7 +77,7 @@ DTensor::DTensor()
       shape_(),
       tensor_()
 {
-    std::cout<<"default DTensor contructor :  size = "<< size_<< " rank =  "<< rank_ << std::endl;
+// std::cout<<"default DTensor contructor :  size = "<< size_<< " rank =  "<< rank_ << std::endl;
 }
 
 DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name, int sd)
@@ -129,9 +129,9 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
         tensor_ = OwnTensor::Tensor::randn<float>( shape, opts, 42, sd) ;
         
         size_ = tensor_.numel();
-        std::cout<<"\n\n shape = [ "<<tensor_.shape().dims[0]<<" , "<<tensor_.shape().dims[1]<<" ] \n\n"<<std::endl; 
+        // std::cout<<"\n\n shape = [ "<<tensor_.shape().dims[0]<<" , "<<tensor_.shape().dims[1]<<" ] \n\n"<<std::endl; 
         
-        std::cout<<" size = "<< size_<< " rank =  "<< rank_ << " name = "<< name <<std::endl;
+        // std::cout<<" size = "<< size_<< " rank =  "<< rank_ << " name = "<< name <<std::endl;
         // value_ = ag::make_tensor(tensor_, name);
         
         // // Enable gradients for this tensor and initialize grad
