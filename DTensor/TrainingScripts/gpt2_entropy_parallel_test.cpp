@@ -70,6 +70,23 @@
                   << "MB, Tensors: " << tensor_count << std::endl;
     }
 
+    // Debug helper to print tensor reference counts
+    void print_tensor_refcount(const std::string& name, const Tensor& t) {
+        if (!t.is_valid()) {
+            std::cout << "[REFCOUNT] " << name << ": INVALID/RELEASED" << std::endl;
+            return;
+        }
+        // Get impl_ refcount via unsafeGetTensorImpl()->use_count()
+        size_t impl_count = t.unsafeGetTensorImpl()->use_count();
+        // Get storage refcount via storage's intrusive_ptr_target
+        // TensorImpl has storage() which returns const Storage&
+        const auto& storage = t.unsafeGetTensorImpl()->storage();
+        size_t storage_count = storage.use_count();
+        
+        std::cout << "[REFCOUNT] " << name << ": impl=" << impl_count 
+                  << ", storage=" << storage_count << std::endl;
+    }
+
 
 
     int rank, world_size;
@@ -753,13 +770,13 @@
 
             // Training hyperparameters
             const int global_batch = 65536;  // Global batch size
-            const int grad_accum_steps = global_batch / ( config.B * config.T );  // Accumulate gradients
+            const int grad_accum_steps = 4; // Hardcoded for leak testing
 
             // const float max_lr = 1e-4f;
             const float max_lr = 3e-5f;
             const float min_lr = max_lr * 0.1f;
             const int warmup_steps = 811;
-            const int max_steps = 8118;
+            const int max_steps = 5; // Reduced for leak testing
 
             if (rank == 0) {
                 std::cout << "Configuration:" << std::endl;
@@ -842,6 +859,10 @@
             float val_loss_accum_log = -1.0f;  // -1 indicates no validation this step
 
             for (int step = 0; step < max_steps; ++step) {
+                // Check leak at start of step (when previous step's vars should be gone)
+                std::cout << "\n=== START OF STEP " << step << " ===" << std::endl;
+                OwnTensor::TensorImpl::print_active_tensors();
+                
                 auto t0 = std::chrono::high_resolution_clock::now();
 
                 // Validation every 1000 steps
@@ -926,8 +947,11 @@
                     cudaSetDevice(device.index);
                     
                     Batch batch = train_loader.next_batch();
-                    Tensor x = batch.input.to(device);
-                    Tensor y = batch.target.to(device);
+                    
+                    // DataLoader already creates CUDA tensors on correct device.
+                    // Using references avoids creating extra TensorImpl refcounts.
+                    Tensor& x = batch.input;
+                    Tensor& y = batch.target;
 
                     // Forward
                     model.forward(x);
@@ -945,11 +969,32 @@
 
                     print_gpu_mem("After backward, before release");
 
+                    // CRITICAL: Clear grad_fn FIRST to break the autograd node chain
+                    // Without this, the grad_fn shared_ptr keeps nodes alive, which keep
+                    // their saved tensors alive (even after release_saved_variables)
+                    loss.set_grad_fn(nullptr);
+                    grad_scale.set_grad_fn(nullptr);
+                    // x and y are references to batch.input/target, so clear on batch tensors
+                    batch.input.set_grad_fn(nullptr);
+                    batch.target.set_grad_fn(nullptr);
+                    
+                    // Release model output tensors' grad_fn
+                    if (model.logits) model.logits->mutable_tensor().set_grad_fn(nullptr);
+                    if (model.y) model.y->mutable_tensor().set_grad_fn(nullptr);
+
+                    // DEBUG: Print refcounts to identify dangling references
+                    std::cout << "=== REFCOUNTS BEFORE RELEASE ===" << std::endl;
+                    print_tensor_refcount("loss", loss);
+                    print_tensor_refcount("grad_scale", grad_scale);
+                    print_tensor_refcount("batch.input (x)", batch.input);
+                    print_tensor_refcount("batch.target (y)", batch.target);
+                    if (model.logits) print_tensor_refcount("model.logits", model.logits->mutable_tensor());
+                    if (model.y) print_tensor_refcount("model.y", model.y->mutable_tensor());
+
                     // Release ALL refs to clear Autograd graph - MUST happen every micro-step
                     loss.release();
                     grad_scale.release();
-                    x.release();
-                    y.release();
+                    // x and y are references to batch tensors, only release once
                     batch.input.release();
                     batch.target.release();
                     
@@ -963,6 +1008,10 @@
                     }
                     
                     print_gpu_mem("After all releases");
+
+                    std::cout << "Micro " << micro_step << " Active Tensors: " << OwnTensor::TensorImpl::get_active_count() << std::endl;
+                    // OwnTensor::TensorImpl::print_active_tensors(); // Too verbose inside micro-loop
+
                 } // End of micro-step loop
 
                 // Update accumulated loss
