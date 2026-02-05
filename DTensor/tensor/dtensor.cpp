@@ -80,7 +80,7 @@ DTensor::DTensor()
 // std::cout<<"default DTensor contructor :  size = "<< size_<< " rank =  "<< rank_ << std::endl;
 }
 
-DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name, int sd)
+DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name, float sd)
     : rank_(pg->get_rank()),
       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
       device_mesh_(&device_mesh),
