@@ -18,8 +18,8 @@ if [[ -n $(git status --porcelain) ]]; then
     echo "Staging and committing submodule changes..."
     git add .
     git commit -m "$COMMIT_MESSAGE"
-    echo "Pushing submodule changes to branch _adhi_..."
-    git push origin _adhi_
+    echo "Pushing submodule changes to branch _adhi_merge_..."
+    git push origin _adhi_merge_
 else
     echo "No changes detected in submodule."
 fi

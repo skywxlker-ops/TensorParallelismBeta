@@ -34,7 +34,7 @@ public:
     AllReduceSumBackward(std::shared_ptr<ProcessGroupNCCL> pg, size_t numel, OwnTensor::Dtype dtype)
         : Node(1), pg_(pg), numel_(numel), dtype_(dtype) {}
     
-    std::string name() const override { return "AllReduceSumBackward"; }
+    const char* name() const override { return "AllReduceSumBackward"; }
     
     std::vector<OwnTensor::Tensor> apply(std::vector<OwnTensor::Tensor>&& grads) override {
         if (grads.empty()) return {};

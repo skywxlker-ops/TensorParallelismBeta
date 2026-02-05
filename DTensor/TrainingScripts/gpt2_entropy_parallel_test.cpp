@@ -96,7 +96,7 @@
     // =============================================================================
 
     struct GPTConfig {
-        int64_t B = 8;
+        int64_t B = 4;      // Reduced from 8 to save memory
         int64_t T = 1024;
         int64_t V = 50304;  // GPT-2 vocab size (padded to 64)
         int64_t C = 768;    // Matches GPT-2 Small
@@ -177,11 +177,9 @@
         }
 
         std::vector<Tensor*> parameters() {
-            std::vector<Tensor*> params = {&fc1.weight.get()->mutable_tensor(), &fc2.weight.get()->mutable_tensor(), &fc2.bias.get()->mutable_tensor()};
-            if (fc1.use_bias() == true && fc2.use_bias() == true){
-                params.push_back(&fc1.bias.get()->mutable_tensor());
-                params.push_back(&fc2.bias.get()->mutable_tensor());
-            }
+            std::vector<Tensor*> params = {&fc1.weight->mutable_tensor(), &fc2.weight->mutable_tensor()};
+            if (fc1.use_bias() == true) params.push_back(&fc1.bias->mutable_tensor());
+            if (fc2.use_bias() == true) params.push_back(&fc2.bias->mutable_tensor());
 
             // for (auto& p : ln.parameters()) {
                 // We need to const_cast or store pointers.
@@ -197,6 +195,12 @@
             params.push_back(&ln.bias);
 
             return params;
+        }
+
+        void zero_grad() {
+            fc1.zero_grad();
+            fc2.zero_grad();
+            ln.zero_grad();
         }
 
     private:
@@ -356,12 +360,18 @@
             // Final projection to vocab size [B, T, V]
             // print_gpu_mem("Before lm_head");
             DTensor logits_out = lm_head.forward(*y);
+            
+            if (rank == 0) {
+                std::cout << "  [GPT Forward] logits out requires_grad: " << (logits_out.mutable_tensor().requires_grad() ? "YES" : "NO")
+                          << " | grad_fn: " << (logits_out.mutable_tensor().grad_fn() ? "YES" : "NO") << std::endl;
+            }
+
             if (!logits) {
                 logits = std::make_unique<DTensor>(mesh, pg, logits_out.get_layout(), "logits");
             }
             logits->mutable_tensor() = logits_out.mutable_tensor();
             // print_gpu_mem("After lm_head");
-
+            
             return logits->mutable_tensor();
         }
 
@@ -382,9 +392,16 @@
             params.push_back(&ln_f.bias);
 
             // Final projection
-            // params.push_back(&W_final);
+            for (auto* p : lm_head.parameters()) params.push_back(p);
 
             return params;
+        }
+
+        void zero_grad() {
+            wte.zero_grad();
+            wpe.zero_grad();
+            for (auto& mlp : mlps) mlp.zero_grad();
+            ln_f.zero_grad();
         }
 
         int64_t count_params() {
@@ -606,31 +623,37 @@
         Tensor targets_;       // [B, T]
         Tensor sum_exp_;       // [B, T, 1] (Global)
         Tensor max_logits_;    // [B, T, 1] (Global)
+        int rank_;
         int64_t start_v_;
         int64_t B_, T_, V_;
 
     public:
         VocabParallelCrossEntropyNode(const Tensor& logits, const Tensor& targets,
                                     const Tensor& sum_exp, const Tensor& max_logits,
-                                    int64_t start_v)
+                                    int64_t start_v, int rank)
             : Node(1), // One input: logits
               logits_(logits.detach()), targets_(targets.detach()), 
               sum_exp_(sum_exp.detach()), max_logits_(max_logits.detach()),
-              start_v_(start_v) {
+              start_v_(start_v), rank_(rank) {
             B_ = logits.shape().dims[0];
             T_ = logits.shape().dims[1];
             V_ = logits.shape().dims[2];
         }
 
-        std::string name() const override { return "VocabParallelCrossEntropyNode"; }
+        const char* name() const override { return "VocabParallelCrossEntropyNode"; }
 
         variable_list apply(variable_list&& grads) override {
             Tensor grad_output = grads[0]; // [1]
             float scale = 1.0f / (B_ * T_);
             
             // Get grad_output value (scalar loss grad)
-            float g_out = grad_output.to_cpu().data<float>()[0] * scale;
-
+            // DIAGNOSTIC: Scale by 1e6 to check for underflow
+            float scale_factor = 1e6f;
+            float g_out = grad_output.to_cpu().data<float>()[0] * scale * scale_factor;
+            if (rank_ == 0) {
+                 std::cout << "  [BACKWARD] g_raw: " << std::scientific << grad_output.to_cpu().data<float>()[0] 
+                           << " | g_out: " << g_out << " | scale: " << (scale * scale_factor) << " (SCALED 1e6)" << std::endl;
+            }
             // Backward: dL/dx = (P - delta) * grad_output
             // P = exp(logits - max) / sum_exp
             // Use raw ops to avoid tracking
@@ -656,6 +679,11 @@
                 0
             );
 
+            if (rank_ == 0) {
+                 float g0 = grad_logits.to_cpu().data<float>()[0];
+                 std::cout << "  [BACKWARD] grad_logits[0]: " << std::scientific << g0 << std::endl;
+            }
+
             return {grad_logits};
         }
 
@@ -677,39 +705,32 @@
         int64_t B = logits_dt.mutable_tensor().shape().dims[0];
         int64_t T = logits_dt.mutable_tensor().shape().dims[1];
         
-        // Use static DTensors to avoid reallocating every call (major OOM fix!)
-        static std::unique_ptr<DTensor> s_global_max_dt;
-        static std::unique_ptr<DTensor> s_global_sum_exp_dt;
-        static std::unique_ptr<DTensor> s_global_target_dt;
+        // Local DTensors to avoid data races between micro-batches
+        std::unique_ptr<DTensor> s_global_max_dt;
+        std::unique_ptr<DTensor> s_global_sum_exp_dt;
+        std::unique_ptr<DTensor> s_global_target_dt;
         
         Layout reduce_layout(logits_dt.get_device_mesh(), {B, T, 1});
         
-        // Initialize on first call only
-        if (!s_global_max_dt) {
-            s_global_max_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_max");
-        }
-        if (!s_global_sum_exp_dt) {
-            s_global_sum_exp_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_sum_exp");
-        }
-        if (!s_global_target_dt) {
-            s_global_target_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_target_logit");
-        }
+        s_global_max_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_max");
+        s_global_sum_exp_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_sum_exp");
+        s_global_target_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_target_logit");
 
         // 1. Compute Global Max (Raw)
-        Tensor local_max = OwnTensor::reduce_max(local_logits, {2}, true); 
+        Tensor local_max = OwnTensor::reduce_max(local_logits.detach(), {2}, true); 
         s_global_max_dt->mutable_tensor() = local_max; 
         s_global_max_dt->sync_w_autograd((op_t)1); // MAX  
-        Tensor global_max = s_global_max_dt->mutable_tensor(); 
+        Tensor global_max = s_global_max_dt->mutable_tensor().detach(); 
         
         // 2. Global SumExp (Raw)
-        Tensor logits_minus_max = local_logits - global_max;
-        Tensor exp_logits = OwnTensor::exp(logits_minus_max);
-        Tensor local_sum_exp = OwnTensor::reduce_sum(exp_logits, {2}, true); 
+        Tensor logits_minus_max = (local_logits - global_max).detach();
+        Tensor exp_logits = OwnTensor::exp(logits_minus_max).detach();
+        Tensor local_sum_exp = OwnTensor::reduce_sum(exp_logits, {2}, true).detach(); 
         
         s_global_sum_exp_dt->mutable_tensor() = local_sum_exp;
         s_global_sum_exp_dt->sync_w_autograd((op_t)0); // SUM
-        Tensor global_sum_exp = s_global_sum_exp_dt->mutable_tensor(); 
-        Tensor log_sum_exp = OwnTensor::log(global_sum_exp); 
+        Tensor global_sum_exp = s_global_sum_exp_dt->mutable_tensor().detach(); 
+        Tensor log_sum_exp = OwnTensor::log(global_sum_exp).detach(); 
 
         // 3. Extract Target Logits (Raw)
         Tensor targets_device = targets;
@@ -728,7 +749,7 @@
 
         s_global_target_dt->mutable_tensor() = local_target_logits;
         s_global_target_dt->sync_w_autograd((op_t)0); // SUM
-        Tensor global_target_val = s_global_target_dt->mutable_tensor();
+        Tensor global_target_val = s_global_target_dt->mutable_tensor().detach();
 
         // 4. Final Loss (Raw calculation, then wrap in autograd if needed)
         Tensor loss_per_token = log_sum_exp - (global_target_val - global_max);
@@ -736,8 +757,9 @@
         
         // 5. Custom Autograd Setup
         if (local_logits.requires_grad()) {
+            if (rank == 0) std::cout << "  [CROSS_ENTROPY] Logits have grad_fn: " << (local_logits.grad_fn() ? "YES" : "NO") << std::endl;
             auto grad_fn = std::make_shared<VocabParallelCrossEntropyNode>(
-                local_logits, targets_float, global_sum_exp, global_max, start_v
+                local_logits, targets_float, global_sum_exp, global_max, start_v, rank
             );
             grad_fn->set_next_edge(0, get_grad_edge(local_logits));
             loss.set_grad_fn(grad_fn);
@@ -821,7 +843,11 @@
             }
 
             // Get all parameters
-            auto params = model.parameters();
+            auto params_ptr = model.parameters();
+            std::vector<Tensor> params;
+            for (auto* p : params_ptr) {
+                params.push_back(*p);
+            }
 
             // Create optimizer
             nn::Adam optimizer(params, max_lr, 0.9f, 0.95f, 1e-8f, 0.1f);
@@ -923,8 +949,7 @@
                 }
 
                 // Training step
-                optimizer.zero_grad();
-                float loss_accum = 0.0f;
+                // float loss_accum = 0.0f; // Moved below
                 // const int grad_accum_steps = 1; // Defined above
 
                 // Timing accumulators
@@ -934,8 +959,10 @@
                 Tensor loss_accum_gpu = Tensor::zeros(Shape{{1}}, TensorOptions().with_device(device));
 
                 float loss_accum_cpu = 0.0f;
-
                 Tensor loss;
+
+                // CRITICAL: Clear gradients at the start of each step
+                model.zero_grad();
 
                 for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
                     // CRITICAL: Set device before any GPU operations including to()
@@ -960,8 +987,9 @@
                     float loss_val = loss.to_cpu().data<float>()[0];
                     loss_accum_cpu += loss_val;
 
-                    if (rank == 0 && micro_step == 0) {
-                        std::cout << "  loss requires_grad: " << (loss.requires_grad() ? "true" : "false") << std::endl;
+                    if (rank == 0 && (micro_step == 0 || micro_step == grad_accum_steps - 1)) {
+                        std::cout << "  Micro " << micro_step << " Loss: " << loss_val 
+                                  << " | Tensors: " << OwnTensor::Tensor::get_active_tensor_count() << std::endl;
                     }
 
                     // Backward with scaling
@@ -982,16 +1010,8 @@
                         }
                     }
 
-                    // Detach parameter gradients to prevent history accumulation
-                    for (auto* p : model.parameters()) {
-                        if (p->has_grad()) {
-                            p->set_grad(p->grad_view().detach());
-                        }
-                    }
-
-                    // Crucial: Sync BEFORE release to ensure GPU is done with buffers
                     cudaDeviceSynchronize();
-
+                    
                     // print_gpu_mem("After backward, before release");
 
                     // CRITICAL: Clear grad_fn FIRST to break the autograd node chain
@@ -999,13 +1019,6 @@
                     // their saved tensors alive (even after release_saved_variables)
                     loss.set_grad_fn(nullptr);
                     grad_scale.set_grad_fn(nullptr);
-                    
-                    // Crucial: Clear all persistent outputs in the graph
-                    if (model.logits) model.logits->mutable_tensor().set_grad_fn(nullptr);
-                    if (model.y) model.y->mutable_tensor().set_grad_fn(nullptr);
-                    for (auto& mlp : model.mlps) {
-                        mlp.cleanup(); // Clears h.mutable_tensor()
-                    }
                     // x and y are references to batch.input/target, so clear on batch tensors
                     batch.input.set_grad_fn(nullptr);
                     batch.target.set_grad_fn(nullptr);
@@ -1054,12 +1067,12 @@
 
             // Transfer accumulated loss to CPU once per step
             Tensor loss_cpu = loss_accum_gpu.to_cpu();
-            loss_accum = loss_cpu.data<float>()[0];
+            loss_accum_cpu = loss_cpu.data<float>()[0];
 
 
                 // Clip gradients
                 auto t_c0 = std::chrono::high_resolution_clock::now();
-                float norm = dnn::dist_clip_grad_norm(params, 1.0f, pg.get());
+                float norm = dnn::dist_clip_grad_norm(params_ptr, 1.0f, pg.get());
                 cudaDeviceSynchronize();
                 auto t_c1 = std::chrono::high_resolution_clock::now();
                 double t_clip = std::chrono::duration<double, std::milli>(t_c1 - t_c0).count();
@@ -1085,12 +1098,12 @@
                 // Print training info with breakdown
                 if (rank == 0) {
                     std::cout << "step " << std::setw(5) << step
-                            << " | loss: " << std::fixed << std::setprecision(6) << loss_accum
-                            << " | lr " << std::scientific << std::setprecision(4) << lr
-                            << " | norm: " << std::fixed << std::setprecision(4) << norm
-                            << " | dt: " << std::fixed << std::setprecision(2) << (dt * 1000.0) << "ms"
-                            << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec
-                            << std::endl;
+                             << " | loss: " << std::scientific << std::setprecision(6) << loss_accum_cpu
+                             << " | lr " << std::scientific << std::setprecision(4) << lr
+                             << " | norm: " << std::scientific << std::setprecision(4) << norm
+                             << " | dt: " << std::fixed << std::setprecision(2) << (dt * 1000.0) << "ms"
+                             << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec
+                             << std::endl;
                 }
 
                 // Print timing breakdown every 10 steps
@@ -1105,7 +1118,7 @@
                 // Log metrics to CSV
                 if (rank == 0) {
                     log_file << step << ","
-                             << std::fixed << std::setprecision(6) << loss_accum << ","
+                             << std::fixed << std::setprecision(6) << loss_accum_cpu << ","
                              << val_loss_accum_log << ","
                              << std::scientific << std::setprecision(6) << lr << ","
                              << std::fixed << std::setprecision(6) << norm << ","
