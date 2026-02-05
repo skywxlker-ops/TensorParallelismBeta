@@ -579,3 +579,30 @@ gpt2_tensor_parallel_test: $(GPT2_TENSOR_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_TENSOR_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] GPT2 Tensor Parallel Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_tensor_parallel_test\n"
+
+# DTensor Leak Tests
+DTENSOR_LEAK_TESTS_SRCS = \
+    tests/dtensor_leak_tests/dtensor_benchmark_main.cpp \
+    tests/dtensor_leak_tests/test_dtensor_layers.cpp \
+    tests/dtensor_leak_tests/test_dtensor_activations.cpp \
+    tests/dtensor_leak_tests/test_dtensor_losses.cpp \
+    tests/dtensor_leak_tests/test_gpt2_components.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+DTENSOR_LEAK_TESTS_OBJS = $(DTENSOR_LEAK_TESTS_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+tests/dtensor_leak_tests/%.o: tests/dtensor_leak_tests/%.cpp
+	@echo "[COMPILE] $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I./tests/dtensor_leak_tests -c $< -o $@
+
+dtensor_leak_tests: $(DTENSOR_LEAK_TESTS_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating test executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o tests/dtensor_leak_tests/$@ $(DTENSOR_LEAK_TESTS_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] DTensor Leak Tests build complete."
+	@echo "\nRun with: mpirun -np 2 ./tests/dtensor_leak_tests/dtensor_leak_tests\n"
+

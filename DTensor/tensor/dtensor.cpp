@@ -54,6 +54,11 @@ public:
         
         return {grad};
     }
+    
+    // CRITICAL: Clear pg_ shared_ptr to break reference cycle and allow cleanup
+    void release_saved_variables() override {
+        pg_.reset();
+    }
 };
 
 

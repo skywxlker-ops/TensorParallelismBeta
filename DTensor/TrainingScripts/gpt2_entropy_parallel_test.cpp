@@ -58,6 +58,18 @@
         }
     }
 
+    // Memory debugging helper
+    void print_gpu_mem(const std::string& label) {
+        cudaDeviceSynchronize();
+        size_t free_mem, total_mem;
+        cudaMemGetInfo(&free_mem, &total_mem);
+        size_t used_mb = (total_mem - free_mem) / (1024 * 1024);
+        size_t free_mb = free_mem / (1024 * 1024);
+        int64_t tensor_count = Tensor::get_active_tensor_count();
+        std::cout << "[MEM] " << label << " - Used: " << used_mb << "MB, Free: " << free_mb 
+                  << "MB, Tensors: " << tensor_count << std::endl;
+    }
+
 
 
     int rank, world_size;
@@ -124,7 +136,8 @@
 
             auto device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank);
             fc1 = dnn::DColumnLinear(mesh, pg, B_, T_, C_, F_, {}, true);
-            fc4 = dnn::DRowLinear(mesh, pg, B_, T_, F_, C_, {}, true, (0.2 * std::pow(( 2 * config.n_layers), -0.5)));
+            fc2 = dnn::DRowLinear(mesh, pg, B_, T_, F_, C_, {}, true, (0.2 * std::pow(( 2 * config.n_layers), -0.5)));
+            gelu = dnn::DGeLU();
             ln.to(device);
         }
 
@@ -134,20 +147,23 @@
 
             DTensor h1 = fc1.forward(h);
 
-            dnn::DGeLU gelu;
-
             h1 = gelu.forward(h1);
 
-            DTensor y = fc4.forward(h1);
+            DTensor y = fc2.forward(h1);
 
             return y.mutable_tensor();
         }
 
+        // Release internal tensor after backward to free autograd graph
+        void cleanup() {
+            h.mutable_tensor().release();
+        }
+
         std::vector<Tensor*> parameters() {
-            std::vector<Tensor*> params = {&fc1.weight.get()->mutable_tensor(), &fc4.weight.get()->mutable_tensor(), &fc4.bias.get()->mutable_tensor()};
-            if (fc1.use_bias() == true && fc4.use_bias() == true){
+            std::vector<Tensor*> params = {&fc1.weight.get()->mutable_tensor(), &fc2.weight.get()->mutable_tensor(), &fc2.bias.get()->mutable_tensor()};
+            if (fc1.use_bias() == true && fc2.use_bias() == true){
                 params.push_back(&fc1.bias.get()->mutable_tensor());
-                params.push_back(&fc4.bias.get()->mutable_tensor());
+                params.push_back(&fc2.bias.get()->mutable_tensor());
             }
 
             // for (auto& p : ln.parameters()) {
@@ -173,7 +189,8 @@
         int64_t F_;
         DTensor h;
         dnn::DColumnLinear fc1;
-        dnn::DRowLinear fc4;
+        dnn::DRowLinear fc2;
+        dnn ::DGeLU gelu;
         nn::LayerNorm ln;       // LayerNorm before MLP
         // Tensor W_up, b_up;      // Linear(C, 4*C)
         // Tensor W_down, b_down;  // Linear(4*C, C)
@@ -279,11 +296,11 @@
             // Get embeddings [B, T, C]
             DTensor tok_emb = wte.forward(Didx);     // [B, T, C]
             check_cuda("wte.forward");
-            std::cout << "  [FWD] tok_emb done" << std::endl;
+            print_gpu_mem("After tok_emb");
             
             DTensor pos_emb = wpe.forward(Dpos);     // [1, T, C] - broadcasts
             check_cuda("wpe.forward");
-            std::cout << "  [FWD] pos_emb done" << std::endl;
+            print_gpu_mem("After pos_emb");
 
             // Combine token and position embeddings
             auto tok_shape = tok_emb.mutable_tensor().shape().dims;
@@ -296,7 +313,7 @@
             
             Tensor x = tok_emb.mutable_tensor() + pos_emb.mutable_tensor();
             check_cuda("autograd::add tok+pos");
-            std::cout << "  [FWD] add done" << std::endl;
+            print_gpu_mem("After tok+pos add");
 
             // Apply MLP blocks with residual connections
             int i = 0;
@@ -305,18 +322,29 @@
                 check_cuda("mlp.forward");
                 x = autograd::add(x, residual);
                 check_cuda("mlp residual add");
-                std::cout << "  [FWD] MLP block " << i << " done" << std::endl;
+                print_gpu_mem("After MLP block " + std::to_string(i));
                 i++;
             }
             std::cout << "  [FWD] All MLP blocks done" << std::endl;
 
             // Final normalization
+            print_gpu_mem("Before ln_f");
             Tensor y_local = ln_f.forward(x);
-            y = std::make_unique<DTensor>(mesh, pg, Layout(mesh, {B, T, config.C}), "ln_f_output");
+            // Reuse existing DTensor or create on first call only
+            if (!y) {
+                y = std::make_unique<DTensor>(mesh, pg, Layout(mesh, {B, T, config.C}), "ln_f_output");
+            }
             y->mutable_tensor() = y_local;
+            print_gpu_mem("After ln_f");
 
             // Final projection to vocab size [B, T, V]
-            logits = std::make_unique<DTensor>(lm_head.forward(*y));
+            print_gpu_mem("Before lm_head");
+            DTensor logits_out = lm_head.forward(*y);
+            if (!logits) {
+                logits = std::make_unique<DTensor>(mesh, pg, logits_out.get_layout(), "logits");
+            }
+            logits->mutable_tensor() = logits_out.mutable_tensor();
+            print_gpu_mem("After lm_head");
 
             return logits->mutable_tensor();
         }
@@ -429,6 +457,12 @@
 
             return {grad_shard};
         }
+        
+        // Clear pg_ shared_ptr to allow cleanup after backward
+        void release_saved_variables() override {
+            pg_.reset();
+        }
+        
     private:
         int rank_;
         int world_size_;
@@ -623,23 +657,42 @@
         int64_t local_v = local_logits.shape().dims[2];
         int64_t start_v = rank * local_v;
         DeviceIndex device = local_logits.device();
+        
+        int64_t B = logits_dt.mutable_tensor().shape().dims[0];
+        int64_t T = logits_dt.mutable_tensor().shape().dims[1];
+        
+        // Use static DTensors to avoid reallocating every call (major OOM fix!)
+        static std::unique_ptr<DTensor> s_global_max_dt;
+        static std::unique_ptr<DTensor> s_global_sum_exp_dt;
+        static std::unique_ptr<DTensor> s_global_target_dt;
+        
+        Layout reduce_layout(logits_dt.get_device_mesh(), {B, T, 1});
+        
+        // Initialize on first call only
+        if (!s_global_max_dt) {
+            s_global_max_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_max");
+        }
+        if (!s_global_sum_exp_dt) {
+            s_global_sum_exp_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_sum_exp");
+        }
+        if (!s_global_target_dt) {
+            s_global_target_dt = std::make_unique<DTensor>(logits_dt.get_device_mesh(), logits_dt.get_pg(), reduce_layout, "global_target_logit");
+        }
 
         // 1. Compute Global Max (Raw)
         Tensor local_max = OwnTensor::reduce_max(local_logits, {2}, true); 
-        DTensor global_max_dt(logits_dt.get_device_mesh(), logits_dt.get_pg(), Layout(logits_dt.get_device_mesh(), {logits_dt.mutable_tensor().shape().dims[0], logits_dt.mutable_tensor().shape().dims[1], 1}), "global_max");
-        global_max_dt.mutable_tensor() = local_max; 
-        global_max_dt.sync_w_autograd((op_t)1); // MAX  
-        Tensor global_max = global_max_dt.mutable_tensor(); 
+        s_global_max_dt->mutable_tensor() = local_max; 
+        s_global_max_dt->sync_w_autograd((op_t)1); // MAX  
+        Tensor global_max = s_global_max_dt->mutable_tensor(); 
         
         // 2. Global SumExp (Raw)
         Tensor logits_minus_max = local_logits - global_max;
         Tensor exp_logits = OwnTensor::exp(logits_minus_max);
         Tensor local_sum_exp = OwnTensor::reduce_sum(exp_logits, {2}, true); 
         
-        DTensor global_sum_exp_dt(logits_dt.get_device_mesh(), logits_dt.get_pg(), Layout(logits_dt.get_device_mesh(), {logits_dt.mutable_tensor().shape().dims[0], logits_dt.mutable_tensor().shape().dims[1], 1}), "global_sum_exp");
-        global_sum_exp_dt.mutable_tensor() = local_sum_exp;
-        global_sum_exp_dt.sync_w_autograd((op_t)0); // SUM
-        Tensor global_sum_exp = global_sum_exp_dt.mutable_tensor(); 
+        s_global_sum_exp_dt->mutable_tensor() = local_sum_exp;
+        s_global_sum_exp_dt->sync_w_autograd((op_t)0); // SUM
+        Tensor global_sum_exp = s_global_sum_exp_dt->mutable_tensor(); 
         Tensor log_sum_exp = OwnTensor::log(global_sum_exp); 
 
         // 3. Extract Target Logits (Raw)
@@ -657,10 +710,9 @@
             0
         );
 
-        DTensor global_target_dt(logits_dt.get_device_mesh(), logits_dt.get_pg(), Layout(logits_dt.get_device_mesh(), {targets.shape().dims[0], targets.shape().dims[1], 1}), "global_target_logit");
-        global_target_dt.mutable_tensor() = local_target_logits;
-        global_target_dt.sync_w_autograd((op_t)0); // SUM
-        Tensor global_target_val = global_target_dt.mutable_tensor();
+        s_global_target_dt->mutable_tensor() = local_target_logits;
+        s_global_target_dt->sync_w_autograd((op_t)0); // SUM
+        Tensor global_target_val = s_global_target_dt->mutable_tensor();
 
         // 4. Final Loss (Raw calculation, then wrap in autograd if needed)
         Tensor loss_per_token = log_sum_exp - (global_target_val - global_max);
@@ -869,11 +921,7 @@
                     // CRITICAL: Set device before any GPU operations including to()
 
                     std::cout<<"\n microstep = "<<micro_step<<std::endl;
-                    if (micro_step > 0) {
-                        if (loss.is_valid()) loss.release();
-                        if (model.logits) model.logits->mutable_tensor().release();
-                        if (model.y) model.y->mutable_tensor().release();
-                    }
+                    print_gpu_mem("Start of micro_step " + std::to_string(micro_step));
 
                     cudaSetDevice(device.index);
                     
@@ -895,21 +943,31 @@
                     // Crucial: Sync BEFORE release to ensure GPU is done with buffers
                     cudaDeviceSynchronize();
 
-                    model.count_params();
-                    // Release refs to clear Autograd graph - MUST happen every micro-step
-                    // loss.release();
-                    // if (model.logits) model.logits->mutable_tensor().release();
-                    // if (model.y) model.y->mutable_tensor().release();
+                    print_gpu_mem("After backward, before release");
+
+                    // Release ALL refs to clear Autograd graph - MUST happen every micro-step
+                    loss.release();
+                    grad_scale.release();
+                    x.release();
+                    y.release();
+                    batch.input.release();
+                    batch.target.release();
+                    
+                    // Release model intermediates
+                    if (model.logits) model.logits->mutable_tensor().release();
+                    if (model.y) model.y->mutable_tensor().release();
+                    
+                    // Release MLP internal tensors
+                    for (auto& mlp : model.mlps) {
+                        mlp.cleanup();
+                    }
+                    
+                    print_gpu_mem("After all releases");
                 } // End of micro-step loop
 
-                // Final cleanup after all micro-steps complete
-                if (model.logits) model.logits->mutable_tensor().release();
-                if (model.y) model.y->mutable_tensor().release();
-               
-
-
+                // Update accumulated loss
                 loss_accum_gpu.fill(loss_accum_cpu / grad_accum_steps);
-
+                
                 // Synchronize ONCE after all micro-steps
                 cudaDeviceSynchronize();
 
