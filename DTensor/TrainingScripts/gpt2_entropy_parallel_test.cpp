@@ -50,7 +50,7 @@
     }
 
     void check_cuda(const std::string& msg) {
-        cudaDeviceSynchronize();
+        // cudaDeviceSynchronize();
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             std::cout << "CUDA ERROR at " << msg << ": " << cudaGetErrorString(err) << std::endl;
@@ -60,7 +60,7 @@
 
     // Memory debugging helper
     void print_gpu_mem(const std::string& label) {
-        cudaDeviceSynchronize();
+        // cudaDeviceSynchronize();
         size_t free_mem, total_mem;
         cudaMemGetInfo(&free_mem, &total_mem);
         size_t used_mb = (total_mem - free_mem) / (1024 * 1024);
@@ -99,9 +99,9 @@
         int64_t B = 4;      // Reduced from 8 to save memory
         int64_t T = 1024;
         int64_t V = 50304;  // GPT-2 vocab size (padded to 64)
-        int64_t C = 768;    // Matches GPT-2 Small
-        int64_t n_layers = 6;
-        int64_t F = 4 * 768;
+        int64_t C = 384;    // Matches GPT-2 Small
+        int64_t n_layers = 3;
+        int64_t F = 4 * 384;
     };
 
     // =============================================================================
@@ -638,10 +638,10 @@
             const int grad_accum_steps = global_batch / ( config.B * config.T );  // Accumulate gradients
 
             // const float max_lr = 1e-4f;
-            const float max_lr = 3e-5f;
+            const float max_lr = 0.5e-4f;
             const float min_lr = max_lr * 0.1f;
-            const int warmup_steps = 811;
-            const int max_steps = 8118;
+            const int warmup_steps = 369;
+            const int max_steps = 3648;
 
             if (rank == 0) {
                 std::cout << "Configuration:" << std::endl;
@@ -696,9 +696,29 @@
             // Create optimizer
             nn::AdamW optimizer(params, max_lr, 0.9f, 0.95f, 1e-8f, 0.1f);
 
+            // Configure weight decay mask: exclude biases and layernorm parameters
+            // Based on GPT parameter collection order:
+            // [wte, wpe, [ln.w, ln.b, fc1.w, fc1.b, fc2.w, fc2.b] x N, ln_f.w, ln_f.b]
+            std::vector<bool> wd_mask(params.size(), true);
+            wd_mask[0] = true; // wte
+            wd_mask[1] = true; // wpe
+            int offset = 2;
+            for (int i = 0; i < config.n_layers; ++i) {
+                wd_mask[offset + 0] = false; // ln.weight (gamma)
+                wd_mask[offset + 1] = false; // ln.bias (beta)
+                wd_mask[offset + 2] = true;  // fc1.weight
+                wd_mask[offset + 3] = false; // fc1.bias
+                wd_mask[offset + 4] = true;  // fc2.weight
+                wd_mask[offset + 5] = false; // fc2.bias
+                offset += 6;
+            }
+            wd_mask[offset + 0] = false; // ln_f.weight
+            wd_mask[offset + 1] = false; // ln_f.bias
+            optimizer.set_weight_decay_mask(wd_mask);
+
             if (rank == 0) {
             }
-            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/BluWERP_data/";
+            std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/Data/";
             DataLoaderLite train_loader(config.B, config.T, rank, world_size, "train", data_root, rank == 0, rank);
 
             DataLoaderLite val_loader(config.B, config.T, rank, world_size, "val", data_root, rank == 0, rank);
@@ -836,7 +856,7 @@
                     loss.backward(&grad_scale);
 
 
-                    cudaDeviceSynchronize();
+                    // cudaDeviceSynchronize();
                     
                     // print_gpu_mem("After backward, before release");
 
@@ -875,17 +895,36 @@
                 loss_accum_gpu.fill(loss_accum_cpu / grad_accum_steps);
                 
                 // Synchronize ONCE after all micro-steps
-                cudaDeviceSynchronize();
+                // cudaDeviceSynchronize();
 
             // Transfer accumulated loss to CPU once per step
             Tensor loss_cpu = loss_accum_gpu.to_cpu();
             loss_accum_cpu = loss_cpu.data<float>()[0];
 
+            // 1. All-reduce gradients of replicated parameters (DLayerNorm, DRowLinear bias, etc.)
+            // This prevents parameter divergence across ranks.
+            model.all_reduce_gradients(pg.get());
+
+            // 2. Average gradients over the global batch
+            // The micro-step scaling (1/grad_accum_steps) is already done in micro-loop during backward.
+            // We just need to divide by world_size to get the global average.
+            float world_size_scale = 1.0f / (float)world_size;
+            for (auto* p : params_ptr) {
+                if (p->has_grad()) {
+                    Tensor g = p->grad_view();
+                    OwnTensor::cuda::scale_gradients_cuda(
+                        g.data<float>(), 
+                        world_size_scale,
+                        g.numel()
+                    );
+                }
+            }
+
 
                 // Clip gradients
                 auto t_c0 = std::chrono::high_resolution_clock::now();
                 float norm = dnn::dist_clip_grad_norm(params_ptr, 1.0f, pg.get());
-                cudaDeviceSynchronize();
+                // cudaDeviceSynchronize();
                 auto t_c1 = std::chrono::high_resolution_clock::now();
                 double t_clip = std::chrono::duration<double, std::milli>(t_c1 - t_c0).count();
 
@@ -896,7 +935,7 @@
                 // Optimizer step
                 auto t_o0 = std::chrono::high_resolution_clock::now();
                 optimizer.step();
-                cudaDeviceSynchronize();
+                // cudaDeviceSynchronize();
                 auto t_o1 = std::chrono::high_resolution_clock::now();
                 double t_opt = std::chrono::duration<double, std::milli>(t_o1 - t_o0).count();
 
