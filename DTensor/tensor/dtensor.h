@@ -30,10 +30,11 @@ class DTensor {
 public:
 
     DTensor();  // Default constructor for member initialization
-    DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name = "", float sd = 0.02f);
+    DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name = "", float sd = 0.02f, int seed = 42);
     ~DTensor();
 
     void setData(const std::vector<float>& host_data) ;
+    void setData(const std::vector<int64_t>& host_data) ;
     std::vector<float> getData() const; 
     
     // DTensor add(const DTensor& other) const;
@@ -106,10 +107,12 @@ public:
     const Layout& get_layout()  { return layout_; }
     const OwnTensor::Tensor& local_tensor() const { return tensor_; }
     OwnTensor::Tensor& mutable_tensor() { return tensor_; }
+    void set_tensor(OwnTensor::Tensor& tensor){ tensor_ = tensor; }
     std::shared_ptr<ProcessGroupNCCL> get_pg() const { return pg_; }
     const DeviceMesh& get_device_mesh() const { return *device_mesh_; }
     int rank() const { return rank_; }
     int getSize() const { return size_;}
+    std::string name(){return name_;}
 
 private:
 
@@ -141,6 +144,7 @@ private:
     std::string dtype_ = "float32";
     Block* data_block_;
     Block* temp_block_;
+    std::string name_;
     
     // Async collective tracking
     bool has_pending_collective_ = false;

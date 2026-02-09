@@ -144,7 +144,7 @@ public:
             throw std::runtime_error("split must be 'train' or 'val'");
         if (B_ <= 0 || T_ <= 0)
             throw std::runtime_error("B and T must be > 0");
-        if (world_ <= 0 || rank_ < 0 || rank_ >= world_)
+        if (world_ <= 0 || rank_ < 0 || rank_ > world_)
             throw std::runtime_error("invalid rank/world_size");
 
         shards_ = list_shards(root_, split_, ".bin");

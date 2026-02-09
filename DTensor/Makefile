@@ -240,6 +240,10 @@ CUDA_LDFLAGS = -L/usr/local/cuda-12.6/include
 %.o: %.cu
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
+TrainingScripts/EntropyKernels.o: TrainingScripts/EntropyKernels.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
 # tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 # 	@echo "\n[LINKING] Creating example executable: $@"
 # 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LDFLAGS) -o examples/$@ $(TP_MLP_OBJS) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
@@ -524,6 +528,24 @@ gpt2_entropy_parallel_test: $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] GPT2 Entropy Parallel Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_entropy_parallel_test\n"
+
+
+GPT2_TP_TEST_SRCS = \
+    gpt2_tp_test/gpt2_tp_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
+gpt2_tp_test: $(GPT2_TP_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: gpt2_tp_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_tp_test_exec $(GPT2_TP_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 TP Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_test_exec \n"
 
 # GPT2 Sync Verification Test
 GPT2_SYNC_VERIFY_TEST_SRCS = \

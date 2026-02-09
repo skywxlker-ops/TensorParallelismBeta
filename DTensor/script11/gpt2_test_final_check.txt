@@ -1,0 +1,1434 @@
+--- Compiling snippet: ../gpt2_test.cpp ---
+g++ -Iinclude -I/usr/local/cuda/include -DWITH_CUDA  -std=c++20 -fPIC -Wall -Wextra -g -O3 -fopenmp -o snippet_runner ../gpt2_test.cpp -L/usr/local/cuda/lib64 -Llib -Xlinker -rpath -Xlinker '$ORIGIN/lib' -ltensor -lcudart -ltbb -lcurand -lcublas
+In file included from include/dtype/DtypeTraits.h:15,
+                 from include/TensorLib.h:16,
+                 from ../gpt2_test.cpp:19:
+include/dtype/fp4.h: In function ‘uint8_t detail_fp4::float_to_fp4_e2m1(float)’:
+include/dtype/fp4.h:44:11: warning: dereferencing type-punned pointer will break strict-aliasing rules [-Wstrict-aliasing]
+   44 |     if ((*(uint32_t*)&f) & 0x80000000) sign_bit = 8;
+      |           ^~~~~~~~~~~~~
+../gpt2_test.cpp: In constructor ‘MLP::MLP(int64_t, OwnTensor::DeviceIndex, uint64_t)’:
+../gpt2_test.cpp:144:17: warning: ‘MLP::n_embd_’ will be initialized after [-Wreorder]
+  144 |         int64_t n_embd_;
+      |                 ^~~~~~~
+../gpt2_test.cpp:85:23: warning:   ‘OwnTensor::nn::LayerNorm MLP::ln’ [-Wreorder]
+   85 |         nn::LayerNorm ln;       // LayerNorm before MLP
+      |                       ^~
+../gpt2_test.cpp:89:9: warning:   when initialized here [-Wreorder]
+   89 |         MLP(int64_t n_embd, DeviceIndex device, uint64_t seed = 1234)
+      |         ^~~
+../gpt2_test.cpp: In member function ‘std::vector<OwnTensor::Tensor*> MLP::parameters()’:
+../gpt2_test.cpp:129:24: warning: unused variable ‘p’ [-Wunused-variable]
+  129 |             for (auto& p : ln.parameters()) {
+      |                        ^
+../gpt2_test.cpp: In member function ‘OwnTensor::Tensor GPT::forward(const OwnTensor::Tensor&, bool)’:
+../gpt2_test.cpp:177:21: warning: unused variable ‘B’ [-Wunused-variable]
+  177 |             int64_t B = shape[0];
+      |                     ^
+../gpt2_test.cpp:175:48: warning: unused parameter ‘debug’ [-Wunused-parameter]
+  175 |         Tensor forward(const Tensor& idx, bool debug = false) {
+      |                                           ~~~~~^~~~~~~~~~~~~
+../gpt2_test.cpp: In function ‘int main()’:
+../gpt2_test.cpp:400:39: warning: unused variable ‘x_data’ [-Wunused-variable]
+  400 |                             uint16_t* x_data = x_cpu.data<uint16_t>(); // Input x is NOT uint16! Wait.
+      |                                       ^~~~~~
+../gpt2_test.cpp:470:24: warning: unused variable ‘t_data’ [-Wunused-variable]
+  470 |                 double t_data = 0, t_forward = 0, t_backward = 0;
+      |                        ^~~~~~
+../gpt2_test.cpp:470:36: warning: unused variable ‘t_forward’ [-Wunused-variable]
+  470 |                 double t_data = 0, t_forward = 0, t_backward = 0;
+      |                                    ^~~~~~~~~
+../gpt2_test.cpp:470:51: warning: unused variable ‘t_backward’ [-Wunused-variable]
+  470 |                 double t_data = 0, t_forward = 0, t_backward = 0;
+      |                                                   ^~~~~~~~~~
+../gpt2_test.cpp:505:24: warning: unused variable ‘t_clip’ [-Wunused-variable]
+  505 |                 double t_clip = std::chrono::duration<double, std::milli>(t_c1 - t_c0).count();
+      |                        ^~~~~~
+../gpt2_test.cpp:516:24: warning: unused variable ‘t_opt’ [-Wunused-variable]
+  516 |                 double t_opt = std::chrono::duration<double, std::milli>(t_o1 - t_o0).count();
+      |                        ^~~~~
+In file included from ../gpt2_test.cpp:31:
+../dl_test.cpp: At global scope:
+../dl_test.cpp:25:12: warning: ‘int getenv_int(const char*, int)’ defined but not used [-Wunused-function]
+   25 | static int getenv_int(const char* key, int def) {
+      |            ^~~~~~~~~~
+
+--- Running snippet_runner ---
+./snippet_runner
+=== GPT-2 Training Script (C++ Implementation) ===
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 768
+  n_layers: 6
+  B=2, T=128
+  global_batch: 1024
+  grad_accum_steps: 4
+
+Initializing model on CUDA device 0...
+Number of parameters: 67765248
+found 10 shards for split train
+Tokens: 100000000
+found 1 shards for split val
+Tokens: 100000000
+
+Starting training...
+Tokens: 100000000
+Val step 0 Max target: 48866
+Val step 0 Loss: 10.9427
+Val step 1 Max target: 47866
+Val step 1 Loss: 10.9072
+Val step 2 Max target: 48599
+Val step 2 Loss: 10.88
+Val step 3 Max target: 50256
+Val step 3 Loss: 10.9325
+Val step 4 Max target: 48384
+Val step 4 Loss: 10.8677
+Val step 5 Max target: 47128
+Val step 5 Loss: 10.8738
+Val step 6 Max target: 48461
+Val step 6 Loss: 10.8949
+Val step 7 Max target: 50256
+Val step 7 Loss: 10.8221
+Val step 8 Max target: 45486
+Val step 8 Loss: 10.9579
+Val step 9 Max target: 45500
+Val step 9 Loss: 10.9209
+Val step 10 Max target: 49158
+Val step 10 Loss: 10.9132
+Val step 11 Max target: 31504
+Val step 11 Loss: 10.9186
+Val step 12 Max target: 46181
+Val step 12 Loss: 10.8954
+Val step 13 Max target: 48137
+Val step 13 Loss: 10.9543
+Val step 14 Max target: 33290
+Val step 14 Loss: 10.9027
+Val step 15 Max target: 44529
+Val step 15 Loss: 10.8993
+Val step 16 Max target: 33290
+Val step 16 Loss: 10.9016
+Val step 17 Max target: 44529
+Val step 17 Loss: 10.8767
+Val step 18 Max target: 44529
+Val step 18 Loss: 10.9025
+Val step 19 Max target: 33290
+Val step 19 Loss: 10.8898
+validation loss: 10.9027
+step     0 | loss: 10.911282 | lr 1.2330e-07 | norm: 3.1173 | dt: 4383.02ms | tok/sec: 233.63
+step     1 | loss: 10.853626 | lr 2.4661e-07 | norm: 3.2512 | dt: 1807.36ms | tok/sec: 566.57
+step     2 | loss: 10.895290 | lr 3.6991e-07 | norm: 3.0484 | dt: 1785.39ms | tok/sec: 573.55
+step     3 | loss: 10.895386 | lr 4.9322e-07 | norm: 2.9338 | dt: 1802.74ms | tok/sec: 568.03
+step     4 | loss: 10.923478 | lr 6.1652e-07 | norm: 2.8490 | dt: 1835.25ms | tok/sec: 557.96
+step     5 | loss: 10.875556 | lr 7.3983e-07 | norm: 3.0196 | dt: 1814.85ms | tok/sec: 564.24
+step     6 | loss: 10.900147 | lr 8.6313e-07 | norm: 2.7169 | dt: 1754.61ms | tok/sec: 583.61
+step     7 | loss: 10.881796 | lr 9.8644e-07 | norm: 2.7814 | dt: 1786.59ms | tok/sec: 573.16
+step     8 | loss: 10.873861 | lr 1.1097e-06 | norm: 3.1159 | dt: 1834.91ms | tok/sec: 558.07
+step     9 | loss: 10.903007 | lr 1.2330e-06 | norm: 3.1039 | dt: 1776.09ms | tok/sec: 576.55
+step    10 | loss: 10.881880 | lr 1.3564e-06 | norm: 2.9184 | dt: 1791.42ms | tok/sec: 571.61
+step    11 | loss: 10.846540 | lr 1.4797e-06 | norm: 2.8660 | dt: 1714.50ms | tok/sec: 597.26
+step    12 | loss: 10.870102 | lr 1.6030e-06 | norm: 3.0081 | dt: 1758.27ms | tok/sec: 582.39
+step    13 | loss: 10.876639 | lr 1.7263e-06 | norm: 3.1515 | dt: 1785.34ms | tok/sec: 573.56
+step    14 | loss: 10.864194 | lr 1.8496e-06 | norm: 2.8118 | dt: 1803.49ms | tok/sec: 567.79
+step    15 | loss: 10.822502 | lr 1.9729e-06 | norm: 3.2924 | dt: 1784.88ms | tok/sec: 573.71
+step    16 | loss: 10.844198 | lr 2.0962e-06 | norm: 3.1288 | dt: 1745.68ms | tok/sec: 586.59
+step    17 | loss: 10.839890 | lr 2.2195e-06 | norm: 2.6904 | dt: 1746.41ms | tok/sec: 586.34
+step    18 | loss: 10.821897 | lr 2.3428e-06 | norm: 2.7414 | dt: 1775.81ms | tok/sec: 576.64
+step    19 | loss: 10.766437 | lr 2.4661e-06 | norm: 3.2428 | dt: 1808.76ms | tok/sec: 566.13
+step    20 | loss: 10.772141 | lr 2.5894e-06 | norm: 3.0449 | dt: 1829.58ms | tok/sec: 559.69
+step    21 | loss: 10.770586 | lr 2.7127e-06 | norm: 3.2053 | dt: 1794.77ms | tok/sec: 570.55
+step    22 | loss: 10.746565 | lr 2.8360e-06 | norm: 3.4556 | dt: 1789.34ms | tok/sec: 572.28
+step    23 | loss: 10.742198 | lr 2.9593e-06 | norm: 3.2764 | dt: 1805.27ms | tok/sec: 567.23
+step    24 | loss: 10.804585 | lr 3.0826e-06 | norm: 2.7596 | dt: 1764.45ms | tok/sec: 580.35
+step    25 | loss: 10.808992 | lr 3.2059e-06 | norm: 3.4152 | dt: 1731.16ms | tok/sec: 591.51
+step    26 | loss: 10.770138 | lr 3.3292e-06 | norm: 3.2259 | dt: 1781.25ms | tok/sec: 574.88
+step    27 | loss: 10.753862 | lr 3.4525e-06 | norm: 3.1557 | dt: 1765.49ms | tok/sec: 580.01
+step    28 | loss: 10.702047 | lr 3.5758e-06 | norm: 2.8860 | dt: 1777.17ms | tok/sec: 576.20
+step    29 | loss: 10.689340 | lr 3.6991e-06 | norm: 2.9899 | dt: 1806.23ms | tok/sec: 566.93
+step    30 | loss: 10.668405 | lr 3.8224e-06 | norm: 3.0849 | dt: 1820.15ms | tok/sec: 562.59
+step    31 | loss: 10.736891 | lr 3.9457e-06 | norm: 2.8163 | dt: 1741.87ms | tok/sec: 587.88
+step    32 | loss: 10.627668 | lr 4.0691e-06 | norm: 3.6456 | dt: 1810.43ms | tok/sec: 565.61
+step    33 | loss: 10.636471 | lr 4.1924e-06 | norm: 3.5373 | dt: 1843.81ms | tok/sec: 555.37
+step    34 | loss: 10.723431 | lr 4.3157e-06 | norm: 3.2888 | dt: 1833.68ms | tok/sec: 558.44
+step    35 | loss: 10.607701 | lr 4.4390e-06 | norm: 3.1703 | dt: 1805.82ms | tok/sec: 567.06
+step    36 | loss: 10.660536 | lr 4.5623e-06 | norm: 2.9835 | dt: 1776.19ms | tok/sec: 576.52
+step    37 | loss: 10.667481 | lr 4.6856e-06 | norm: 2.8520 | dt: 1751.64ms | tok/sec: 584.59
+step    38 | loss: 10.689080 | lr 4.8089e-06 | norm: 2.9241 | dt: 1818.63ms | tok/sec: 563.06
+step    39 | loss: 10.570392 | lr 4.9322e-06 | norm: 3.0334 | dt: 1731.36ms | tok/sec: 591.44
+step    40 | loss: 10.589515 | lr 5.0555e-06 | norm: 2.9460 | dt: 1784.52ms | tok/sec: 573.82
+step    41 | loss: 10.580776 | lr 5.1788e-06 | norm: 2.9629 | dt: 1787.92ms | tok/sec: 572.73
+step    42 | loss: 10.588191 | lr 5.3021e-06 | norm: 2.7583 | dt: 1735.83ms | tok/sec: 589.92
+step    43 | loss: 10.543704 | lr 5.4254e-06 | norm: 2.8969 | dt: 1738.13ms | tok/sec: 589.14
+step    44 | loss: 10.555815 | lr 5.5487e-06 | norm: 2.9932 | dt: 1786.13ms | tok/sec: 573.31
+step    45 | loss: 10.512178 | lr 5.6720e-06 | norm: 2.9611 | dt: 1779.28ms | tok/sec: 575.52
+step    46 | loss: 10.529552 | lr 5.7953e-06 | norm: 2.9456 | dt: 1759.12ms | tok/sec: 582.11
+step    47 | loss: 10.478019 | lr 5.9186e-06 | norm: 3.0629 | dt: 1766.27ms | tok/sec: 579.75
+step    48 | loss: 10.430326 | lr 6.0419e-06 | norm: 2.9635 | dt: 1744.94ms | tok/sec: 586.84
+step    49 | loss: 10.443846 | lr 6.1652e-06 | norm: 2.8740 | dt: 1808.59ms | tok/sec: 566.19
+step    50 | loss: 10.419639 | lr 6.2885e-06 | norm: 3.0733 | dt: 1801.34ms | tok/sec: 568.47
+step    51 | loss: 10.382347 | lr 6.4118e-06 | norm: 2.9293 | dt: 1842.51ms | tok/sec: 555.76
+step    52 | loss: 10.437005 | lr 6.5351e-06 | norm: 2.7799 | dt: 1704.55ms | tok/sec: 600.74
+step    53 | loss: 10.476315 | lr 6.6584e-06 | norm: 2.5576 | dt: 1752.21ms | tok/sec: 584.41
+step    54 | loss: 10.387497 | lr 6.7818e-06 | norm: 2.7369 | dt: 1713.34ms | tok/sec: 597.66
+step    55 | loss: 10.405581 | lr 6.9051e-06 | norm: 2.7599 | dt: 1713.17ms | tok/sec: 597.72
+step    56 | loss: 10.326580 | lr 7.0284e-06 | norm: 2.9736 | dt: 1792.98ms | tok/sec: 571.12
+step    57 | loss: 10.329000 | lr 7.1517e-06 | norm: 2.8685 | dt: 1777.02ms | tok/sec: 576.25
+step    58 | loss: 10.323427 | lr 7.2750e-06 | norm: 2.7751 | dt: 1813.02ms | tok/sec: 564.80
+step    59 | loss: 10.364271 | lr 7.3983e-06 | norm: 2.6934 | dt: 1794.74ms | tok/sec: 570.56
+step    60 | loss: 10.265131 | lr 7.5216e-06 | norm: 2.9381 | dt: 1767.38ms | tok/sec: 579.39
+step    61 | loss: 10.269342 | lr 7.6449e-06 | norm: 2.8746 | dt: 1707.42ms | tok/sec: 599.73
+step    62 | loss: 10.363263 | lr 7.7682e-06 | norm: 3.0961 | dt: 1772.56ms | tok/sec: 577.69
+step    63 | loss: 10.240338 | lr 7.8915e-06 | norm: 2.8319 | dt: 1768.31ms | tok/sec: 579.08
+step    64 | loss: 10.273771 | lr 8.0148e-06 | norm: 2.7548 | dt: 1689.78ms | tok/sec: 606.00
+step    65 | loss: 10.277287 | lr 8.1381e-06 | norm: 2.7560 | dt: 1711.22ms | tok/sec: 598.40
+step    66 | loss: 10.194498 | lr 8.2614e-06 | norm: 2.8900 | dt: 1796.09ms | tok/sec: 570.13
+step    67 | loss: 10.269279 | lr 8.3847e-06 | norm: 2.6297 | dt: 1796.61ms | tok/sec: 569.96
+step    68 | loss: 10.202424 | lr 8.5080e-06 | norm: 2.9366 | dt: 1806.67ms | tok/sec: 566.79
+step    69 | loss: 10.090831 | lr 8.6313e-06 | norm: 2.7705 | dt: 1766.83ms | tok/sec: 579.57
+step    70 | loss: 10.204387 | lr 8.7546e-06 | norm: 2.6221 | dt: 1845.89ms | tok/sec: 554.75
+step    71 | loss: 10.159754 | lr 8.8779e-06 | norm: 2.9573 | dt: 1823.20ms | tok/sec: 561.65
+step    72 | loss: 10.150562 | lr 9.0012e-06 | norm: 2.6661 | dt: 1801.65ms | tok/sec: 568.37
+step    73 | loss: 10.255185 | lr 9.1245e-06 | norm: 2.6448 | dt: 1809.40ms | tok/sec: 565.93
+step    74 | loss: 10.136160 | lr 9.2478e-06 | norm: 2.5908 | dt: 1816.22ms | tok/sec: 563.81
+step    75 | loss: 10.188334 | lr 9.3711e-06 | norm: 2.5604 | dt: 1781.58ms | tok/sec: 574.77
+step    76 | loss: 10.156595 | lr 9.4945e-06 | norm: 2.8110 | dt: 1806.73ms | tok/sec: 566.77
+step    77 | loss: 10.138937 | lr 9.6178e-06 | norm: 2.7137 | dt: 1784.27ms | tok/sec: 573.90
+step    78 | loss: 10.009124 | lr 9.7411e-06 | norm: 3.1258 | dt: 1817.68ms | tok/sec: 563.36
+step    79 | loss: 9.904644 | lr 9.8644e-06 | norm: 3.2441 | dt: 1804.53ms | tok/sec: 567.46
+step    80 | loss: 9.957144 | lr 9.9877e-06 | norm: 2.8642 | dt: 1451.73ms | tok/sec: 705.37
+step    81 | loss: 9.868887 | lr 1.0111e-05 | norm: 3.2161 | dt: 1120.69ms | tok/sec: 913.73
+step    82 | loss: 10.018732 | lr 1.0234e-05 | norm: 2.6104 | dt: 1115.04ms | tok/sec: 918.36
+step    83 | loss: 10.061306 | lr 1.0358e-05 | norm: 2.6298 | dt: 1136.67ms | tok/sec: 900.88
+step    84 | loss: 9.879593 | lr 1.0481e-05 | norm: 2.8690 | dt: 1078.79ms | tok/sec: 949.21
+step    85 | loss: 9.980438 | lr 1.0604e-05 | norm: 2.7308 | dt: 1068.30ms | tok/sec: 958.53
+step    86 | loss: 9.893585 | lr 1.0727e-05 | norm: 2.7072 | dt: 1082.76ms | tok/sec: 945.73
+step    87 | loss: 9.930314 | lr 1.0851e-05 | norm: 2.7023 | dt: 1081.65ms | tok/sec: 946.70
+step    88 | loss: 9.895544 | lr 1.0974e-05 | norm: 2.6985 | dt: 1059.01ms | tok/sec: 966.94
+step    89 | loss: 9.824469 | lr 1.1097e-05 | norm: 2.9362 | dt: 1074.72ms | tok/sec: 952.80
+step    90 | loss: 9.964631 | lr 1.1221e-05 | norm: 2.6959 | dt: 1045.04ms | tok/sec: 979.87
+step    91 | loss: 9.809742 | lr 1.1344e-05 | norm: 2.9818 | dt: 1069.91ms | tok/sec: 957.09
+step    92 | loss: 10.083403 | lr 1.1467e-05 | norm: 2.5839 | dt: 1075.17ms | tok/sec: 952.41
+step    93 | loss: 10.083488 | lr 1.1591e-05 | norm: 2.3722 | dt: 1082.30ms | tok/sec: 946.14
+step    94 | loss: 9.899858 | lr 1.1714e-05 | norm: 2.7448 | dt: 1072.62ms | tok/sec: 954.68
+step    95 | loss: 9.788285 | lr 1.1837e-05 | norm: 2.7875 | dt: 1054.81ms | tok/sec: 970.79
+step    96 | loss: 9.960368 | lr 1.1961e-05 | norm: 2.4680 | dt: 1061.37ms | tok/sec: 964.79
+step    97 | loss: 9.795345 | lr 1.2084e-05 | norm: 2.8053 | dt: 1084.19ms | tok/sec: 944.48
+step    98 | loss: 9.752850 | lr 1.2207e-05 | norm: 2.7223 | dt: 1105.84ms | tok/sec: 925.99
+step    99 | loss: 9.939686 | lr 1.2330e-05 | norm: 2.4451 | dt: 1058.74ms | tok/sec: 967.19
+step   100 | loss: 9.763483 | lr 1.2454e-05 | norm: 2.9533 | dt: 1105.00ms | tok/sec: 926.70
+step   101 | loss: 9.819843 | lr 1.2577e-05 | norm: 2.7576 | dt: 1137.51ms | tok/sec: 900.21
+step   102 | loss: 9.587681 | lr 1.2700e-05 | norm: 3.0282 | dt: 1084.37ms | tok/sec: 944.33
+step   103 | loss: 9.638777 | lr 1.2824e-05 | norm: 2.9718 | dt: 1102.08ms | tok/sec: 929.16
+step   104 | loss: 9.899645 | lr 1.2947e-05 | norm: 2.4436 | dt: 1112.70ms | tok/sec: 920.28
+step   105 | loss: 9.959811 | lr 1.3070e-05 | norm: 2.5795 | dt: 1027.25ms | tok/sec: 996.84
+step   106 | loss: 9.933631 | lr 1.3194e-05 | norm: 2.7465 | dt: 1045.46ms | tok/sec: 979.48
+step   107 | loss: 9.906154 | lr 1.3317e-05 | norm: 2.4679 | dt: 1098.12ms | tok/sec: 932.50
+step   108 | loss: 9.831285 | lr 1.3440e-05 | norm: 2.5039 | dt: 1136.07ms | tok/sec: 901.35
+step   109 | loss: 9.819641 | lr 1.3564e-05 | norm: 2.4644 | dt: 1101.01ms | tok/sec: 930.05
+step   110 | loss: 9.776474 | lr 1.3687e-05 | norm: 2.6112 | dt: 1057.04ms | tok/sec: 968.74
+step   111 | loss: 9.674075 | lr 1.3810e-05 | norm: 2.6828 | dt: 1127.56ms | tok/sec: 908.16
+step   112 | loss: 9.807035 | lr 1.3933e-05 | norm: 2.4335 | dt: 1162.01ms | tok/sec: 881.23
+step   113 | loss: 9.738938 | lr 1.4057e-05 | norm: 2.5905 | dt: 1122.70ms | tok/sec: 912.08
+step   114 | loss: 9.608110 | lr 1.4180e-05 | norm: 2.8888 | dt: 1145.85ms | tok/sec: 893.66
+step   115 | loss: 9.789284 | lr 1.4303e-05 | norm: 2.3990 | dt: 1102.55ms | tok/sec: 928.76
+step   116 | loss: 9.803866 | lr 1.4427e-05 | norm: 2.6049 | dt: 1148.18ms | tok/sec: 891.85
+step   117 | loss: 9.665031 | lr 1.4550e-05 | norm: 2.6466 | dt: 1080.08ms | tok/sec: 948.08
+step   118 | loss: 9.668922 | lr 1.4673e-05 | norm: 2.6517 | dt: 1138.86ms | tok/sec: 899.15
+step   119 | loss: 9.888945 | lr 1.4797e-05 | norm: 2.7648 | dt: 1081.17ms | tok/sec: 947.13
+step   120 | loss: 9.852381 | lr 1.4920e-05 | norm: 2.9434 | dt: 1138.94ms | tok/sec: 899.08
+step   121 | loss: 9.839878 | lr 1.5043e-05 | norm: 2.7483 | dt: 1089.08ms | tok/sec: 940.24
+step   122 | loss: 9.799618 | lr 1.5166e-05 | norm: 2.6737 | dt: 1132.14ms | tok/sec: 904.48
+step   123 | loss: 9.827424 | lr 1.5290e-05 | norm: 2.4400 | dt: 1105.55ms | tok/sec: 926.23
+step   124 | loss: 9.898645 | lr 1.5413e-05 | norm: 2.4976 | dt: 1071.15ms | tok/sec: 955.98
+step   125 | loss: 9.920612 | lr 1.5536e-05 | norm: 2.3119 | dt: 1114.24ms | tok/sec: 919.01
+step   126 | loss: 9.811248 | lr 1.5660e-05 | norm: 2.9120 | dt: 1086.22ms | tok/sec: 942.72
+step   127 | loss: 9.785473 | lr 1.5783e-05 | norm: 2.7346 | dt: 1147.61ms | tok/sec: 892.29
+step   128 | loss: 9.665784 | lr 1.5906e-05 | norm: 2.8167 | dt: 1143.09ms | tok/sec: 895.82
+step   129 | loss: 9.587814 | lr 1.6030e-05 | norm: 2.7279 | dt: 1150.35ms | tok/sec: 890.16
+step   130 | loss: 9.771659 | lr 1.6153e-05 | norm: 2.6713 | dt: 1147.53ms | tok/sec: 892.35
+step   131 | loss: 9.613195 | lr 1.6276e-05 | norm: 2.5113 | dt: 1081.83ms | tok/sec: 946.55
+step   132 | loss: 9.740892 | lr 1.6400e-05 | norm: 2.5253 | dt: 1099.94ms | tok/sec: 930.96
+step   133 | loss: 9.780716 | lr 1.6523e-05 | norm: 2.3708 | dt: 1083.04ms | tok/sec: 945.49
+step   134 | loss: 9.455934 | lr 1.6646e-05 | norm: 2.9884 | dt: 1109.15ms | tok/sec: 923.23
+step   135 | loss: 9.648993 | lr 1.6769e-05 | norm: 2.8450 | dt: 1050.54ms | tok/sec: 974.74
+step   136 | loss: 9.659996 | lr 1.6893e-05 | norm: 2.8482 | dt: 1070.13ms | tok/sec: 956.89
+step   137 | loss: 9.626537 | lr 1.7016e-05 | norm: 2.6843 | dt: 1067.52ms | tok/sec: 959.23
+step   138 | loss: 9.598537 | lr 1.7139e-05 | norm: 2.9211 | dt: 1056.89ms | tok/sec: 968.88
+step   139 | loss: 9.263872 | lr 1.7263e-05 | norm: 3.3826 | dt: 1113.41ms | tok/sec: 919.70
+step   140 | loss: 9.417237 | lr 1.7386e-05 | norm: 3.1287 | dt: 1087.58ms | tok/sec: 941.54
+step   141 | loss: 9.653843 | lr 1.7509e-05 | norm: 2.8667 | dt: 1119.85ms | tok/sec: 914.41
+step   142 | loss: 9.489309 | lr 1.7633e-05 | norm: 3.0137 | dt: 1106.01ms | tok/sec: 925.85
+step   143 | loss: 9.449201 | lr 1.7756e-05 | norm: 3.0452 | dt: 1070.22ms | tok/sec: 956.81
+step   144 | loss: 9.560738 | lr 1.7879e-05 | norm: 2.7488 | dt: 1121.12ms | tok/sec: 913.37
+step   145 | loss: 9.358407 | lr 1.8002e-05 | norm: 3.0530 | dt: 1080.69ms | tok/sec: 947.55
+step   146 | loss: 9.686670 | lr 1.8126e-05 | norm: 2.6002 | dt: 1074.98ms | tok/sec: 952.57
+step   147 | loss: 9.925205 | lr 1.8249e-05 | norm: 2.3633 | dt: 1071.41ms | tok/sec: 955.75
+step   148 | loss: 9.945389 | lr 1.8372e-05 | norm: 2.4592 | dt: 1091.02ms | tok/sec: 938.57
+step   149 | loss: 10.058209 | lr 1.8496e-05 | norm: 2.2741 | dt: 1070.91ms | tok/sec: 956.19
+step   150 | loss: 9.900628 | lr 1.8619e-05 | norm: 2.3301 | dt: 1088.40ms | tok/sec: 940.83
+step   151 | loss: 9.461838 | lr 1.8742e-05 | norm: 2.9600 | dt: 1146.86ms | tok/sec: 892.87
+step   152 | loss: 9.370398 | lr 1.8866e-05 | norm: 2.9881 | dt: 1081.55ms | tok/sec: 946.79
+step   153 | loss: 9.566029 | lr 1.8989e-05 | norm: 2.9619 | dt: 1102.51ms | tok/sec: 928.79
+step   154 | loss: 9.443071 | lr 1.9112e-05 | norm: 2.8545 | dt: 1079.74ms | tok/sec: 948.38
+step   155 | loss: 9.491692 | lr 1.9236e-05 | norm: 2.8450 | dt: 1107.95ms | tok/sec: 924.23
+step   156 | loss: 9.372778 | lr 1.9359e-05 | norm: 2.8915 | dt: 1080.67ms | tok/sec: 947.56
+step   157 | loss: 9.390725 | lr 1.9482e-05 | norm: 3.0803 | dt: 1085.96ms | tok/sec: 942.94
+step   158 | loss: 9.355043 | lr 1.9605e-05 | norm: 2.9638 | dt: 1073.04ms | tok/sec: 954.30
+step   159 | loss: 9.362423 | lr 1.9729e-05 | norm: 3.2710 | dt: 1147.54ms | tok/sec: 892.35
+step   160 | loss: 9.351658 | lr 1.9852e-05 | norm: 3.1453 | dt: 1103.38ms | tok/sec: 928.06
+step   161 | loss: 9.554062 | lr 1.9975e-05 | norm: 2.6154 | dt: 1135.84ms | tok/sec: 901.53
+step   162 | loss: 9.562065 | lr 2.0099e-05 | norm: 2.8626 | dt: 1119.85ms | tok/sec: 914.41
+step   163 | loss: 9.433670 | lr 2.0222e-05 | norm: 2.7095 | dt: 1142.92ms | tok/sec: 895.95
+step   164 | loss: 9.829651 | lr 2.0345e-05 | norm: 2.5426 | dt: 1099.15ms | tok/sec: 931.63
+step   165 | loss: 9.811487 | lr 2.0469e-05 | norm: 2.6559 | dt: 1098.96ms | tok/sec: 931.79
+step   166 | loss: 9.589843 | lr 2.0592e-05 | norm: 2.4394 | dt: 1115.54ms | tok/sec: 917.94
+step   167 | loss: 10.087284 | lr 2.0715e-05 | norm: 5.4060 | dt: 1057.00ms | tok/sec: 968.78
+step   168 | loss: 9.363028 | lr 2.0838e-05 | norm: 3.3435 | dt: 1054.24ms | tok/sec: 971.31
+step   169 | loss: 9.507680 | lr 2.0962e-05 | norm: 2.9384 | dt: 1041.81ms | tok/sec: 982.91
+step   170 | loss: 9.603828 | lr 2.1085e-05 | norm: 2.5908 | dt: 1057.62ms | tok/sec: 968.21
+step   171 | loss: 9.751233 | lr 2.1208e-05 | norm: 2.4850 | dt: 1072.80ms | tok/sec: 954.51
+step   172 | loss: 9.470442 | lr 2.1332e-05 | norm: 4.0802 | dt: 1109.59ms | tok/sec: 922.87
+step   173 | loss: 9.332930 | lr 2.1455e-05 | norm: 4.0477 | dt: 1076.72ms | tok/sec: 951.04
+step   174 | loss: 9.633556 | lr 2.1578e-05 | norm: 2.7156 | dt: 1089.03ms | tok/sec: 940.28
+step   175 | loss: 9.673328 | lr 2.1702e-05 | norm: 2.5548 | dt: 1124.68ms | tok/sec: 910.48
+step   176 | loss: 9.501772 | lr 2.1825e-05 | norm: 2.8214 | dt: 1079.69ms | tok/sec: 948.42
+step   177 | loss: 9.615600 | lr 2.1948e-05 | norm: 2.5431 | dt: 1072.10ms | tok/sec: 955.14
+step   178 | loss: 9.532517 | lr 2.2072e-05 | norm: 2.7160 | dt: 1059.57ms | tok/sec: 966.43
+step   179 | loss: 9.530127 | lr 2.2195e-05 | norm: 2.8147 | dt: 1156.06ms | tok/sec: 885.77
+step   180 | loss: 9.675396 | lr 2.2318e-05 | norm: 2.5724 | dt: 1093.26ms | tok/sec: 936.65
+step   181 | loss: 9.753454 | lr 2.2441e-05 | norm: 2.2825 | dt: 1071.95ms | tok/sec: 955.27
+step   182 | loss: 9.792231 | lr 2.2565e-05 | norm: 2.5011 | dt: 1091.53ms | tok/sec: 938.14
+step   183 | loss: 9.645947 | lr 2.2688e-05 | norm: 2.4071 | dt: 1118.07ms | tok/sec: 915.87
+step   184 | loss: 9.760211 | lr 2.2811e-05 | norm: 2.5266 | dt: 1080.87ms | tok/sec: 947.39
+step   185 | loss: 9.760635 | lr 2.2935e-05 | norm: 2.4461 | dt: 1040.98ms | tok/sec: 983.69
+step   186 | loss: 9.706627 | lr 2.3058e-05 | norm: 2.4252 | dt: 1136.56ms | tok/sec: 900.96
+step   187 | loss: 9.686760 | lr 2.3181e-05 | norm: 2.2809 | dt: 1095.13ms | tok/sec: 935.05
+step   188 | loss: 9.734718 | lr 2.3305e-05 | norm: 2.7847 | dt: 1055.27ms | tok/sec: 970.37
+step   189 | loss: 9.656398 | lr 2.3428e-05 | norm: 2.5808 | dt: 1057.18ms | tok/sec: 968.62
+step   190 | loss: 9.633663 | lr 2.3551e-05 | norm: 2.4802 | dt: 1126.03ms | tok/sec: 909.39
+step   191 | loss: 9.672443 | lr 2.3674e-05 | norm: 2.3503 | dt: 1062.85ms | tok/sec: 963.45
+step   192 | loss: 9.618875 | lr 2.3798e-05 | norm: 2.4236 | dt: 1078.86ms | tok/sec: 949.15
+step   193 | loss: 9.419456 | lr 2.3921e-05 | norm: 2.8388 | dt: 1065.90ms | tok/sec: 960.69
+step   194 | loss: 9.455238 | lr 2.4044e-05 | norm: 2.7351 | dt: 1094.19ms | tok/sec: 935.85
+step   195 | loss: 9.598122 | lr 2.4168e-05 | norm: 2.4232 | dt: 1110.19ms | tok/sec: 922.37
+step   196 | loss: 9.492479 | lr 2.4291e-05 | norm: 2.5016 | dt: 1070.74ms | tok/sec: 956.35
+step   197 | loss: 9.542493 | lr 2.4414e-05 | norm: 2.4577 | dt: 1091.82ms | tok/sec: 937.89
+step   198 | loss: 9.584732 | lr 2.4538e-05 | norm: 2.7104 | dt: 1115.95ms | tok/sec: 917.60
+step   199 | loss: 9.424147 | lr 2.4661e-05 | norm: 2.5770 | dt: 1086.61ms | tok/sec: 942.38
+step   200 | loss: 9.551065 | lr 2.4784e-05 | norm: 2.3916 | dt: 1078.05ms | tok/sec: 949.86
+step   201 | loss: 9.446571 | lr 2.4908e-05 | norm: 2.5633 | dt: 1085.97ms | tok/sec: 942.93
+step   202 | loss: 9.659516 | lr 2.5031e-05 | norm: 2.8637 | dt: 1120.40ms | tok/sec: 913.96
+step   203 | loss: 9.880384 | lr 2.5154e-05 | norm: 2.7149 | dt: 1103.52ms | tok/sec: 927.94
+step   204 | loss: 9.428165 | lr 2.5277e-05 | norm: 3.0796 | dt: 1024.74ms | tok/sec: 999.28
+step   205 | loss: 9.424761 | lr 2.5401e-05 | norm: 2.5740 | dt: 1104.93ms | tok/sec: 926.75
+step   206 | loss: 9.512082 | lr 2.5524e-05 | norm: 2.9991 | dt: 1141.58ms | tok/sec: 897.00
+step   207 | loss: 9.634781 | lr 2.5647e-05 | norm: 2.7326 | dt: 1077.26ms | tok/sec: 950.56
+step   208 | loss: 9.649816 | lr 2.5771e-05 | norm: 2.6436 | dt: 1087.12ms | tok/sec: 941.94
+step   209 | loss: 9.604101 | lr 2.5894e-05 | norm: 2.7223 | dt: 1079.70ms | tok/sec: 948.41
+step   210 | loss: 9.462700 | lr 2.6017e-05 | norm: 2.4938 | dt: 1111.49ms | tok/sec: 921.28
+step   211 | loss: 9.558519 | lr 2.6141e-05 | norm: 2.8694 | dt: 1075.72ms | tok/sec: 951.92
+step   212 | loss: 9.552594 | lr 2.6264e-05 | norm: 3.0726 | dt: 1108.74ms | tok/sec: 923.57
+step   213 | loss: 9.613258 | lr 2.6387e-05 | norm: 2.5169 | dt: 1124.17ms | tok/sec: 910.89
+step   214 | loss: 9.707422 | lr 2.6510e-05 | norm: 2.4969 | dt: 1078.49ms | tok/sec: 949.47
+step   215 | loss: 9.526138 | lr 2.6634e-05 | norm: 2.4147 | dt: 1128.93ms | tok/sec: 907.05
+step   216 | loss: 9.609986 | lr 2.6757e-05 | norm: 2.4896 | dt: 1101.77ms | tok/sec: 929.42
+step   217 | loss: 9.453965 | lr 2.6880e-05 | norm: 2.6910 | dt: 1054.89ms | tok/sec: 970.72
+step   218 | loss: 9.505483 | lr 2.7004e-05 | norm: 2.5793 | dt: 1111.00ms | tok/sec: 921.69
+step   219 | loss: 9.630637 | lr 2.7127e-05 | norm: 2.9657 | dt: 1103.87ms | tok/sec: 927.65
+step   220 | loss: 9.672895 | lr 2.7250e-05 | norm: 2.5211 | dt: 1082.70ms | tok/sec: 945.78
+step   221 | loss: 9.055227 | lr 2.7374e-05 | norm: 3.2253 | dt: 1034.57ms | tok/sec: 989.79
+step   222 | loss: 9.309672 | lr 2.7497e-05 | norm: 2.7627 | dt: 1060.18ms | tok/sec: 965.88
+step   223 | loss: 9.610939 | lr 2.7620e-05 | norm: 2.2779 | dt: 1042.98ms | tok/sec: 981.80
+step   224 | loss: 9.414083 | lr 2.7744e-05 | norm: 2.5712 | dt: 1065.04ms | tok/sec: 961.47
+step   225 | loss: 9.522623 | lr 2.7867e-05 | norm: 2.4249 | dt: 1069.58ms | tok/sec: 957.38
+step   226 | loss: 9.510890 | lr 2.7990e-05 | norm: 2.6278 | dt: 1031.64ms | tok/sec: 992.59
+step   227 | loss: 9.443713 | lr 2.8113e-05 | norm: 2.6398 | dt: 1100.40ms | tok/sec: 930.57
+step   228 | loss: 9.460360 | lr 2.8237e-05 | norm: 2.8573 | dt: 1079.43ms | tok/sec: 948.65
+step   229 | loss: 9.753787 | lr 2.8360e-05 | norm: 2.5680 | dt: 1097.63ms | tok/sec: 932.92
+step   230 | loss: 10.295909 | lr 2.8483e-05 | norm: 3.1038 | dt: 1063.50ms | tok/sec: 962.86
+step   231 | loss: 9.595048 | lr 2.8607e-05 | norm: 2.4126 | dt: 1054.76ms | tok/sec: 970.84
+step   232 | loss: 9.605479 | lr 2.8730e-05 | norm: 2.2445 | dt: 1061.46ms | tok/sec: 964.71
+step   233 | loss: 9.420986 | lr 2.8853e-05 | norm: 2.7066 | dt: 1060.24ms | tok/sec: 965.82
+step   234 | loss: 9.829378 | lr 2.8977e-05 | norm: 2.1879 | dt: 1081.69ms | tok/sec: 946.67
+step   235 | loss: 9.498510 | lr 2.9100e-05 | norm: 2.3209 | dt: 1099.18ms | tok/sec: 931.60
+step   236 | loss: 9.410298 | lr 2.9223e-05 | norm: 2.3798 | dt: 1070.78ms | tok/sec: 956.32
+step   237 | loss: 9.575339 | lr 2.9346e-05 | norm: 2.2374 | dt: 1086.74ms | tok/sec: 942.26
+step   238 | loss: 9.580523 | lr 2.9470e-05 | norm: 2.2378 | dt: 1051.14ms | tok/sec: 974.18
+step   239 | loss: 9.424576 | lr 2.9593e-05 | norm: 2.4620 | dt: 1060.34ms | tok/sec: 965.73
+step   240 | loss: 9.275288 | lr 2.9716e-05 | norm: 2.4362 | dt: 1032.74ms | tok/sec: 991.54
+step   241 | loss: 9.584907 | lr 2.9840e-05 | norm: 2.2952 | dt: 1035.60ms | tok/sec: 988.80
+step   242 | loss: 9.329170 | lr 2.9963e-05 | norm: 2.3819 | dt: 1087.47ms | tok/sec: 941.63
+step   243 | loss: 9.583225 | lr 3.0086e-05 | norm: 2.1537 | dt: 1082.46ms | tok/sec: 945.99
+step   244 | loss: 9.518373 | lr 3.0210e-05 | norm: 2.6391 | dt: 1078.66ms | tok/sec: 949.33
+step   245 | loss: 9.428341 | lr 3.0333e-05 | norm: 2.6038 | dt: 1071.40ms | tok/sec: 955.75
+step   246 | loss: 9.694096 | lr 3.0456e-05 | norm: 2.1564 | dt: 1063.53ms | tok/sec: 962.83
+step   247 | loss: 9.548111 | lr 3.0580e-05 | norm: 2.3245 | dt: 1070.70ms | tok/sec: 956.39
+step   248 | loss: 9.509719 | lr 3.0703e-05 | norm: 2.2045 | dt: 1144.32ms | tok/sec: 894.85
+step   249 | loss: 9.601891 | lr 3.0826e-05 | norm: 2.6919 | dt: 1111.25ms | tok/sec: 921.49
+step   250 | loss: 9.422675 | lr 3.0949e-05 | norm: 2.4588 | dt: 1084.16ms | tok/sec: 944.51
+step   251 | loss: 9.460125 | lr 3.1073e-05 | norm: 2.3155 | dt: 1069.74ms | tok/sec: 957.24
+step   252 | loss: 9.572399 | lr 3.1196e-05 | norm: 2.2562 | dt: 1068.65ms | tok/sec: 958.22
+step   253 | loss: 9.558122 | lr 3.1319e-05 | norm: 2.3892 | dt: 1107.46ms | tok/sec: 924.64
+step   254 | loss: 9.538786 | lr 3.1443e-05 | norm: 2.3844 | dt: 1049.49ms | tok/sec: 975.71
+step   255 | loss: 9.533949 | lr 3.1566e-05 | norm: 2.4241 | dt: 1072.79ms | tok/sec: 954.52
+step   256 | loss: 9.428133 | lr 3.1689e-05 | norm: 2.5120 | dt: 1136.05ms | tok/sec: 901.37
+step   257 | loss: 9.450912 | lr 3.1813e-05 | norm: 2.4596 | dt: 1097.24ms | tok/sec: 933.25
+step   258 | loss: 9.399712 | lr 3.1936e-05 | norm: 2.5384 | dt: 1135.76ms | tok/sec: 901.60
+step   259 | loss: 9.389679 | lr 3.2059e-05 | norm: 2.6046 | dt: 1100.72ms | tok/sec: 930.30
+step   260 | loss: 9.538056 | lr 3.2182e-05 | norm: 2.5899 | dt: 1118.01ms | tok/sec: 915.91
+step   261 | loss: 9.428995 | lr 3.2306e-05 | norm: 2.4782 | dt: 1175.82ms | tok/sec: 870.88
+step   262 | loss: 9.456398 | lr 3.2429e-05 | norm: 2.1721 | dt: 1094.83ms | tok/sec: 935.30
+step   263 | loss: 9.285467 | lr 3.2552e-05 | norm: 2.4364 | dt: 1100.28ms | tok/sec: 930.67
+step   264 | loss: 9.395779 | lr 3.2676e-05 | norm: 2.3460 | dt: 1108.72ms | tok/sec: 923.59
+step   265 | loss: 9.520263 | lr 3.2799e-05 | norm: 2.2905 | dt: 1104.71ms | tok/sec: 926.94
+step   266 | loss: 9.310609 | lr 3.2922e-05 | norm: 2.3531 | dt: 1103.21ms | tok/sec: 928.20
+step   267 | loss: 9.217657 | lr 3.3046e-05 | norm: 2.7071 | dt: 1060.44ms | tok/sec: 965.64
+step   268 | loss: 9.436944 | lr 3.3169e-05 | norm: 2.4188 | dt: 1134.13ms | tok/sec: 902.89
+step   269 | loss: 9.588279 | lr 3.3292e-05 | norm: 2.2882 | dt: 1096.23ms | tok/sec: 934.11
+step   270 | loss: 9.486313 | lr 3.3416e-05 | norm: 2.3879 | dt: 1078.42ms | tok/sec: 949.54
+step   271 | loss: 9.391294 | lr 3.3539e-05 | norm: 2.4589 | dt: 1083.97ms | tok/sec: 944.68
+step   272 | loss: 9.462651 | lr 3.3662e-05 | norm: 2.6199 | dt: 1121.27ms | tok/sec: 913.25
+step   273 | loss: 9.278666 | lr 3.3785e-05 | norm: 2.5656 | dt: 1129.64ms | tok/sec: 906.48
+step   274 | loss: 9.425346 | lr 3.3909e-05 | norm: 2.4317 | dt: 1110.48ms | tok/sec: 922.13
+step   275 | loss: 9.138766 | lr 3.4032e-05 | norm: 2.8050 | dt: 1080.72ms | tok/sec: 947.51
+step   276 | loss: 9.049219 | lr 3.4155e-05 | norm: 2.6710 | dt: 1107.25ms | tok/sec: 924.81
+step   277 | loss: 9.159668 | lr 3.4279e-05 | norm: 2.4913 | dt: 1106.32ms | tok/sec: 925.59
+step   278 | loss: 9.341752 | lr 3.4402e-05 | norm: 2.2293 | dt: 1123.41ms | tok/sec: 911.51
+step   279 | loss: 9.418538 | lr 3.4525e-05 | norm: 2.2343 | dt: 1079.60ms | tok/sec: 948.50
+step   280 | loss: 9.279530 | lr 3.4649e-05 | norm: 2.2709 | dt: 1107.24ms | tok/sec: 924.82
+step   281 | loss: 9.298014 | lr 3.4772e-05 | norm: 2.2951 | dt: 1135.95ms | tok/sec: 901.45
+step   282 | loss: 9.765833 | lr 3.4895e-05 | norm: 2.0476 | dt: 1148.10ms | tok/sec: 891.91
+step   283 | loss: 9.609571 | lr 3.5018e-05 | norm: 2.4934 | dt: 1107.02ms | tok/sec: 925.00
+step   284 | loss: 9.432205 | lr 3.5142e-05 | norm: 2.2294 | dt: 1062.90ms | tok/sec: 963.40
+step   285 | loss: 9.244148 | lr 3.5265e-05 | norm: 2.4264 | dt: 1094.67ms | tok/sec: 935.45
+step   286 | loss: 9.416407 | lr 3.5388e-05 | norm: 2.3508 | dt: 1123.54ms | tok/sec: 911.40
+step   287 | loss: 9.391579 | lr 3.5512e-05 | norm: 2.3397 | dt: 1132.48ms | tok/sec: 904.21
+step   288 | loss: 9.564818 | lr 3.5635e-05 | norm: 2.6426 | dt: 1120.61ms | tok/sec: 913.79
+step   289 | loss: 9.333529 | lr 3.5758e-05 | norm: 2.4305 | dt: 1094.40ms | tok/sec: 935.67
+step   290 | loss: 9.139824 | lr 3.5882e-05 | norm: 2.5189 | dt: 1113.77ms | tok/sec: 919.40
+step   291 | loss: 9.315571 | lr 3.6005e-05 | norm: 2.3245 | dt: 1082.91ms | tok/sec: 945.60
+step   292 | loss: 9.373190 | lr 3.6128e-05 | norm: 2.3029 | dt: 1124.18ms | tok/sec: 910.89
+step   293 | loss: 9.402255 | lr 3.6252e-05 | norm: 2.3213 | dt: 1079.85ms | tok/sec: 948.28
+step   294 | loss: 9.648324 | lr 3.6375e-05 | norm: 2.0762 | dt: 1069.46ms | tok/sec: 957.49
+step   295 | loss: 9.664313 | lr 3.6498e-05 | norm: 2.0480 | dt: 1100.43ms | tok/sec: 930.55
+step   296 | loss: 9.871181 | lr 3.6621e-05 | norm: 2.2273 | dt: 1110.87ms | tok/sec: 921.80
+step   297 | loss: 9.373164 | lr 3.6745e-05 | norm: 2.2850 | dt: 1074.69ms | tok/sec: 952.84
+step   298 | loss: 9.292247 | lr 3.6868e-05 | norm: 2.2905 | dt: 1067.25ms | tok/sec: 959.48
+step   299 | loss: 9.578395 | lr 3.6991e-05 | norm: 2.1441 | dt: 1133.11ms | tok/sec: 903.71
+step   300 | loss: 9.705978 | lr 3.7115e-05 | norm: 2.3010 | dt: 1074.89ms | tok/sec: 952.65
+step   301 | loss: 9.308744 | lr 3.7238e-05 | norm: 2.3188 | dt: 1086.08ms | tok/sec: 942.84
+step   302 | loss: 9.459572 | lr 3.7361e-05 | norm: 2.2598 | dt: 1107.90ms | tok/sec: 924.27
+step   303 | loss: 9.404623 | lr 3.7485e-05 | norm: 2.3490 | dt: 1136.63ms | tok/sec: 900.91
+step   304 | loss: 9.389838 | lr 3.7608e-05 | norm: 2.3142 | dt: 1116.09ms | tok/sec: 917.49
+step   305 | loss: 9.370542 | lr 3.7731e-05 | norm: 2.2629 | dt: 1122.39ms | tok/sec: 912.34
+step   306 | loss: 9.457966 | lr 3.7855e-05 | norm: 2.2421 | dt: 1138.36ms | tok/sec: 899.54
+step   307 | loss: 9.444352 | lr 3.7978e-05 | norm: 2.1089 | dt: 1096.37ms | tok/sec: 933.99
+step   308 | loss: 9.215217 | lr 3.8101e-05 | norm: 2.2604 | dt: 1076.00ms | tok/sec: 951.67
+step   309 | loss: 9.238033 | lr 3.8224e-05 | norm: 2.3786 | dt: 1062.09ms | tok/sec: 964.14
+step   310 | loss: 9.375518 | lr 3.8348e-05 | norm: 2.2663 | dt: 1069.16ms | tok/sec: 957.76
+step   311 | loss: 9.255285 | lr 3.8471e-05 | norm: 2.4319 | dt: 1028.97ms | tok/sec: 995.17
+step   312 | loss: 9.407059 | lr 3.8594e-05 | norm: 2.2158 | dt: 1079.77ms | tok/sec: 948.35
+step   313 | loss: 9.491141 | lr 3.8718e-05 | norm: 2.2086 | dt: 1131.57ms | tok/sec: 904.94
+step   314 | loss: 9.510489 | lr 3.8841e-05 | norm: 2.5382 | dt: 1118.84ms | tok/sec: 915.23
+step   315 | loss: 9.479214 | lr 3.8964e-05 | norm: 2.8399 | dt: 1040.48ms | tok/sec: 984.16
+step   316 | loss: 9.368436 | lr 3.9088e-05 | norm: 2.2916 | dt: 1071.45ms | tok/sec: 955.71
+step   317 | loss: 8.924729 | lr 3.9211e-05 | norm: 3.1677 | dt: 1163.87ms | tok/sec: 879.82
+step   318 | loss: 9.062203 | lr 3.9334e-05 | norm: 2.9326 | dt: 1180.14ms | tok/sec: 867.70
+step   319 | loss: 9.129923 | lr 3.9457e-05 | norm: 2.4455 | dt: 1141.73ms | tok/sec: 896.88
+step   320 | loss: 9.227825 | lr 3.9581e-05 | norm: 2.4519 | dt: 1088.62ms | tok/sec: 940.64
+step   321 | loss: 9.306644 | lr 3.9704e-05 | norm: 2.2050 | dt: 1157.40ms | tok/sec: 884.74
+step   322 | loss: 9.365973 | lr 3.9827e-05 | norm: 2.4609 | dt: 1099.95ms | tok/sec: 930.95
+step   323 | loss: 8.933946 | lr 3.9951e-05 | norm: 2.7235 | dt: 1122.09ms | tok/sec: 912.58
+step   324 | loss: 9.025395 | lr 4.0074e-05 | norm: 2.5873 | dt: 1115.35ms | tok/sec: 918.10
+step   325 | loss: 9.319645 | lr 4.0197e-05 | norm: 3.6187 | dt: 1128.42ms | tok/sec: 907.47
+step   326 | loss: 9.087071 | lr 4.0321e-05 | norm: 2.9197 | dt: 1078.73ms | tok/sec: 949.26
+step   327 | loss: 9.395020 | lr 4.0444e-05 | norm: 2.4994 | dt: 1154.36ms | tok/sec: 887.07
+step   328 | loss: 9.158298 | lr 4.0567e-05 | norm: 2.6138 | dt: 1083.80ms | tok/sec: 944.83
+step   329 | loss: 9.509165 | lr 4.0691e-05 | norm: 2.0646 | dt: 1124.53ms | tok/sec: 910.61
+step   330 | loss: 9.406311 | lr 4.0814e-05 | norm: 2.2052 | dt: 1079.17ms | tok/sec: 948.88
+step   331 | loss: 9.199125 | lr 4.0937e-05 | norm: 2.2155 | dt: 1088.39ms | tok/sec: 940.84
+step   332 | loss: 9.350081 | lr 4.1060e-05 | norm: 2.0619 | dt: 1134.80ms | tok/sec: 902.36
+step   333 | loss: 9.217417 | lr 4.1184e-05 | norm: 2.2688 | dt: 1081.67ms | tok/sec: 946.69
+step   334 | loss: 9.404945 | lr 4.1307e-05 | norm: 1.9728 | dt: 1097.28ms | tok/sec: 933.22
+step   335 | loss: 9.326550 | lr 4.1430e-05 | norm: 2.1712 | dt: 1079.93ms | tok/sec: 948.21
+step   336 | loss: 9.274967 | lr 4.1554e-05 | norm: 2.2427 | dt: 1127.05ms | tok/sec: 908.57
+step   337 | loss: 9.314921 | lr 4.1677e-05 | norm: 2.2140 | dt: 1074.91ms | tok/sec: 952.64
+step   338 | loss: 9.206995 | lr 4.1800e-05 | norm: 2.0698 | dt: 1124.84ms | tok/sec: 910.35
+step   339 | loss: 9.252547 | lr 4.1924e-05 | norm: 2.3095 | dt: 1091.12ms | tok/sec: 938.48
+step   340 | loss: 9.110989 | lr 4.2047e-05 | norm: 2.5335 | dt: 1107.74ms | tok/sec: 924.41
+step   341 | loss: 9.512409 | lr 4.2170e-05 | norm: 2.1345 | dt: 1113.60ms | tok/sec: 919.54
+step   342 | loss: 9.018483 | lr 4.2293e-05 | norm: 2.4926 | dt: 1093.03ms | tok/sec: 936.84
+step   343 | loss: 8.832289 | lr 4.2417e-05 | norm: 2.8488 | dt: 1095.07ms | tok/sec: 935.10
+step   344 | loss: 8.824429 | lr 4.2540e-05 | norm: 2.8585 | dt: 1113.73ms | tok/sec: 919.43
+step   345 | loss: 8.765577 | lr 4.2663e-05 | norm: 2.9577 | dt: 1108.30ms | tok/sec: 923.93
+step   346 | loss: 8.990244 | lr 4.2787e-05 | norm: 2.4937 | dt: 1121.41ms | tok/sec: 913.14
+step   347 | loss: 9.395382 | lr 4.2910e-05 | norm: 2.2704 | dt: 1111.75ms | tok/sec: 921.07
+step   348 | loss: 9.657876 | lr 4.3033e-05 | norm: 2.2519 | dt: 1121.75ms | tok/sec: 912.86
+step   349 | loss: 9.440906 | lr 4.3157e-05 | norm: 2.4560 | dt: 1114.97ms | tok/sec: 918.41
+step   350 | loss: 9.356356 | lr 4.3280e-05 | norm: 2.2664 | dt: 1087.66ms | tok/sec: 941.47
+step   351 | loss: 8.859104 | lr 4.3403e-05 | norm: 3.6528 | dt: 1123.14ms | tok/sec: 911.73
+step   352 | loss: 9.358051 | lr 4.3527e-05 | norm: 2.6075 | dt: 1042.45ms | tok/sec: 982.30
+step   353 | loss: 9.497202 | lr 4.3650e-05 | norm: 3.5784 | dt: 1032.34ms | tok/sec: 991.92
+step   354 | loss: 9.460571 | lr 4.3773e-05 | norm: 2.1145 | dt: 1083.36ms | tok/sec: 945.21
+step   355 | loss: 9.198742 | lr 4.3896e-05 | norm: 2.5582 | dt: 1117.58ms | tok/sec: 916.26
+step   356 | loss: 9.354395 | lr 4.4020e-05 | norm: 2.0404 | dt: 1095.99ms | tok/sec: 934.32
+step   357 | loss: 9.524706 | lr 4.4143e-05 | norm: 2.1927 | dt: 1037.49ms | tok/sec: 986.99
+step   358 | loss: 9.378667 | lr 4.4266e-05 | norm: 2.0625 | dt: 1070.33ms | tok/sec: 956.71
+step   359 | loss: 9.489136 | lr 4.4390e-05 | norm: 2.2067 | dt: 1058.74ms | tok/sec: 967.19
+step   360 | loss: 8.825382 | lr 4.4513e-05 | norm: 2.3821 | dt: 1064.38ms | tok/sec: 962.06
+step   361 | loss: 9.097509 | lr 4.4636e-05 | norm: 2.2268 | dt: 1118.25ms | tok/sec: 915.72
+step   362 | loss: 9.198741 | lr 4.4760e-05 | norm: 2.4897 | dt: 1088.61ms | tok/sec: 940.65
+step   363 | loss: 9.121387 | lr 4.4883e-05 | norm: 2.4057 | dt: 1087.93ms | tok/sec: 941.23
+step   364 | loss: 8.992296 | lr 4.5006e-05 | norm: 2.3467 | dt: 1111.69ms | tok/sec: 921.12
+step   365 | loss: 9.198271 | lr 4.5129e-05 | norm: 2.3801 | dt: 1082.38ms | tok/sec: 946.07
+step   366 | loss: 9.268053 | lr 4.5253e-05 | norm: 2.6885 | dt: 1056.21ms | tok/sec: 969.50
+step   367 | loss: 8.988576 | lr 4.5376e-05 | norm: 2.5676 | dt: 1037.20ms | tok/sec: 987.27
+step   368 | loss: 9.120386 | lr 4.5499e-05 | norm: 2.4969 | dt: 1063.09ms | tok/sec: 963.23
+step   369 | loss: 9.091718 | lr 4.5623e-05 | norm: 2.2612 | dt: 1033.88ms | tok/sec: 990.45
+step   370 | loss: 9.120714 | lr 4.5746e-05 | norm: 2.0807 | dt: 1135.41ms | tok/sec: 901.88
+step   371 | loss: 9.084980 | lr 4.5869e-05 | norm: 2.3528 | dt: 1023.46ms | tok/sec: 1000.53
+step   372 | loss: 9.400225 | lr 4.5993e-05 | norm: 2.2607 | dt: 1072.79ms | tok/sec: 954.52
+step   373 | loss: 9.318882 | lr 4.6116e-05 | norm: 2.0477 | dt: 1069.56ms | tok/sec: 957.40
+step   374 | loss: 9.263731 | lr 4.6239e-05 | norm: 2.3720 | dt: 1041.94ms | tok/sec: 982.78
+step   375 | loss: 9.147642 | lr 4.6363e-05 | norm: 2.2908 | dt: 1073.18ms | tok/sec: 954.18
+step   376 | loss: 9.271671 | lr 4.6486e-05 | norm: 2.7163 | dt: 1026.15ms | tok/sec: 997.91
+step   377 | loss: 9.907707 | lr 4.6609e-05 | norm: 2.3218 | dt: 1079.11ms | tok/sec: 948.93
+step   378 | loss: 9.250782 | lr 4.6732e-05 | norm: 2.4268 | dt: 1116.61ms | tok/sec: 917.06
+step   379 | loss: 9.163202 | lr 4.6856e-05 | norm: 2.0740 | dt: 1104.76ms | tok/sec: 926.90
+step   380 | loss: 9.144179 | lr 4.6979e-05 | norm: 2.2372 | dt: 1115.43ms | tok/sec: 918.03
+step   381 | loss: 9.099054 | lr 4.7102e-05 | norm: 2.2006 | dt: 1093.73ms | tok/sec: 936.25
+step   382 | loss: 9.329892 | lr 4.7226e-05 | norm: 2.2057 | dt: 1092.21ms | tok/sec: 937.55
+step   383 | loss: 9.400587 | lr 4.7349e-05 | norm: 2.6923 | dt: 1134.52ms | tok/sec: 902.58
+step   384 | loss: 9.136024 | lr 4.7472e-05 | norm: 2.3536 | dt: 1106.14ms | tok/sec: 925.74
+step   385 | loss: 9.219346 | lr 4.7596e-05 | norm: 2.4195 | dt: 1092.97ms | tok/sec: 936.90
+step   386 | loss: 9.019791 | lr 4.7719e-05 | norm: 2.3008 | dt: 1104.63ms | tok/sec: 927.01
+step   387 | loss: 9.187586 | lr 4.7842e-05 | norm: 2.1799 | dt: 1077.89ms | tok/sec: 950.00
+step   388 | loss: 8.843804 | lr 4.7965e-05 | norm: 2.5000 | dt: 1142.95ms | tok/sec: 895.93
+step   389 | loss: 8.882867 | lr 4.8089e-05 | norm: 2.7286 | dt: 1091.09ms | tok/sec: 938.51
+step   390 | loss: 9.085935 | lr 4.8212e-05 | norm: 2.4028 | dt: 1112.23ms | tok/sec: 920.68
+step   391 | loss: 9.129517 | lr 4.8335e-05 | norm: 2.1902 | dt: 1122.71ms | tok/sec: 912.08
+step   392 | loss: 9.005995 | lr 4.8459e-05 | norm: 2.3421 | dt: 1144.70ms | tok/sec: 894.56
+step   393 | loss: 9.334908 | lr 4.8582e-05 | norm: 2.2846 | dt: 1106.81ms | tok/sec: 925.18
+step   394 | loss: 9.251147 | lr 4.8705e-05 | norm: 2.1370 | dt: 1106.30ms | tok/sec: 925.60
+step   395 | loss: 9.117435 | lr 4.8829e-05 | norm: 2.1363 | dt: 1098.73ms | tok/sec: 931.99
+step   396 | loss: 9.352429 | lr 4.8952e-05 | norm: 1.9874 | dt: 1093.75ms | tok/sec: 936.22
+step   397 | loss: 9.234105 | lr 4.9075e-05 | norm: 2.4500 | dt: 1110.13ms | tok/sec: 922.41
+step   398 | loss: 9.311534 | lr 4.9199e-05 | norm: 1.9997 | dt: 1107.94ms | tok/sec: 924.24
+step   399 | loss: 9.206036 | lr 4.9322e-05 | norm: 2.3212 | dt: 1091.95ms | tok/sec: 937.77
+step   400 | loss: 9.217833 | lr 4.9445e-05 | norm: 1.9738 | dt: 1135.04ms | tok/sec: 902.17
+step   401 | loss: 9.168297 | lr 4.9568e-05 | norm: 2.0669 | dt: 1074.25ms | tok/sec: 953.23
+step   402 | loss: 9.091436 | lr 4.9692e-05 | norm: 2.1897 | dt: 1093.90ms | tok/sec: 936.10
+step   403 | loss: 9.092638 | lr 4.9815e-05 | norm: 2.1153 | dt: 1201.62ms | tok/sec: 852.18
+step   404 | loss: 9.106165 | lr 4.9938e-05 | norm: 2.2643 | dt: 1122.36ms | tok/sec: 912.36
+step   405 | loss: 8.951640 | lr 5.0062e-05 | norm: 2.3814 | dt: 1115.36ms | tok/sec: 918.09
+step   406 | loss: 8.732770 | lr 5.0185e-05 | norm: 2.7160 | dt: 1114.55ms | tok/sec: 918.76
+step   407 | loss: 8.766507 | lr 5.0308e-05 | norm: 2.5447 | dt: 1098.23ms | tok/sec: 932.41
+step   408 | loss: 9.400020 | lr 5.0432e-05 | norm: 2.1505 | dt: 1089.15ms | tok/sec: 940.18
+step   409 | loss: 9.230139 | lr 5.0555e-05 | norm: 2.2162 | dt: 1116.19ms | tok/sec: 917.41
+step   410 | loss: 9.018989 | lr 5.0678e-05 | norm: 2.5002 | dt: 1094.82ms | tok/sec: 935.31
+step   411 | loss: 9.296859 | lr 5.0801e-05 | norm: 2.2425 | dt: 1136.14ms | tok/sec: 901.29
+step   412 | loss: 9.121881 | lr 5.0925e-05 | norm: 2.3935 | dt: 1126.00ms | tok/sec: 909.41
+step   413 | loss: 9.034540 | lr 5.1048e-05 | norm: 2.5302 | dt: 1074.26ms | tok/sec: 953.22
+step   414 | loss: 9.088491 | lr 5.1171e-05 | norm: 2.5489 | dt: 1130.73ms | tok/sec: 905.61
+step   415 | loss: 9.078303 | lr 5.1295e-05 | norm: 2.3466 | dt: 1102.22ms | tok/sec: 929.03
+step   416 | loss: 9.260240 | lr 5.1418e-05 | norm: 2.0170 | dt: 1108.97ms | tok/sec: 923.38
+step   417 | loss: 8.853983 | lr 5.1541e-05 | norm: 2.5422 | dt: 1118.23ms | tok/sec: 915.73
+step   418 | loss: 9.275190 | lr 5.1665e-05 | norm: 2.0905 | dt: 1086.69ms | tok/sec: 942.31
+step   419 | loss: 9.081099 | lr 5.1788e-05 | norm: 2.2363 | dt: 1091.47ms | tok/sec: 938.18
+step   420 | loss: 9.359636 | lr 5.1911e-05 | norm: 2.2224 | dt: 1112.87ms | tok/sec: 920.14
+step   421 | loss: 9.215210 | lr 5.2035e-05 | norm: 2.3116 | dt: 1121.70ms | tok/sec: 912.90
+step   422 | loss: 9.260887 | lr 5.2158e-05 | norm: 2.1143 | dt: 1097.46ms | tok/sec: 933.06
+step   423 | loss: 9.170948 | lr 5.2281e-05 | norm: 2.1925 | dt: 1152.25ms | tok/sec: 888.70
+step   424 | loss: 9.179577 | lr 5.2404e-05 | norm: 2.2058 | dt: 1089.82ms | tok/sec: 939.61
+step   425 | loss: 9.195917 | lr 5.2528e-05 | norm: 2.3208 | dt: 1091.09ms | tok/sec: 938.51
+step   426 | loss: 9.285321 | lr 5.2651e-05 | norm: 2.4804 | dt: 1142.72ms | tok/sec: 896.11
+step   427 | loss: 9.167555 | lr 5.2774e-05 | norm: 2.1008 | dt: 1115.03ms | tok/sec: 918.36
+step   428 | loss: 9.018833 | lr 5.2898e-05 | norm: 2.1795 | dt: 1093.75ms | tok/sec: 936.23
+step   429 | loss: 9.034860 | lr 5.3021e-05 | norm: 2.4678 | dt: 1110.91ms | tok/sec: 921.77
+step   430 | loss: 9.086908 | lr 5.3144e-05 | norm: 2.7429 | dt: 1133.50ms | tok/sec: 903.40
+step   431 | loss: 9.142937 | lr 5.3268e-05 | norm: 2.2483 | dt: 1123.54ms | tok/sec: 911.41
+step   432 | loss: 9.293680 | lr 5.3391e-05 | norm: 2.2688 | dt: 1096.37ms | tok/sec: 933.99
+step   433 | loss: 9.041788 | lr 5.3514e-05 | norm: 2.3596 | dt: 1116.88ms | tok/sec: 916.84
+step   434 | loss: 8.916892 | lr 5.3637e-05 | norm: 2.3885 | dt: 1104.78ms | tok/sec: 926.88
+step   435 | loss: 9.238934 | lr 5.3761e-05 | norm: 2.3496 | dt: 1102.42ms | tok/sec: 928.86
+step   436 | loss: 9.566832 | lr 5.3884e-05 | norm: 2.4912 | dt: 1096.56ms | tok/sec: 933.83
+step   437 | loss: 9.160357 | lr 5.4007e-05 | norm: 2.0878 | dt: 1075.38ms | tok/sec: 952.22
+step   438 | loss: 9.138520 | lr 5.4131e-05 | norm: 2.3279 | dt: 1152.81ms | tok/sec: 888.26
+step   439 | loss: 9.053905 | lr 5.4254e-05 | norm: 2.7716 | dt: 1134.02ms | tok/sec: 902.99
+step   440 | loss: 9.127381 | lr 5.4377e-05 | norm: 2.2570 | dt: 1115.26ms | tok/sec: 918.17
+step   441 | loss: 8.865731 | lr 5.4501e-05 | norm: 2.5784 | dt: 1094.41ms | tok/sec: 935.66
+step   442 | loss: 9.055603 | lr 5.4624e-05 | norm: 2.3349 | dt: 1096.13ms | tok/sec: 934.20
+step   443 | loss: 9.176535 | lr 5.4747e-05 | norm: 2.2406 | dt: 1107.99ms | tok/sec: 924.19
+step   444 | loss: 9.552768 | lr 5.4871e-05 | norm: 2.0617 | dt: 1124.36ms | tok/sec: 910.74
+step   445 | loss: 9.281430 | lr 5.4994e-05 | norm: 1.9706 | dt: 1143.91ms | tok/sec: 895.17
+step   446 | loss: 9.018980 | lr 5.5117e-05 | norm: 2.2917 | dt: 1089.42ms | tok/sec: 939.95
+step   447 | loss: 9.237863 | lr 5.5240e-05 | norm: 2.1730 | dt: 1129.30ms | tok/sec: 906.76
+step   448 | loss: 9.289984 | lr 5.5364e-05 | norm: 3.9478 | dt: 1073.02ms | tok/sec: 954.31
+step   449 | loss: 9.166924 | lr 5.5487e-05 | norm: 2.1495 | dt: 1101.70ms | tok/sec: 929.47
+step   450 | loss: 9.068355 | lr 5.5610e-05 | norm: 2.1332 | dt: 1126.53ms | tok/sec: 908.99
+step   451 | loss: 9.225831 | lr 5.5734e-05 | norm: 2.3756 | dt: 1118.62ms | tok/sec: 915.41
+step   452 | loss: 9.227457 | lr 5.5857e-05 | norm: 2.1177 | dt: 1131.74ms | tok/sec: 904.81
+step   453 | loss: 8.649019 | lr 5.5980e-05 | norm: 2.7963 | dt: 1128.04ms | tok/sec: 907.77
+step   454 | loss: 8.773691 | lr 5.6104e-05 | norm: 2.8486 | dt: 1126.76ms | tok/sec: 908.80
+step   455 | loss: 8.671885 | lr 5.6227e-05 | norm: 2.7876 | dt: 1079.67ms | tok/sec: 948.44
+step   456 | loss: 8.962485 | lr 5.6350e-05 | norm: 2.3556 | dt: 1039.58ms | tok/sec: 985.01
+step   457 | loss: 9.107195 | lr 5.6473e-05 | norm: 2.5576 | dt: 1055.57ms | tok/sec: 970.09
+step   458 | loss: 9.204628 | lr 5.6597e-05 | norm: 2.5226 | dt: 1083.95ms | tok/sec: 944.69
+step   459 | loss: 9.173275 | lr 5.6720e-05 | norm: 2.2020 | dt: 1096.99ms | tok/sec: 933.47
+step   460 | loss: 9.000391 | lr 5.6843e-05 | norm: 2.4881 | dt: 1064.75ms | tok/sec: 961.73
+step   461 | loss: 8.785215 | lr 5.6967e-05 | norm: 2.4319 | dt: 1070.98ms | tok/sec: 956.13
+step   462 | loss: 9.413481 | lr 5.7090e-05 | norm: 2.4037 | dt: 1086.48ms | tok/sec: 942.50
+step   463 | loss: 9.118944 | lr 5.7213e-05 | norm: 2.7443 | dt: 1079.95ms | tok/sec: 948.19
+step   464 | loss: 9.157457 | lr 5.7337e-05 | norm: 2.4437 | dt: 1063.89ms | tok/sec: 962.51
+step   465 | loss: 9.032628 | lr 5.7460e-05 | norm: 2.2757 | dt: 1070.99ms | tok/sec: 956.12
+step   466 | loss: 9.224349 | lr 5.7583e-05 | norm: 2.2454 | dt: 1058.60ms | tok/sec: 967.31
+step   467 | loss: 8.701756 | lr 5.7707e-05 | norm: 2.5057 | dt: 1063.45ms | tok/sec: 962.90
+step   468 | loss: 8.657869 | lr 5.7830e-05 | norm: 2.2979 | dt: 1061.78ms | tok/sec: 964.42
+step   469 | loss: 9.137436 | lr 5.7953e-05 | norm: 2.3078 | dt: 1073.40ms | tok/sec: 953.97
+step   470 | loss: 9.151207 | lr 5.8076e-05 | norm: 2.0062 | dt: 1057.71ms | tok/sec: 968.13
+step   471 | loss: 9.198879 | lr 5.8200e-05 | norm: 2.6126 | dt: 1101.32ms | tok/sec: 929.79
+step   472 | loss: 9.409704 | lr 5.8323e-05 | norm: 2.1488 | dt: 1038.15ms | tok/sec: 986.37
+step   473 | loss: 9.523156 | lr 5.8446e-05 | norm: 2.1110 | dt: 1046.41ms | tok/sec: 978.59
+step   474 | loss: 9.125793 | lr 5.8570e-05 | norm: 2.3927 | dt: 1036.80ms | tok/sec: 987.66
+step   475 | loss: 9.227879 | lr 5.8693e-05 | norm: 2.6772 | dt: 1085.18ms | tok/sec: 943.62
+step   476 | loss: 9.303182 | lr 5.8816e-05 | norm: 2.8579 | dt: 1025.33ms | tok/sec: 998.71
+step   477 | loss: 9.196173 | lr 5.8940e-05 | norm: 2.8631 | dt: 1068.59ms | tok/sec: 958.27
+step   478 | loss: 9.139519 | lr 5.9063e-05 | norm: 2.8297 | dt: 1087.05ms | tok/sec: 942.00
+step   479 | loss: 9.258774 | lr 5.9186e-05 | norm: 2.9781 | dt: 1062.80ms | tok/sec: 963.49
+step   480 | loss: 9.491737 | lr 5.9309e-05 | norm: 2.4997 | dt: 1083.35ms | tok/sec: 945.22
+step   481 | loss: 9.452449 | lr 5.9433e-05 | norm: 3.0200 | dt: 1081.88ms | tok/sec: 946.50
+step   482 | loss: 9.331930 | lr 5.9556e-05 | norm: 2.5683 | dt: 1100.84ms | tok/sec: 930.20
+step   483 | loss: 9.388118 | lr 5.9679e-05 | norm: 2.4081 | dt: 1111.57ms | tok/sec: 921.22
+step   484 | loss: 9.329874 | lr 5.9803e-05 | norm: 2.2485 | dt: 1059.21ms | tok/sec: 966.76
+step   485 | loss: 9.392496 | lr 5.9926e-05 | norm: 2.3379 | dt: 1083.55ms | tok/sec: 945.04
+step   486 | loss: 9.830776 | lr 6.0049e-05 | norm: 2.1439 | dt: 1079.40ms | tok/sec: 948.68
+step   487 | loss: 9.229248 | lr 6.0173e-05 | norm: 2.5450 | dt: 1051.75ms | tok/sec: 973.62
+step   488 | loss: 9.120313 | lr 6.0296e-05 | norm: 2.1676 | dt: 1033.28ms | tok/sec: 991.02
+step   489 | loss: 9.186977 | lr 6.0419e-05 | norm: 2.4895 | dt: 1110.85ms | tok/sec: 921.82
+step   490 | loss: 9.099430 | lr 6.0543e-05 | norm: 2.2495 | dt: 1065.02ms | tok/sec: 961.49
+step   491 | loss: 9.218013 | lr 6.0666e-05 | norm: 2.6352 | dt: 1067.52ms | tok/sec: 959.23
+step   492 | loss: 9.067315 | lr 6.0789e-05 | norm: 2.3759 | dt: 1080.04ms | tok/sec: 948.12
+step   493 | loss: 9.120900 | lr 6.0912e-05 | norm: 2.7269 | dt: 1060.59ms | tok/sec: 965.50
+step   494 | loss: 9.106262 | lr 6.1036e-05 | norm: 2.5138 | dt: 1049.46ms | tok/sec: 975.74
+step   495 | loss: 9.224146 | lr 6.1159e-05 | norm: 2.4836 | dt: 1040.53ms | tok/sec: 984.11
+step   496 | loss: 9.243469 | lr 6.1282e-05 | norm: 2.2115 | dt: 1100.79ms | tok/sec: 930.24
+step   497 | loss: 8.831643 | lr 6.1406e-05 | norm: 2.4756 | dt: 1128.07ms | tok/sec: 907.74
+step   498 | loss: 9.157902 | lr 6.1529e-05 | norm: 2.2006 | dt: 1079.17ms | tok/sec: 948.87
+step   499 | loss: 9.185948 | lr 6.1652e-05 | norm: 2.5801 | dt: 1064.62ms | tok/sec: 961.84
+step   500 | loss: 8.984685 | lr 6.1776e-05 | norm: 2.3784 | dt: 1094.74ms | tok/sec: 935.38
+step   501 | loss: 9.020896 | lr 6.1899e-05 | norm: 2.2596 | dt: 1030.47ms | tok/sec: 993.72
+step   502 | loss: 9.393929 | lr 6.2022e-05 | norm: 2.0757 | dt: 1081.24ms | tok/sec: 947.06
+step   503 | loss: 9.058480 | lr 6.2145e-05 | norm: 2.1627 | dt: 1066.41ms | tok/sec: 960.23
+step   504 | loss: 9.088237 | lr 6.2269e-05 | norm: 2.2107 | dt: 1064.87ms | tok/sec: 961.62
+step   505 | loss: 9.004301 | lr 6.2392e-05 | norm: 2.1888 | dt: 1039.49ms | tok/sec: 985.10
+step   506 | loss: 9.171841 | lr 6.2515e-05 | norm: 2.0540 | dt: 1061.54ms | tok/sec: 964.63
+step   507 | loss: 8.842915 | lr 6.2639e-05 | norm: 2.3556 | dt: 1084.34ms | tok/sec: 944.35
+step   508 | loss: 9.258682 | lr 6.2762e-05 | norm: 2.4246 | dt: 1068.76ms | tok/sec: 958.12
+step   509 | loss: 8.902410 | lr 6.2885e-05 | norm: 2.4629 | dt: 1035.27ms | tok/sec: 989.12
+step   510 | loss: 8.804590 | lr 6.3009e-05 | norm: 2.6439 | dt: 1087.19ms | tok/sec: 941.88
+step   511 | loss: 8.730804 | lr 6.3132e-05 | norm: 2.3757 | dt: 1048.95ms | tok/sec: 976.22
+step   512 | loss: 8.976923 | lr 6.3255e-05 | norm: 2.1925 | dt: 1069.87ms | tok/sec: 957.13
+step   513 | loss: 9.031477 | lr 6.3379e-05 | norm: 2.3836 | dt: 1017.84ms | tok/sec: 1006.05
+step   514 | loss: 9.017323 | lr 6.3502e-05 | norm: 2.2524 | dt: 1100.45ms | tok/sec: 930.53
+step   515 | loss: 9.038809 | lr 6.3625e-05 | norm: 2.4153 | dt: 1077.48ms | tok/sec: 950.36
+step   516 | loss: 9.318192 | lr 6.3748e-05 | norm: 2.2751 | dt: 1062.92ms | tok/sec: 963.38
+step   517 | loss: 9.412893 | lr 6.3872e-05 | norm: 1.9802 | dt: 1048.18ms | tok/sec: 976.93
+step   518 | loss: 9.138107 | lr 6.3995e-05 | norm: 2.0366 | dt: 1066.31ms | tok/sec: 960.32
+step   519 | loss: 9.175299 | lr 6.4118e-05 | norm: 2.2333 | dt: 1062.58ms | tok/sec: 963.69
+step   520 | loss: 9.004961 | lr 6.4242e-05 | norm: 2.3718 | dt: 1061.90ms | tok/sec: 964.31
+step   521 | loss: 9.194139 | lr 6.4365e-05 | norm: 2.1537 | dt: 1080.18ms | tok/sec: 947.99
+step   522 | loss: 9.088188 | lr 6.4488e-05 | norm: 2.3309 | dt: 1051.42ms | tok/sec: 973.93
+step   523 | loss: 8.997420 | lr 6.4612e-05 | norm: 2.3856 | dt: 1057.14ms | tok/sec: 968.65
+step   524 | loss: 9.119269 | lr 6.4735e-05 | norm: 2.1097 | dt: 1069.63ms | tok/sec: 957.34
+step   525 | loss: 8.832428 | lr 6.4858e-05 | norm: 2.2849 | dt: 1093.55ms | tok/sec: 936.40
+step   526 | loss: 8.870811 | lr 6.4982e-05 | norm: 2.1587 | dt: 1065.01ms | tok/sec: 961.50
+step   527 | loss: 9.306797 | lr 6.5105e-05 | norm: 2.4017 | dt: 1063.32ms | tok/sec: 963.03
+step   528 | loss: 9.175183 | lr 6.5228e-05 | norm: 2.3317 | dt: 1042.54ms | tok/sec: 982.22
+step   529 | loss: 9.052609 | lr 6.5351e-05 | norm: 2.2225 | dt: 1047.88ms | tok/sec: 977.21
+step   530 | loss: 8.998688 | lr 6.5475e-05 | norm: 2.4437 | dt: 1053.67ms | tok/sec: 971.84
+step   531 | loss: 8.756504 | lr 6.5598e-05 | norm: 2.8243 | dt: 1093.16ms | tok/sec: 936.74
+step   532 | loss: 8.849844 | lr 6.5721e-05 | norm: 2.5260 | dt: 1089.83ms | tok/sec: 939.59
+step   533 | loss: 8.920845 | lr 6.5845e-05 | norm: 2.3990 | dt: 1109.02ms | tok/sec: 923.34
+step   534 | loss: 8.738647 | lr 6.5968e-05 | norm: 2.4882 | dt: 1039.89ms | tok/sec: 984.72
+step   535 | loss: 8.772945 | lr 6.6091e-05 | norm: 2.4887 | dt: 1104.53ms | tok/sec: 927.09
+step   536 | loss: 9.101747 | lr 6.6215e-05 | norm: 2.1633 | dt: 1079.33ms | tok/sec: 948.74
+step   537 | loss: 8.653322 | lr 6.6338e-05 | norm: 2.2457 | dt: 1080.93ms | tok/sec: 947.33
+step   538 | loss: 9.248522 | lr 6.6461e-05 | norm: 2.2216 | dt: 1042.99ms | tok/sec: 981.79
+step   539 | loss: 8.727444 | lr 6.6584e-05 | norm: 2.4719 | dt: 1051.00ms | tok/sec: 974.31
+step   540 | loss: 8.870481 | lr 6.6708e-05 | norm: 2.3249 | dt: 1072.46ms | tok/sec: 954.81
+step   541 | loss: 9.020715 | lr 6.6831e-05 | norm: 2.3869 | dt: 1141.20ms | tok/sec: 897.30
+step   542 | loss: 8.893966 | lr 6.6954e-05 | norm: 2.3530 | dt: 1098.39ms | tok/sec: 932.27
+step   543 | loss: 8.991462 | lr 6.7078e-05 | norm: 2.0499 | dt: 1029.44ms | tok/sec: 994.72
+step   544 | loss: 8.936555 | lr 6.7201e-05 | norm: 2.2380 | dt: 1094.45ms | tok/sec: 935.63
+step   545 | loss: 8.886825 | lr 6.7324e-05 | norm: 2.2301 | dt: 1060.92ms | tok/sec: 965.20
+step   546 | loss: 8.967751 | lr 6.7448e-05 | norm: 2.1776 | dt: 1065.88ms | tok/sec: 960.71
+step   547 | loss: 8.961068 | lr 6.7571e-05 | norm: 2.3239 | dt: 1094.22ms | tok/sec: 935.83
+step   548 | loss: 8.957677 | lr 6.7694e-05 | norm: 2.3479 | dt: 1061.71ms | tok/sec: 964.48
+step   549 | loss: 9.437544 | lr 6.7818e-05 | norm: 2.1157 | dt: 1070.94ms | tok/sec: 956.17
+step   550 | loss: 10.372130 | lr 6.7941e-05 | norm: 2.7867 | dt: 1116.23ms | tok/sec: 917.37
+step   551 | loss: 10.039997 | lr 6.8064e-05 | norm: 2.0790 | dt: 1058.28ms | tok/sec: 967.61
+step   552 | loss: 10.062060 | lr 6.8187e-05 | norm: 2.3513 | dt: 1073.75ms | tok/sec: 953.66
+step   553 | loss: 10.180083 | lr 6.8311e-05 | norm: 2.2139 | dt: 1075.32ms | tok/sec: 952.27
+step   554 | loss: 9.633953 | lr 6.8434e-05 | norm: 2.2743 | dt: 1085.69ms | tok/sec: 943.18
+step   555 | loss: 9.419064 | lr 6.8557e-05 | norm: 2.2645 | dt: 1089.24ms | tok/sec: 940.11
+step   556 | loss: 9.607662 | lr 6.8681e-05 | norm: 2.0736 | dt: 1124.23ms | tok/sec: 910.85
+step   557 | loss: 9.019496 | lr 6.8804e-05 | norm: 3.5016 | dt: 1073.27ms | tok/sec: 954.10
+step   558 | loss: 8.797615 | lr 6.8927e-05 | norm: 4.2035 | dt: 1045.39ms | tok/sec: 979.54
+step   559 | loss: 9.001427 | lr 6.9051e-05 | norm: 2.3260 | dt: 1079.67ms | tok/sec: 948.44
+step   560 | loss: 9.025076 | lr 6.9174e-05 | norm: 2.3107 | dt: 1059.63ms | tok/sec: 966.38
+step   561 | loss: 8.895666 | lr 6.9297e-05 | norm: 2.3431 | dt: 1088.33ms | tok/sec: 940.89
+step   562 | loss: 8.933538 | lr 6.9420e-05 | norm: 2.2496 | dt: 1100.06ms | tok/sec: 930.86
+step   563 | loss: 9.180754 | lr 6.9544e-05 | norm: 2.1054 | dt: 1069.07ms | tok/sec: 957.84
+step   564 | loss: 9.133964 | lr 6.9667e-05 | norm: 2.5756 | dt: 1073.89ms | tok/sec: 953.55
+step   565 | loss: 9.200850 | lr 6.9790e-05 | norm: 2.3950 | dt: 1091.33ms | tok/sec: 938.31
+step   566 | loss: 8.983027 | lr 6.9914e-05 | norm: 2.4609 | dt: 1125.89ms | tok/sec: 909.50
+step   567 | loss: 9.105818 | lr 7.0037e-05 | norm: 2.1365 | dt: 1070.21ms | tok/sec: 956.82
+step   568 | loss: 9.003253 | lr 7.0160e-05 | norm: 2.1631 | dt: 1085.41ms | tok/sec: 943.43
+step   569 | loss: 9.316624 | lr 7.0284e-05 | norm: 1.9878 | dt: 1043.91ms | tok/sec: 980.93
+step   570 | loss: 8.936702 | lr 7.0407e-05 | norm: 2.2808 | dt: 1085.71ms | tok/sec: 943.16
+step   571 | loss: 9.006092 | lr 7.0530e-05 | norm: 2.3612 | dt: 1056.29ms | tok/sec: 969.43
+step   572 | loss: 9.160835 | lr 7.0654e-05 | norm: 2.4040 | dt: 1096.25ms | tok/sec: 934.10
+step   573 | loss: 9.336476 | lr 7.0777e-05 | norm: 2.3724 | dt: 1067.62ms | tok/sec: 959.14
+step   574 | loss: 9.264255 | lr 7.0900e-05 | norm: 2.3919 | dt: 1080.76ms | tok/sec: 947.48
+step   575 | loss: 9.427958 | lr 7.1023e-05 | norm: 2.8610 | dt: 1064.37ms | tok/sec: 962.07
+step   576 | loss: 8.985138 | lr 7.1147e-05 | norm: 2.5548 | dt: 1020.80ms | tok/sec: 1003.13
+step   577 | loss: 9.077662 | lr 7.1270e-05 | norm: 2.3381 | dt: 1104.49ms | tok/sec: 927.13
+step   578 | loss: 9.191967 | lr 7.1393e-05 | norm: 2.3500 | dt: 1079.66ms | tok/sec: 948.45
+step   579 | loss: 8.983743 | lr 7.1517e-05 | norm: 2.3131 | dt: 1059.92ms | tok/sec: 966.11
+step   580 | loss: 9.188618 | lr 7.1640e-05 | norm: 2.1695 | dt: 1034.85ms | tok/sec: 989.51
+step   581 | loss: 8.713205 | lr 7.1763e-05 | norm: 2.4999 | dt: 1094.00ms | tok/sec: 936.02
+step   582 | loss: 8.883859 | lr 7.1887e-05 | norm: 2.4721 | dt: 1051.26ms | tok/sec: 974.07
+step   583 | loss: 9.042530 | lr 7.2010e-05 | norm: 2.1322 | dt: 1101.22ms | tok/sec: 929.88
+step   584 | loss: 9.314353 | lr 7.2133e-05 | norm: 2.0339 | dt: 1081.77ms | tok/sec: 946.60
+step   585 | loss: 9.475663 | lr 7.2256e-05 | norm: 2.1341 | dt: 1049.19ms | tok/sec: 975.99
+step   586 | loss: 9.462822 | lr 7.2380e-05 | norm: 2.1642 | dt: 1086.96ms | tok/sec: 942.08
+step   587 | loss: 9.146107 | lr 7.2503e-05 | norm: 2.6276 | dt: 1064.00ms | tok/sec: 962.40
+step   588 | loss: 9.044133 | lr 7.2626e-05 | norm: 2.7846 | dt: 1037.45ms | tok/sec: 987.04
+step   589 | loss: 9.100216 | lr 7.2750e-05 | norm: 2.5186 | dt: 1120.34ms | tok/sec: 914.00
+step   590 | loss: 9.198773 | lr 7.2873e-05 | norm: 2.1946 | dt: 1047.50ms | tok/sec: 977.56
+step   591 | loss: 9.457050 | lr 7.2996e-05 | norm: 2.5798 | dt: 1066.04ms | tok/sec: 960.56
+step   592 | loss: 9.090584 | lr 7.3120e-05 | norm: 2.3616 | dt: 1053.35ms | tok/sec: 972.14
+step   593 | loss: 9.320416 | lr 7.3243e-05 | norm: 2.1797 | dt: 1037.76ms | tok/sec: 986.74
+step   594 | loss: 8.856319 | lr 7.3366e-05 | norm: 2.5389 | dt: 1090.35ms | tok/sec: 939.15
+step   595 | loss: 9.028543 | lr 7.3490e-05 | norm: 2.1355 | dt: 1079.65ms | tok/sec: 948.46
+step   596 | loss: 8.940506 | lr 7.3613e-05 | norm: 2.3867 | dt: 1045.39ms | tok/sec: 979.54
+step   597 | loss: 9.050591 | lr 7.3736e-05 | norm: 2.4839 | dt: 1075.72ms | tok/sec: 951.92
+step   598 | loss: 8.897333 | lr 7.3859e-05 | norm: 2.4709 | dt: 1102.83ms | tok/sec: 928.52
+step   599 | loss: 8.956680 | lr 7.3983e-05 | norm: 2.3126 | dt: 1111.75ms | tok/sec: 921.07
+step   600 | loss: 8.952199 | lr 7.4106e-05 | norm: 2.4306 | dt: 1059.34ms | tok/sec: 966.64
+step   601 | loss: 9.023191 | lr 7.4229e-05 | norm: 2.2507 | dt: 1081.33ms | tok/sec: 946.98
+step   602 | loss: 8.945026 | lr 7.4353e-05 | norm: 2.3851 | dt: 1081.99ms | tok/sec: 946.40
+step   603 | loss: 9.201292 | lr 7.4476e-05 | norm: 2.7693 | dt: 1060.57ms | tok/sec: 965.52
+step   604 | loss: 9.017957 | lr 7.4599e-05 | norm: 2.5815 | dt: 1051.56ms | tok/sec: 973.79
+step   605 | loss: 8.914623 | lr 7.4723e-05 | norm: 2.7683 | dt: 1071.54ms | tok/sec: 955.63
+step   606 | loss: 8.844530 | lr 7.4846e-05 | norm: 2.7226 | dt: 1123.74ms | tok/sec: 911.25
+step   607 | loss: 8.854321 | lr 7.4969e-05 | norm: 2.5321 | dt: 1066.70ms | tok/sec: 959.97
+step   608 | loss: 9.065023 | lr 7.5092e-05 | norm: 2.1896 | dt: 1050.27ms | tok/sec: 974.99
+step   609 | loss: 8.943487 | lr 7.5216e-05 | norm: 2.5502 | dt: 1073.20ms | tok/sec: 954.15
+step   610 | loss: 8.907057 | lr 7.5339e-05 | norm: 2.5185 | dt: 1031.55ms | tok/sec: 992.68
+step   611 | loss: 8.839554 | lr 7.5462e-05 | norm: 2.4638 | dt: 1090.39ms | tok/sec: 939.11
+step   612 | loss: 9.228386 | lr 7.5586e-05 | norm: 2.1857 | dt: 1059.51ms | tok/sec: 966.49
+step   613 | loss: 9.227565 | lr 7.5709e-05 | norm: 2.3335 | dt: 1075.56ms | tok/sec: 952.06
+step   614 | loss: 9.208772 | lr 7.5832e-05 | norm: 2.2336 | dt: 1082.25ms | tok/sec: 946.18
+step   615 | loss: 8.605015 | lr 7.5956e-05 | norm: 2.3794 | dt: 1058.82ms | tok/sec: 967.11
+step   616 | loss: 8.662310 | lr 7.6079e-05 | norm: 2.3460 | dt: 1071.65ms | tok/sec: 955.54
+step   617 | loss: 8.880187 | lr 7.6202e-05 | norm: 2.2031 | dt: 1098.27ms | tok/sec: 932.38
+step   618 | loss: 8.789345 | lr 7.6326e-05 | norm: 2.2462 | dt: 1057.73ms | tok/sec: 968.11
+step   619 | loss: 8.875162 | lr 7.6449e-05 | norm: 2.4380 | dt: 1081.06ms | tok/sec: 947.22
+step   620 | loss: 8.839596 | lr 7.6572e-05 | norm: 2.3282 | dt: 1065.81ms | tok/sec: 960.77
+step   621 | loss: 9.328228 | lr 7.6695e-05 | norm: 2.0503 | dt: 1051.84ms | tok/sec: 973.53
+step   622 | loss: 8.887121 | lr 7.6819e-05 | norm: 2.1746 | dt: 1032.84ms | tok/sec: 991.44
+step   623 | loss: 8.756577 | lr 7.6942e-05 | norm: 2.4702 | dt: 1091.25ms | tok/sec: 938.38
+step   624 | loss: 8.631639 | lr 7.7065e-05 | norm: 2.4605 | dt: 1064.79ms | tok/sec: 961.69
+step   625 | loss: 8.989975 | lr 7.7189e-05 | norm: 2.3772 | dt: 1087.71ms | tok/sec: 941.43
+step   626 | loss: 8.856671 | lr 7.7312e-05 | norm: 2.1750 | dt: 1057.43ms | tok/sec: 968.38
+step   627 | loss: 8.611684 | lr 7.7435e-05 | norm: 2.6057 | dt: 1082.16ms | tok/sec: 946.26
+step   628 | loss: 8.889871 | lr 7.7559e-05 | norm: 2.6806 | dt: 1069.85ms | tok/sec: 957.14
+step   629 | loss: 8.843554 | lr 7.7682e-05 | norm: 2.2514 | dt: 1083.76ms | tok/sec: 944.85
+step   630 | loss: 9.038478 | lr 7.7805e-05 | norm: 2.0962 | dt: 1082.71ms | tok/sec: 945.77
+step   631 | loss: 8.812204 | lr 7.7928e-05 | norm: 2.1725 | dt: 1055.93ms | tok/sec: 969.76
+step   632 | loss: 9.202066 | lr 7.8052e-05 | norm: 2.3402 | dt: 1138.11ms | tok/sec: 899.73
+step   633 | loss: 9.035226 | lr 7.8175e-05 | norm: 2.2800 | dt: 1115.76ms | tok/sec: 917.76
+step   634 | loss: 9.099544 | lr 7.8298e-05 | norm: 2.0328 | dt: 1071.60ms | tok/sec: 955.58
+step   635 | loss: 8.905935 | lr 7.8422e-05 | norm: 2.0507 | dt: 1073.67ms | tok/sec: 953.74
+step   636 | loss: 9.065651 | lr 7.8545e-05 | norm: 2.3484 | dt: 1094.68ms | tok/sec: 935.43
+step   637 | loss: 8.968540 | lr 7.8668e-05 | norm: 2.2659 | dt: 1072.22ms | tok/sec: 955.03
+step   638 | loss: 9.166408 | lr 7.8792e-05 | norm: 2.2992 | dt: 1112.00ms | tok/sec: 920.87
+step   639 | loss: 8.696103 | lr 7.8915e-05 | norm: 2.4768 | dt: 1104.37ms | tok/sec: 927.23
+step   640 | loss: 8.952326 | lr 7.9038e-05 | norm: 2.0271 | dt: 1080.55ms | tok/sec: 947.66
+step   641 | loss: 8.923039 | lr 7.9162e-05 | norm: 2.2364 | dt: 1098.39ms | tok/sec: 932.28
+step   642 | loss: 9.053023 | lr 7.9285e-05 | norm: 2.0018 | dt: 1131.54ms | tok/sec: 904.96
+step   643 | loss: 9.440575 | lr 7.9408e-05 | norm: 2.2964 | dt: 1247.99ms | tok/sec: 820.52
+step   644 | loss: 9.050468 | lr 7.9531e-05 | norm: 2.1395 | dt: 1458.38ms | tok/sec: 702.15
+step   645 | loss: 9.136675 | lr 7.9655e-05 | norm: 2.1178 | dt: 1501.90ms | tok/sec: 681.80
+step   646 | loss: 8.703422 | lr 7.9778e-05 | norm: 2.4527 | dt: 1436.21ms | tok/sec: 712.99
+step   647 | loss: 9.345875 | lr 7.9901e-05 | norm: 2.0235 | dt: 1467.24ms | tok/sec: 697.91
+step   648 | loss: 8.819963 | lr 8.0025e-05 | norm: 2.4210 | dt: 1423.06ms | tok/sec: 719.57
+step   649 | loss: 8.997480 | lr 8.0148e-05 | norm: 2.3849 | dt: 1411.42ms | tok/sec: 725.51
+step   650 | loss: 8.934807 | lr 8.0271e-05 | norm: 2.1309 | dt: 1461.43ms | tok/sec: 700.69
+step   651 | loss: 8.884273 | lr 8.0395e-05 | norm: 2.2957 | dt: 1427.18ms | tok/sec: 717.50
+step   652 | loss: 8.966265 | lr 8.0518e-05 | norm: 2.2762 | dt: 1374.40ms | tok/sec: 745.05
+step   653 | loss: 8.990229 | lr 8.0641e-05 | norm: 2.1816 | dt: 1117.74ms | tok/sec: 916.14
+step   654 | loss: 8.814497 | lr 8.0764e-05 | norm: 2.3792 | dt: 1098.68ms | tok/sec: 932.02
+step   655 | loss: 8.784306 | lr 8.0888e-05 | norm: 2.1826 | dt: 1140.55ms | tok/sec: 897.81
+step   656 | loss: 9.004646 | lr 8.1011e-05 | norm: 2.1360 | dt: 1089.87ms | tok/sec: 939.56
+step   657 | loss: 9.103432 | lr 8.1134e-05 | norm: 2.1344 | dt: 1138.46ms | tok/sec: 899.46
+step   658 | loss: 9.216666 | lr 8.1258e-05 | norm: 2.0843 | dt: 1065.93ms | tok/sec: 960.67
+step   659 | loss: 9.036563 | lr 8.1381e-05 | norm: 2.0511 | dt: 1030.39ms | tok/sec: 993.80
+step   660 | loss: 8.823065 | lr 8.1504e-05 | norm: 2.3322 | dt: 1094.37ms | tok/sec: 935.70
+step   661 | loss: 9.152407 | lr 8.1628e-05 | norm: 2.4694 | dt: 1099.05ms | tok/sec: 931.71
+step   662 | loss: 9.231857 | lr 8.1751e-05 | norm: 2.6619 | dt: 1073.75ms | tok/sec: 953.67
+step   663 | loss: 10.113949 | lr 8.1874e-05 | norm: 4.8940 | dt: 1136.58ms | tok/sec: 900.95
+step   664 | loss: 9.106707 | lr 8.1998e-05 | norm: 2.9943 | dt: 1049.06ms | tok/sec: 976.11
+step   665 | loss: 8.930528 | lr 8.2121e-05 | norm: 2.3192 | dt: 1063.46ms | tok/sec: 962.90
+step   666 | loss: 8.591777 | lr 8.2244e-05 | norm: 2.3400 | dt: 1089.18ms | tok/sec: 940.16
+step   667 | loss: 9.087032 | lr 8.2367e-05 | norm: 2.1669 | dt: 1090.92ms | tok/sec: 938.65
+step   668 | loss: 8.666059 | lr 8.2491e-05 | norm: 2.2257 | dt: 1061.91ms | tok/sec: 964.30
+step   669 | loss: 8.674997 | lr 8.2614e-05 | norm: 2.7636 | dt: 1048.92ms | tok/sec: 976.25
+step   670 | loss: 8.848608 | lr 8.2737e-05 | norm: 2.2948 | dt: 1069.91ms | tok/sec: 957.09
+step   671 | loss: 8.650072 | lr 8.2861e-05 | norm: 2.5320 | dt: 1093.12ms | tok/sec: 936.76
+step   672 | loss: 8.573573 | lr 8.2984e-05 | norm: 2.5220 | dt: 1080.67ms | tok/sec: 947.56
+step   673 | loss: 8.551031 | lr 8.3107e-05 | norm: 2.7873 | dt: 1054.78ms | tok/sec: 970.82
+step   674 | loss: 8.561527 | lr 8.3231e-05 | norm: 2.5717 | dt: 1053.65ms | tok/sec: 971.86
+step   675 | loss: 8.484638 | lr 8.3354e-05 | norm: 2.4688 | dt: 1060.41ms | tok/sec: 965.66
+step   676 | loss: 8.625444 | lr 8.3477e-05 | norm: 2.3930 | dt: 1087.18ms | tok/sec: 941.88
+step   677 | loss: 8.593750 | lr 8.3600e-05 | norm: 2.2997 | dt: 1084.90ms | tok/sec: 943.87
+step   678 | loss: 9.075161 | lr 8.3724e-05 | norm: 2.2667 | dt: 1062.69ms | tok/sec: 963.59
+step   679 | loss: 8.909394 | lr 8.3847e-05 | norm: 2.2296 | dt: 1075.03ms | tok/sec: 952.53
+step   680 | loss: 8.914391 | lr 8.3970e-05 | norm: 2.3965 | dt: 1051.65ms | tok/sec: 973.71
+step   681 | loss: 8.800482 | lr 8.4094e-05 | norm: 2.2884 | dt: 1077.23ms | tok/sec: 950.59
+step   682 | loss: 8.830195 | lr 8.4217e-05 | norm: 2.1530 | dt: 1035.86ms | tok/sec: 988.55
+step   683 | loss: 8.986810 | lr 8.4340e-05 | norm: 2.3711 | dt: 1054.78ms | tok/sec: 970.81
+step   684 | loss: 9.730652 | lr 8.4464e-05 | norm: 6.3089 | dt: 1092.61ms | tok/sec: 937.20
+step   685 | loss: 9.222187 | lr 8.4587e-05 | norm: 3.6299 | dt: 1053.03ms | tok/sec: 972.43
+step   686 | loss: 8.728671 | lr 8.4710e-05 | norm: 2.2764 | dt: 1062.23ms | tok/sec: 964.01
+step   687 | loss: 8.986309 | lr 8.4834e-05 | norm: 2.4559 | dt: 1021.56ms | tok/sec: 1002.39
+step   688 | loss: 8.912380 | lr 8.4957e-05 | norm: 2.1340 | dt: 1110.48ms | tok/sec: 922.12
+step   689 | loss: 8.870281 | lr 8.5080e-05 | norm: 2.0223 | dt: 1060.59ms | tok/sec: 965.50
+step   690 | loss: 8.547719 | lr 8.5203e-05 | norm: 2.2827 | dt: 1064.48ms | tok/sec: 961.97
+step   691 | loss: 9.072399 | lr 8.5327e-05 | norm: 2.1925 | dt: 1049.57ms | tok/sec: 975.64
+step   692 | loss: 8.998476 | lr 8.5450e-05 | norm: 2.1080 | dt: 1127.30ms | tok/sec: 908.37
+step   693 | loss: 8.936147 | lr 8.5573e-05 | norm: 2.3558 | dt: 1060.21ms | tok/sec: 965.85
+step   694 | loss: 9.008550 | lr 8.5697e-05 | norm: 2.2225 | dt: 1065.09ms | tok/sec: 961.43
+step   695 | loss: 8.972921 | lr 8.5820e-05 | norm: 2.2964 | dt: 1031.70ms | tok/sec: 992.53
+step   696 | loss: 8.840612 | lr 8.5943e-05 | norm: 2.4073 | dt: 1091.36ms | tok/sec: 938.28
+step   697 | loss: 8.841949 | lr 8.6067e-05 | norm: 2.3369 | dt: 1076.23ms | tok/sec: 951.47
+step   698 | loss: 8.772057 | lr 8.6190e-05 | norm: 2.2333 | dt: 1063.30ms | tok/sec: 963.04
+step   699 | loss: 8.818398 | lr 8.6313e-05 | norm: 2.0231 | dt: 1045.65ms | tok/sec: 979.29
+step   700 | loss: 8.952849 | lr 8.6436e-05 | norm: 2.0710 | dt: 1080.02ms | tok/sec: 948.13
+step   701 | loss: 8.956535 | lr 8.6560e-05 | norm: 2.3381 | dt: 1126.22ms | tok/sec: 909.24
+step   702 | loss: 9.158030 | lr 8.6683e-05 | norm: 2.1082 | dt: 1048.04ms | tok/sec: 977.07
+step   703 | loss: 9.034456 | lr 8.6806e-05 | norm: 2.3404 | dt: 1087.83ms | tok/sec: 941.32
+step   704 | loss: 9.131250 | lr 8.6930e-05 | norm: 2.6216 | dt: 1036.14ms | tok/sec: 988.28
+step   705 | loss: 8.988242 | lr 8.7053e-05 | norm: 2.5794 | dt: 1075.48ms | tok/sec: 952.14
+step   706 | loss: 9.192209 | lr 8.7176e-05 | norm: 2.5215 | dt: 1035.71ms | tok/sec: 988.69
+step   707 | loss: 9.179635 | lr 8.7300e-05 | norm: 2.8735 | dt: 1078.92ms | tok/sec: 949.10
+step   708 | loss: 9.680914 | lr 8.7423e-05 | norm: 2.3117 | dt: 1095.89ms | tok/sec: 934.40
+step   709 | loss: 9.240596 | lr 8.7546e-05 | norm: 2.2288 | dt: 1074.74ms | tok/sec: 952.79
+step   710 | loss: 9.780956 | lr 8.7670e-05 | norm: 2.2963 | dt: 1046.06ms | tok/sec: 978.91
+step   711 | loss: 9.499529 | lr 8.7793e-05 | norm: 2.7167 | dt: 1055.98ms | tok/sec: 969.72
+step   712 | loss: 9.014887 | lr 8.7916e-05 | norm: 2.3871 | dt: 1092.18ms | tok/sec: 937.58
+step   713 | loss: 9.159265 | lr 8.8039e-05 | norm: 2.5832 | dt: 1057.14ms | tok/sec: 968.65
+step   714 | loss: 9.448334 | lr 8.8163e-05 | norm: 2.8595 | dt: 1049.26ms | tok/sec: 975.92
+step   715 | loss: 9.243692 | lr 8.8286e-05 | norm: 2.1380 | dt: 1081.95ms | tok/sec: 946.44
+step   716 | loss: 9.032351 | lr 8.8409e-05 | norm: 2.1529 | dt: 1041.49ms | tok/sec: 983.21
+step   717 | loss: 8.973390 | lr 8.8533e-05 | norm: 2.1467 | dt: 1077.78ms | tok/sec: 950.10
+step   718 | loss: 9.060434 | lr 8.8656e-05 | norm: 2.2317 | dt: 1095.39ms | tok/sec: 934.83
+step   719 | loss: 8.631540 | lr 8.8779e-05 | norm: 2.6591 | dt: 1032.47ms | tok/sec: 991.79
+step   720 | loss: 9.097478 | lr 8.8903e-05 | norm: 2.1940 | dt: 1056.18ms | tok/sec: 969.53
+step   721 | loss: 9.301294 | lr 8.9026e-05 | norm: 1.8970 | dt: 1092.83ms | tok/sec: 937.01
+step   722 | loss: 8.953793 | lr 8.9149e-05 | norm: 2.4777 | dt: 1036.74ms | tok/sec: 987.71
+step   723 | loss: 9.106478 | lr 8.9273e-05 | norm: 2.1460 | dt: 1075.20ms | tok/sec: 952.38
+step   724 | loss: 8.865763 | lr 8.9396e-05 | norm: 2.4272 | dt: 1094.32ms | tok/sec: 935.74
+step   725 | loss: 8.900193 | lr 8.9519e-05 | norm: 2.0306 | dt: 1079.46ms | tok/sec: 948.62
+step   726 | loss: 8.954119 | lr 8.9642e-05 | norm: 2.2697 | dt: 1058.28ms | tok/sec: 967.61
+step   727 | loss: 8.822912 | lr 8.9766e-05 | norm: 2.1233 | dt: 1039.70ms | tok/sec: 984.90
+step   728 | loss: 8.851233 | lr 8.9889e-05 | norm: 2.1015 | dt: 1077.14ms | tok/sec: 950.66
+step   729 | loss: 8.908531 | lr 9.0012e-05 | norm: 2.0250 | dt: 1075.84ms | tok/sec: 951.82
+step   730 | loss: 8.990955 | lr 9.0136e-05 | norm: 2.1417 | dt: 1052.64ms | tok/sec: 972.80
+step   731 | loss: 9.192360 | lr 9.0259e-05 | norm: 1.8072 | dt: 1065.76ms | tok/sec: 960.81
+step   732 | loss: 8.990671 | lr 9.0382e-05 | norm: 2.2475 | dt: 1065.81ms | tok/sec: 960.78
+step   733 | loss: 8.953271 | lr 9.0506e-05 | norm: 2.2937 | dt: 1040.83ms | tok/sec: 983.83
+step   734 | loss: 8.646629 | lr 9.0629e-05 | norm: 2.1437 | dt: 1111.95ms | tok/sec: 920.90
+step   735 | loss: 9.192455 | lr 9.0752e-05 | norm: 2.7632 | dt: 1070.50ms | tok/sec: 956.56
+step   736 | loss: 8.947604 | lr 9.0875e-05 | norm: 2.1741 | dt: 1059.14ms | tok/sec: 966.82
+step   737 | loss: 9.234939 | lr 9.0999e-05 | norm: 1.9608 | dt: 1061.49ms | tok/sec: 964.68
+step   738 | loss: 9.411104 | lr 9.1122e-05 | norm: 2.0894 | dt: 1061.89ms | tok/sec: 964.32
+step   739 | loss: 9.514652 | lr 9.1245e-05 | norm: 2.0477 | dt: 1059.47ms | tok/sec: 966.52
+step   740 | loss: 9.197868 | lr 9.1369e-05 | norm: 2.0991 | dt: 1091.02ms | tok/sec: 938.57
+step   741 | loss: 9.045915 | lr 9.1492e-05 | norm: 2.3272 | dt: 1054.45ms | tok/sec: 971.12
+step   742 | loss: 8.952904 | lr 9.1615e-05 | norm: 2.5566 | dt: 1069.09ms | tok/sec: 957.83
+step   743 | loss: 9.053035 | lr 9.1739e-05 | norm: 2.3127 | dt: 1064.30ms | tok/sec: 962.14
+step   744 | loss: 8.958115 | lr 9.1862e-05 | norm: 2.0985 | dt: 1071.77ms | tok/sec: 955.43
+step   745 | loss: 8.874498 | lr 9.1985e-05 | norm: 2.0159 | dt: 1054.66ms | tok/sec: 970.93
+step   746 | loss: 8.702845 | lr 9.2109e-05 | norm: 2.1448 | dt: 1080.04ms | tok/sec: 948.11
+step   747 | loss: 8.583280 | lr 9.2232e-05 | norm: 2.1976 | dt: 1077.52ms | tok/sec: 950.33
+step   748 | loss: 8.601640 | lr 9.2355e-05 | norm: 2.1295 | dt: 1057.33ms | tok/sec: 968.48
+step   749 | loss: 8.599684 | lr 9.2478e-05 | norm: 2.4855 | dt: 1086.74ms | tok/sec: 942.26
+step   750 | loss: 8.695425 | lr 9.2602e-05 | norm: 2.2430 | dt: 1073.73ms | tok/sec: 953.69
+step   751 | loss: 9.092445 | lr 9.2725e-05 | norm: 2.1137 | dt: 1058.91ms | tok/sec: 967.03
+step   752 | loss: 8.842436 | lr 9.2848e-05 | norm: 2.3256 | dt: 1026.96ms | tok/sec: 997.12
+step   753 | loss: 8.964775 | lr 9.2972e-05 | norm: 2.3038 | dt: 1089.87ms | tok/sec: 939.56
+step   754 | loss: 8.826220 | lr 9.3095e-05 | norm: 2.1893 | dt: 1072.28ms | tok/sec: 954.98
+step   755 | loss: 9.407639 | lr 9.3218e-05 | norm: 2.1851 | dt: 1012.67ms | tok/sec: 1011.19
+step   756 | loss: 9.270421 | lr 9.3342e-05 | norm: 2.0636 | dt: 1108.85ms | tok/sec: 923.48
+step   757 | loss: 9.288560 | lr 9.3465e-05 | norm: 2.2574 | dt: 1026.78ms | tok/sec: 997.29
+step   758 | loss: 9.877341 | lr 9.3588e-05 | norm: 2.0651 | dt: 1061.38ms | tok/sec: 964.78
+step   759 | loss: 10.278774 | lr 9.3711e-05 | norm: 2.3509 | dt: 1073.45ms | tok/sec: 953.94
+step   760 | loss: 10.217590 | lr 9.3835e-05 | norm: 2.2487 | dt: 1091.23ms | tok/sec: 938.39
+step   761 | loss: 9.484711 | lr 9.3958e-05 | norm: 1.8594 | dt: 1071.33ms | tok/sec: 955.82
+step   762 | loss: 8.835304 | lr 9.4081e-05 | norm: 2.1868 | dt: 1077.11ms | tok/sec: 950.69
+step   763 | loss: 8.854344 | lr 9.4205e-05 | norm: 2.1868 | dt: 1081.07ms | tok/sec: 947.21
+step   764 | loss: 8.586562 | lr 9.4328e-05 | norm: 2.5876 | dt: 1107.25ms | tok/sec: 924.81
+step   765 | loss: 9.219075 | lr 9.4451e-05 | norm: 2.0487 | dt: 1098.11ms | tok/sec: 932.51
+step   766 | loss: 8.398272 | lr 9.4575e-05 | norm: 2.5129 | dt: 1134.85ms | tok/sec: 902.32
+step   767 | loss: 8.454460 | lr 9.4698e-05 | norm: 2.5141 | dt: 1135.65ms | tok/sec: 901.69
+step   768 | loss: 8.702452 | lr 9.4821e-05 | norm: 2.2667 | dt: 1063.42ms | tok/sec: 962.94
+step   769 | loss: 8.676806 | lr 9.4945e-05 | norm: 2.1727 | dt: 1126.43ms | tok/sec: 909.06
+step   770 | loss: 8.604012 | lr 9.5068e-05 | norm: 2.5992 | dt: 1080.25ms | tok/sec: 947.93
+step   771 | loss: 8.943619 | lr 9.5191e-05 | norm: 2.2132 | dt: 1165.31ms | tok/sec: 878.74
+step   772 | loss: 8.805723 | lr 9.5314e-05 | norm: 2.0635 | dt: 1062.97ms | tok/sec: 963.34
+step   773 | loss: 8.775394 | lr 9.5438e-05 | norm: 2.3062 | dt: 1064.08ms | tok/sec: 962.34
+step   774 | loss: 8.677334 | lr 9.5561e-05 | norm: 2.4133 | dt: 1145.93ms | tok/sec: 893.60
+step   775 | loss: 8.601910 | lr 9.5684e-05 | norm: 2.2703 | dt: 1121.62ms | tok/sec: 912.96
+step   776 | loss: 9.278111 | lr 9.5808e-05 | norm: 1.9820 | dt: 1076.00ms | tok/sec: 951.68
+step   777 | loss: 9.231277 | lr 9.5931e-05 | norm: 2.0572 | dt: 1032.18ms | tok/sec: 992.07
+step   778 | loss: 8.784094 | lr 9.6054e-05 | norm: 2.0896 | dt: 1110.88ms | tok/sec: 921.79
+step   779 | loss: 9.300509 | lr 9.6178e-05 | norm: 1.9142 | dt: 1087.58ms | tok/sec: 941.54
+step   780 | loss: 9.044426 | lr 9.6301e-05 | norm: 1.9358 | dt: 1064.03ms | tok/sec: 962.38
+step   781 | loss: 8.640310 | lr 9.6424e-05 | norm: 2.1909 | dt: 1094.65ms | tok/sec: 935.46
+step   782 | loss: 8.951607 | lr 9.6547e-05 | norm: 2.0809 | dt: 1078.34ms | tok/sec: 949.61
+step   783 | loss: 8.787340 | lr 9.6671e-05 | norm: 2.2985 | dt: 1092.82ms | tok/sec: 937.03
+step   784 | loss: 8.927297 | lr 9.6794e-05 | norm: 2.1882 | dt: 1078.81ms | tok/sec: 949.20
+step   785 | loss: 8.920372 | lr 9.6917e-05 | norm: 2.3596 | dt: 1090.08ms | tok/sec: 939.38
+step   786 | loss: 9.065801 | lr 9.7041e-05 | norm: 2.2627 | dt: 1123.27ms | tok/sec: 911.62
+step   787 | loss: 9.243922 | lr 9.7164e-05 | norm: 2.1368 | dt: 1138.30ms | tok/sec: 899.59
+step   788 | loss: 8.809605 | lr 9.7287e-05 | norm: 2.4155 | dt: 1107.81ms | tok/sec: 924.34
+step   789 | loss: 8.929049 | lr 9.7411e-05 | norm: 2.2027 | dt: 1064.88ms | tok/sec: 961.61
+step   790 | loss: 8.891448 | lr 9.7534e-05 | norm: 2.2263 | dt: 1078.26ms | tok/sec: 949.68
+step   791 | loss: 9.095574 | lr 9.7657e-05 | norm: 2.1026 | dt: 1119.98ms | tok/sec: 914.30
+step   792 | loss: 9.042283 | lr 9.7781e-05 | norm: 2.3646 | dt: 1389.01ms | tok/sec: 737.22
+step   793 | loss: 8.889419 | lr 9.7904e-05 | norm: 2.1069 | dt: 1446.18ms | tok/sec: 708.07
+step   794 | loss: 9.003721 | lr 9.8027e-05 | norm: 2.0970 | dt: 1372.17ms | tok/sec: 746.26
+step   795 | loss: 9.073684 | lr 9.8150e-05 | norm: 2.2100 | dt: 1149.61ms | tok/sec: 890.74
+step   796 | loss: 8.852517 | lr 9.8274e-05 | norm: 2.2870 | dt: 1120.40ms | tok/sec: 913.96
+step   797 | loss: 9.035477 | lr 9.8397e-05 | norm: 2.4627 | dt: 1128.69ms | tok/sec: 907.25
+step   798 | loss: 8.628088 | lr 9.8520e-05 | norm: 2.3895 | dt: 1110.29ms | tok/sec: 922.28
+step   799 | loss: 8.575921 | lr 9.8644e-05 | norm: 2.1322 | dt: 1066.68ms | tok/sec: 959.98
+step   800 | loss: 8.681316 | lr 9.8767e-05 | norm: 2.1183 | dt: 1083.18ms | tok/sec: 945.37
+step   801 | loss: 8.542912 | lr 9.8890e-05 | norm: 2.2085 | dt: 1077.20ms | tok/sec: 950.61
+step   802 | loss: 8.701980 | lr 9.9014e-05 | norm: 2.3260 | dt: 1055.10ms | tok/sec: 970.52
+step   803 | loss: 8.643976 | lr 9.9137e-05 | norm: 2.1989 | dt: 1085.20ms | tok/sec: 943.60
+step   804 | loss: 8.740775 | lr 9.9260e-05 | norm: 2.3765 | dt: 1006.73ms | tok/sec: 1017.16
+step   805 | loss: 8.774025 | lr 9.9383e-05 | norm: 2.2498 | dt: 1072.36ms | tok/sec: 954.90
+step   806 | loss: 8.660868 | lr 9.9507e-05 | norm: 2.4030 | dt: 1092.17ms | tok/sec: 937.58
+step   807 | loss: 8.656672 | lr 9.9630e-05 | norm: 2.0664 | dt: 1103.82ms | tok/sec: 927.69
+step   808 | loss: 8.666130 | lr 9.9753e-05 | norm: 2.2265 | dt: 1035.72ms | tok/sec: 988.69
+step   809 | loss: 8.548398 | lr 9.9877e-05 | norm: 2.4132 | dt: 1065.20ms | tok/sec: 961.32
+step   810 | loss: 8.569281 | lr 1.0000e-04 | norm: 2.5136 | dt: 1086.36ms | tok/sec: 942.60
+step   811 | loss: 8.449413 | lr 1.0000e-04 | norm: 2.2471 | dt: 1069.98ms | tok/sec: 957.03
+step   812 | loss: 8.504863 | lr 1.0000e-04 | norm: 2.4794 | dt: 1055.19ms | tok/sec: 970.44
+step   813 | loss: 8.699028 | lr 1.0000e-04 | norm: 2.0697 | dt: 1055.68ms | tok/sec: 969.99
+step   814 | loss: 9.081644 | lr 1.0000e-04 | norm: 2.2809 | dt: 1061.82ms | tok/sec: 964.38
+step   815 | loss: 8.739738 | lr 1.0000e-04 | norm: 2.0983 | dt: 1046.14ms | tok/sec: 978.83
+step   816 | loss: 9.047567 | lr 1.0000e-04 | norm: 2.0112 | dt: 1065.04ms | tok/sec: 961.47
+step   817 | loss: 8.691051 | lr 1.0000e-04 | norm: 2.5632 | dt: 1044.67ms | tok/sec: 980.21
+step   818 | loss: 8.887123 | lr 1.0000e-04 | norm: 2.6298 | dt: 1119.20ms | tok/sec: 914.94
+step   819 | loss: 8.666589 | lr 1.0000e-04 | norm: 2.4420 | dt: 1070.39ms | tok/sec: 956.66
+step   820 | loss: 8.731932 | lr 1.0000e-04 | norm: 1.9348 | dt: 1043.28ms | tok/sec: 981.52
+step   821 | loss: 8.986955 | lr 1.0000e-04 | norm: 2.1773 | dt: 1112.39ms | tok/sec: 920.54
+step   822 | loss: 8.909842 | lr 9.9999e-05 | norm: 1.9875 | dt: 1122.56ms | tok/sec: 912.20
+step   823 | loss: 8.789581 | lr 9.9999e-05 | norm: 2.2840 | dt: 1153.26ms | tok/sec: 887.92
+step   824 | loss: 8.945356 | lr 9.9999e-05 | norm: 2.0607 | dt: 1100.75ms | tok/sec: 930.28
+step   825 | loss: 8.729773 | lr 9.9999e-05 | norm: 2.2716 | dt: 1116.29ms | tok/sec: 917.32
+step   826 | loss: 8.866590 | lr 9.9999e-05 | norm: 2.0604 | dt: 1056.73ms | tok/sec: 969.02
+step   827 | loss: 8.903938 | lr 9.9999e-05 | norm: 1.9970 | dt: 1066.26ms | tok/sec: 960.36
+step   828 | loss: 9.019989 | lr 9.9999e-05 | norm: 2.3384 | dt: 1082.58ms | tok/sec: 945.89
+step   829 | loss: 8.920835 | lr 9.9999e-05 | norm: 2.3111 | dt: 1057.17ms | tok/sec: 968.62
+step   830 | loss: 8.947121 | lr 9.9999e-05 | norm: 2.3221 | dt: 1121.79ms | tok/sec: 912.82
+step   831 | loss: 9.072923 | lr 9.9998e-05 | norm: 2.1096 | dt: 1084.14ms | tok/sec: 944.53
+step   832 | loss: 8.785077 | lr 9.9998e-05 | norm: 2.3125 | dt: 1057.70ms | tok/sec: 968.14
+step   833 | loss: 8.667720 | lr 9.9998e-05 | norm: 2.5640 | dt: 1086.25ms | tok/sec: 942.69
+step   834 | loss: 8.707882 | lr 9.9998e-05 | norm: 2.5095 | dt: 1121.80ms | tok/sec: 912.81
+step   835 | loss: 8.729767 | lr 9.9998e-05 | norm: 2.1479 | dt: 1072.39ms | tok/sec: 954.88
+step   836 | loss: 8.799715 | lr 9.9997e-05 | norm: 2.0635 | dt: 1061.65ms | tok/sec: 964.53
+step   837 | loss: 8.679296 | lr 9.9997e-05 | norm: 2.0236 | dt: 1048.65ms | tok/sec: 976.49
+step   838 | loss: 8.582664 | lr 9.9997e-05 | norm: 2.1267 | dt: 1066.54ms | tok/sec: 960.12
+step   839 | loss: 8.920385 | lr 9.9997e-05 | norm: 2.1904 | dt: 1075.14ms | tok/sec: 952.43
+step   840 | loss: 8.408062 | lr 9.9996e-05 | norm: 2.4560 | dt: 1050.49ms | tok/sec: 974.79
+step   841 | loss: 8.688784 | lr 9.9996e-05 | norm: 2.2354 | dt: 1053.87ms | tok/sec: 971.66
+step   842 | loss: 8.460890 | lr 9.9996e-05 | norm: 2.3483 | dt: 1079.65ms | tok/sec: 948.46
+step   843 | loss: 8.499644 | lr 9.9996e-05 | norm: 2.2727 | dt: 1075.81ms | tok/sec: 951.84
+step   844 | loss: 8.620753 | lr 9.9995e-05 | norm: 2.1010 | dt: 1103.00ms | tok/sec: 928.38
+step   845 | loss: 8.901835 | lr 9.9995e-05 | norm: 2.0467 | dt: 1039.90ms | tok/sec: 984.71
+step   846 | loss: 8.718796 | lr 9.9995e-05 | norm: 2.0253 | dt: 1089.40ms | tok/sec: 939.97
+step   847 | loss: 8.743935 | lr 9.9995e-05 | norm: 2.3063 | dt: 1140.15ms | tok/sec: 898.13
+step   848 | loss: 8.547209 | lr 9.9994e-05 | norm: 2.3480 | dt: 1095.05ms | tok/sec: 935.12
+step   849 | loss: 8.645247 | lr 9.9994e-05 | norm: 2.3560 | dt: 1075.78ms | tok/sec: 951.86
+step   850 | loss: 8.614141 | lr 9.9994e-05 | norm: 2.2716 | dt: 1070.43ms | tok/sec: 956.62
+step   851 | loss: 8.547935 | lr 9.9993e-05 | norm: 2.1140 | dt: 1080.69ms | tok/sec: 947.54
+step   852 | loss: 8.827106 | lr 9.9993e-05 | norm: 1.9041 | dt: 1052.36ms | tok/sec: 973.05
+step   853 | loss: 8.369709 | lr 9.9993e-05 | norm: 2.5759 | dt: 1060.29ms | tok/sec: 965.77
+step   854 | loss: 8.759862 | lr 9.9992e-05 | norm: 2.0802 | dt: 1074.51ms | tok/sec: 952.99
+step   855 | loss: 8.632961 | lr 9.9992e-05 | norm: 2.2029 | dt: 1081.04ms | tok/sec: 947.24
+step   856 | loss: 8.907111 | lr 9.9992e-05 | norm: 1.8741 | dt: 1102.29ms | tok/sec: 928.97
+step   857 | loss: 8.589128 | lr 9.9991e-05 | norm: 2.0000 | dt: 1096.97ms | tok/sec: 933.48
+step   858 | loss: 8.427314 | lr 9.9991e-05 | norm: 2.0478 | dt: 1094.05ms | tok/sec: 935.97
+step   859 | loss: 8.365033 | lr 9.9990e-05 | norm: 2.1108 | dt: 1063.33ms | tok/sec: 963.01
+step   860 | loss: 9.216200 | lr 9.9990e-05 | norm: 2.0054 | dt: 1064.00ms | tok/sec: 962.41
+step   861 | loss: 9.232727 | lr 9.9990e-05 | norm: 2.3738 | dt: 1084.13ms | tok/sec: 944.53
+step   862 | loss: 8.611700 | lr 9.9989e-05 | norm: 2.1611 | dt: 1069.48ms | tok/sec: 957.47
+step   863 | loss: 8.625942 | lr 9.9989e-05 | norm: 2.1001 | dt: 1059.23ms | tok/sec: 966.74
+step   864 | loss: 8.752315 | lr 9.9988e-05 | norm: 2.5810 | dt: 1077.25ms | tok/sec: 950.57
+step   865 | loss: 8.791975 | lr 9.9988e-05 | norm: 2.1915 | dt: 1053.30ms | tok/sec: 972.18
+step   866 | loss: 8.391861 | lr 9.9987e-05 | norm: 3.1601 | dt: 1054.77ms | tok/sec: 970.83
+step   867 | loss: 9.010274 | lr 9.9987e-05 | norm: 3.0140 | dt: 1058.17ms | tok/sec: 967.71
+step   868 | loss: 8.491716 | lr 9.9986e-05 | norm: 2.1878 | dt: 1055.03ms | tok/sec: 970.59
+step   869 | loss: 9.003181 | lr 9.9986e-05 | norm: 1.8479 | dt: 1070.40ms | tok/sec: 956.65
+step   870 | loss: 9.066758 | lr 9.9986e-05 | norm: 2.0529 | dt: 1064.81ms | tok/sec: 961.68
+step   871 | loss: 8.710450 | lr 9.9985e-05 | norm: 1.9553 | dt: 1091.36ms | tok/sec: 938.28
+step   872 | loss: 8.941834 | lr 9.9985e-05 | norm: 2.1180 | dt: 1108.75ms | tok/sec: 923.57
+step   873 | loss: 8.650375 | lr 9.9984e-05 | norm: 2.1745 | dt: 1137.58ms | tok/sec: 900.16
+step   874 | loss: 8.759464 | lr 9.9983e-05 | norm: 2.2125 | dt: 1105.40ms | tok/sec: 926.36
+step   875 | loss: 8.690959 | lr 9.9983e-05 | norm: 2.3134 | dt: 1036.21ms | tok/sec: 988.22
+step   876 | loss: 8.654592 | lr 9.9982e-05 | norm: 2.3163 | dt: 1071.88ms | tok/sec: 955.33
+step   877 | loss: 8.797203 | lr 9.9982e-05 | norm: 2.1460 | dt: 1084.60ms | tok/sec: 944.13
+step   878 | loss: 8.725552 | lr 9.9981e-05 | norm: 2.3822 | dt: 1078.70ms | tok/sec: 949.29
+step   879 | loss: 8.541739 | lr 9.9981e-05 | norm: 2.2431 | dt: 1075.60ms | tok/sec: 952.03
+step   880 | loss: 8.522446 | lr 9.9980e-05 | norm: 2.3886 | dt: 1100.37ms | tok/sec: 930.59
+step   881 | loss: 9.217325 | lr 9.9980e-05 | norm: 2.2192 | dt: 1146.23ms | tok/sec: 893.36
+step   882 | loss: 9.052567 | lr 9.9979e-05 | norm: 1.9697 | dt: 1150.25ms | tok/sec: 890.24
+step   883 | loss: 8.776726 | lr 9.9978e-05 | norm: 1.8749 | dt: 1087.04ms | tok/sec: 942.01
+step   884 | loss: 8.774747 | lr 9.9978e-05 | norm: 1.9504 | dt: 1059.62ms | tok/sec: 966.38
+step   885 | loss: 8.441269 | lr 9.9977e-05 | norm: 2.3696 | dt: 1067.36ms | tok/sec: 959.38
+step   886 | loss: 8.667453 | lr 9.9977e-05 | norm: 1.9725 | dt: 1096.26ms | tok/sec: 934.09
+step   887 | loss: 8.557733 | lr 9.9976e-05 | norm: 2.1672 | dt: 1069.72ms | tok/sec: 957.26
+step   888 | loss: 8.637890 | lr 9.9975e-05 | norm: 2.2522 | dt: 1129.28ms | tok/sec: 906.77
+step   889 | loss: 8.779989 | lr 9.9975e-05 | norm: 2.1609 | dt: 1093.79ms | tok/sec: 936.19
+step   890 | loss: 8.834416 | lr 9.9974e-05 | norm: 2.2263 | dt: 1099.71ms | tok/sec: 931.15
+step   891 | loss: 8.422253 | lr 9.9973e-05 | norm: 2.3970 | dt: 1082.78ms | tok/sec: 945.71
+step   892 | loss: 8.543614 | lr 9.9973e-05 | norm: 2.4212 | dt: 1088.55ms | tok/sec: 940.70
+step   893 | loss: 8.607113 | lr 9.9972e-05 | norm: 2.2160 | dt: 1083.58ms | tok/sec: 945.01
+step   894 | loss: 8.796464 | lr 9.9971e-05 | norm: 2.3770 | dt: 1070.93ms | tok/sec: 956.17
+step   895 | loss: 8.780802 | lr 9.9971e-05 | norm: 2.2684 | dt: 1105.13ms | tok/sec: 926.59
+step   896 | loss: 8.568789 | lr 9.9970e-05 | norm: 2.3797 | dt: 1101.61ms | tok/sec: 929.55
+step   897 | loss: 8.510588 | lr 9.9969e-05 | norm: 2.4437 | dt: 1062.37ms | tok/sec: 963.89
+step   898 | loss: 8.721070 | lr 9.9969e-05 | norm: 2.3680 | dt: 1097.49ms | tok/sec: 933.04
+step   899 | loss: 8.728736 | lr 9.9968e-05 | norm: 2.0564 | dt: 1046.11ms | tok/sec: 978.87
+step   900 | loss: 8.805716 | lr 9.9967e-05 | norm: 2.0120 | dt: 1092.32ms | tok/sec: 937.45
+step   901 | loss: 8.721067 | lr 9.9966e-05 | norm: 2.0323 | dt: 1132.20ms | tok/sec: 904.43
+step   902 | loss: 8.591217 | lr 9.9966e-05 | norm: 2.2606 | dt: 1032.93ms | tok/sec: 991.35
+step   903 | loss: 8.646887 | lr 9.9965e-05 | norm: 2.1829 | dt: 1088.28ms | tok/sec: 940.93
+step   904 | loss: 8.757069 | lr 9.9964e-05 | norm: 2.0454 | dt: 1072.07ms | tok/sec: 955.16
+step   905 | loss: 8.727005 | lr 9.9963e-05 | norm: 2.2530 | dt: 1044.70ms | tok/sec: 980.18
+step   906 | loss: 8.526386 | lr 9.9962e-05 | norm: 2.6755 | dt: 1131.23ms | tok/sec: 905.21
+step   907 | loss: 8.567754 | lr 9.9962e-05 | norm: 2.2605 | dt: 1111.88ms | tok/sec: 920.96
+step   908 | loss: 8.603821 | lr 9.9961e-05 | norm: 2.1358 | dt: 1068.92ms | tok/sec: 957.97
+step   909 | loss: 8.605050 | lr 9.9960e-05 | norm: 2.1161 | dt: 1146.19ms | tok/sec: 893.40
+step   910 | loss: 8.739734 | lr 9.9959e-05 | norm: 2.0306 | dt: 1070.63ms | tok/sec: 956.45
+step   911 | loss: 8.756115 | lr 9.9958e-05 | norm: 2.1523 | dt: 1135.66ms | tok/sec: 901.68
+step   912 | loss: 8.552540 | lr 9.9958e-05 | norm: 2.1107 | dt: 1060.51ms | tok/sec: 965.57
+step   913 | loss: 8.551622 | lr 9.9957e-05 | norm: 2.0722 | dt: 1069.87ms | tok/sec: 957.13
+step   914 | loss: 8.593995 | lr 9.9956e-05 | norm: 2.0183 | dt: 1119.12ms | tok/sec: 915.00
+step   915 | loss: 8.812048 | lr 9.9955e-05 | norm: 2.0914 | dt: 1120.46ms | tok/sec: 913.91
+step   916 | loss: 8.642818 | lr 9.9954e-05 | norm: 2.0379 | dt: 1134.88ms | tok/sec: 902.30
+step   917 | loss: 8.927495 | lr 9.9953e-05 | norm: 2.0964 | dt: 1070.56ms | tok/sec: 956.51
+step   918 | loss: 8.757974 | lr 9.9952e-05 | norm: 2.3470 | dt: 1070.75ms | tok/sec: 956.34
+step   919 | loss: 8.843952 | lr 9.9952e-05 | norm: 2.4447 | dt: 1120.44ms | tok/sec: 913.92
+step   920 | loss: 8.949360 | lr 9.9951e-05 | norm: 2.3634 | dt: 1050.01ms | tok/sec: 975.22
+step   921 | loss: 8.803893 | lr 9.9950e-05 | norm: 2.4940 | dt: 1077.12ms | tok/sec: 950.68
+step   922 | loss: 8.768879 | lr 9.9949e-05 | norm: 2.0501 | dt: 1066.48ms | tok/sec: 960.16
+step   923 | loss: 8.770592 | lr 9.9948e-05 | norm: 1.9907 | dt: 1076.22ms | tok/sec: 951.48
+step   924 | loss: 8.828043 | lr 9.9947e-05 | norm: 2.0719 | dt: 1076.39ms | tok/sec: 951.33
+step   925 | loss: 8.797215 | lr 9.9946e-05 | norm: 2.0540 | dt: 1069.25ms | tok/sec: 957.68
+step   926 | loss: 8.762148 | lr 9.9945e-05 | norm: 2.0424 | dt: 1067.86ms | tok/sec: 958.92
+step   927 | loss: 8.557509 | lr 9.9944e-05 | norm: 2.2968 | dt: 1084.78ms | tok/sec: 943.97
+step   928 | loss: 8.588815 | lr 9.9943e-05 | norm: 2.2327 | dt: 1118.38ms | tok/sec: 915.61
+step   929 | loss: 8.889326 | lr 9.9942e-05 | norm: 2.1610 | dt: 1089.32ms | tok/sec: 940.03
+step   930 | loss: 8.296841 | lr 9.9941e-05 | norm: 2.5410 | dt: 1120.79ms | tok/sec: 913.64
+step   931 | loss: 8.651551 | lr 9.9940e-05 | norm: 2.4765 | dt: 1099.44ms | tok/sec: 931.38
+step   932 | loss: 8.906092 | lr 9.9939e-05 | norm: 1.9957 | dt: 1098.79ms | tok/sec: 931.93
+step   933 | loss: 9.067668 | lr 9.9938e-05 | norm: 2.0552 | dt: 1093.04ms | tok/sec: 936.84
+step   934 | loss: 8.738274 | lr 9.9937e-05 | norm: 1.9749 | dt: 1111.40ms | tok/sec: 921.36
+step   935 | loss: 8.536209 | lr 9.9936e-05 | norm: 1.9903 | dt: 1098.79ms | tok/sec: 931.94
+step   936 | loss: 8.477005 | lr 9.9935e-05 | norm: 2.0696 | dt: 1060.81ms | tok/sec: 965.30
+step   937 | loss: 9.261345 | lr 9.9934e-05 | norm: 2.3566 | dt: 1109.52ms | tok/sec: 922.92
+step   938 | loss: 9.161123 | lr 9.9933e-05 | norm: 2.1903 | dt: 1108.82ms | tok/sec: 923.51
+step   939 | loss: 9.013141 | lr 9.9932e-05 | norm: 1.9147 | dt: 1082.87ms | tok/sec: 945.64
+step   940 | loss: 8.524374 | lr 9.9931e-05 | norm: 2.1142 | dt: 1104.01ms | tok/sec: 927.53
+step   941 | loss: 8.367315 | lr 9.9930e-05 | norm: 2.2723 | dt: 1113.43ms | tok/sec: 919.68
+step   942 | loss: 8.283916 | lr 9.9929e-05 | norm: 2.4040 | dt: 1135.08ms | tok/sec: 902.14
+step   943 | loss: 8.525864 | lr 9.9928e-05 | norm: 2.1878 | dt: 1188.15ms | tok/sec: 861.84
+step   944 | loss: 8.186892 | lr 9.9926e-05 | norm: 2.3840 | dt: 1135.34ms | tok/sec: 901.93
+step   945 | loss: 8.358927 | lr 9.9925e-05 | norm: 2.1130 | dt: 1129.62ms | tok/sec: 906.50
+step   946 | loss: 8.118729 | lr 9.9924e-05 | norm: 2.3747 | dt: 1047.45ms | tok/sec: 977.61
+step   947 | loss: 8.150438 | lr 9.9923e-05 | norm: 2.2247 | dt: 1106.04ms | tok/sec: 925.82
+step   948 | loss: 8.272787 | lr 9.9922e-05 | norm: 2.1200 | dt: 1143.47ms | tok/sec: 895.52
+step   949 | loss: 8.405943 | lr 9.9921e-05 | norm: 2.1137 | dt: 1092.13ms | tok/sec: 937.62
+step   950 | loss: 8.501793 | lr 9.9920e-05 | norm: 2.0885 | dt: 1136.79ms | tok/sec: 900.78
+step   951 | loss: 8.867450 | lr 9.9918e-05 | norm: 2.2497 | dt: 1119.07ms | tok/sec: 915.05
+step   952 | loss: 9.160387 | lr 9.9917e-05 | norm: 1.8226 | dt: 1123.42ms | tok/sec: 911.50
+step   953 | loss: 8.720043 | lr 9.9916e-05 | norm: 2.0470 | dt: 1128.36ms | tok/sec: 907.51
+step   954 | loss: 8.642312 | lr 9.9915e-05 | norm: 2.3256 | dt: 1109.83ms | tok/sec: 922.67
+step   955 | loss: 8.305980 | lr 9.9914e-05 | norm: 2.7429 | dt: 1124.35ms | tok/sec: 910.75
+step   956 | loss: 8.572458 | lr 9.9913e-05 | norm: 2.2074 | dt: 1093.11ms | tok/sec: 936.78
+step   957 | loss: 8.821478 | lr 9.9911e-05 | norm: 2.2008 | dt: 1080.91ms | tok/sec: 947.35
+step   958 | loss: 8.800352 | lr 9.9910e-05 | norm: 2.1547 | dt: 1116.36ms | tok/sec: 917.27
+step   959 | loss: 8.718390 | lr 9.9909e-05 | norm: 2.3100 | dt: 1105.67ms | tok/sec: 926.14
+step   960 | loss: 8.565507 | lr 9.9908e-05 | norm: 2.2674 | dt: 1075.07ms | tok/sec: 952.49
+step   961 | loss: 8.642036 | lr 9.9906e-05 | norm: 2.1504 | dt: 1055.62ms | tok/sec: 970.05
+step   962 | loss: 8.576200 | lr 9.9905e-05 | norm: 1.9452 | dt: 1093.11ms | tok/sec: 936.77
+step   963 | loss: 8.501543 | lr 9.9904e-05 | norm: 2.0909 | dt: 1072.79ms | tok/sec: 954.52
+step   964 | loss: 8.820171 | lr 9.9903e-05 | norm: 2.1891 | dt: 1083.65ms | tok/sec: 944.95
+step   965 | loss: 8.918759 | lr 9.9901e-05 | norm: 2.2970 | dt: 1067.11ms | tok/sec: 959.60
+step   966 | loss: 8.846705 | lr 9.9900e-05 | norm: 2.4891 | dt: 1110.89ms | tok/sec: 921.78
+step   967 | loss: 8.825679 | lr 9.9899e-05 | norm: 2.3876 | dt: 1083.92ms | tok/sec: 944.72
+step   968 | loss: 8.663609 | lr 9.9898e-05 | norm: 2.6265 | dt: 1114.63ms | tok/sec: 918.69
+step   969 | loss: 8.963388 | lr 9.9896e-05 | norm: 2.2053 | dt: 1074.95ms | tok/sec: 952.60
+step   970 | loss: 8.885393 | lr 9.9895e-05 | norm: 2.5265 | dt: 1102.86ms | tok/sec: 928.50
+step   971 | loss: 8.950234 | lr 9.9894e-05 | norm: 2.2370 | dt: 1111.64ms | tok/sec: 921.17
+step   972 | loss: 8.966149 | lr 9.9892e-05 | norm: 2.5636 | dt: 1075.24ms | tok/sec: 952.35
+step   973 | loss: 8.498396 | lr 9.9891e-05 | norm: 2.5550 | dt: 1067.04ms | tok/sec: 959.67
+step   974 | loss: 8.511466 | lr 9.9890e-05 | norm: 2.4479 | dt: 1103.45ms | tok/sec: 928.00
+step   975 | loss: 9.096465 | lr 9.9888e-05 | norm: 2.4114 | dt: 1076.94ms | tok/sec: 950.84
+step   976 | loss: 8.931646 | lr 9.9887e-05 | norm: 2.2970 | dt: 1141.22ms | tok/sec: 897.28
+step   977 | loss: 9.054428 | lr 9.9885e-05 | norm: 2.0646 | dt: 1093.67ms | tok/sec: 936.30
+step   978 | loss: 8.847963 | lr 9.9884e-05 | norm: 2.1156 | dt: 1083.11ms | tok/sec: 945.42
+step   979 | loss: 8.498253 | lr 9.9883e-05 | norm: 2.3782 | dt: 1079.13ms | tok/sec: 948.91
+step   980 | loss: 8.725690 | lr 9.9881e-05 | norm: 2.2580 | dt: 1045.00ms | tok/sec: 979.91
+step   981 | loss: 8.629936 | lr 9.9880e-05 | norm: 2.2367 | dt: 1057.46ms | tok/sec: 968.36
+step   982 | loss: 8.694256 | lr 9.9878e-05 | norm: 1.9833 | dt: 1113.79ms | tok/sec: 919.38
+step   983 | loss: 8.605999 | lr 9.9877e-05 | norm: 1.9388 | dt: 1131.57ms | tok/sec: 904.93
+step   984 | loss: 8.749014 | lr 9.9876e-05 | norm: 1.9823 | dt: 1092.09ms | tok/sec: 937.65
+step   985 | loss: 9.427715 | lr 9.9874e-05 | norm: 1.8715 | dt: 1043.24ms | tok/sec: 981.55
+step   986 | loss: 9.463623 | lr 9.9873e-05 | norm: 1.8064 | dt: 1088.14ms | tok/sec: 941.05
+step   987 | loss: 9.356637 | lr 9.9871e-05 | norm: 1.7957 | dt: 1152.16ms | tok/sec: 888.76
+step   988 | loss: 9.340649 | lr 9.9870e-05 | norm: 2.0610 | dt: 1099.58ms | tok/sec: 931.26
+step   989 | loss: 9.516193 | lr 9.9868e-05 | norm: 1.9509 | dt: 1106.51ms | tok/sec: 925.43
+step   990 | loss: 9.151567 | lr 9.9867e-05 | norm: 1.9195 | dt: 1055.10ms | tok/sec: 970.53
+step   991 | loss: 9.277623 | lr 9.9865e-05 | norm: 2.5396 | dt: 1083.22ms | tok/sec: 945.33
+step   992 | loss: 9.345716 | lr 9.9864e-05 | norm: 2.0681 | dt: 1120.76ms | tok/sec: 913.67
+step   993 | loss: 9.111970 | lr 9.9862e-05 | norm: 1.9113 | dt: 1108.50ms | tok/sec: 923.77
+step   994 | loss: 8.998148 | lr 9.9861e-05 | norm: 1.9339 | dt: 1090.12ms | tok/sec: 939.34
+step   995 | loss: 8.772121 | lr 9.9859e-05 | norm: 2.4767 | dt: 1104.03ms | tok/sec: 927.51
+step   996 | loss: 8.970499 | lr 9.9858e-05 | norm: 2.3146 | dt: 1096.11ms | tok/sec: 934.22
+step   997 | loss: 8.505445 | lr 9.9856e-05 | norm: 2.3057 | dt: 1085.46ms | tok/sec: 943.38
+step   998 | loss: 8.859468 | lr 9.9855e-05 | norm: 2.3552 | dt: 1077.15ms | tok/sec: 950.66
+step   999 | loss: 8.907990 | lr 9.9853e-05 | norm: 2.0094 | dt: 1094.95ms | tok/sec: 935.20
+Tokens: 100000000
+Val step 0 Max target: 48866
+Val step 0 Loss: 8.41
+Val step 1 Max target: 47866
+Val step 1 Loss: 8.46
+Val step 2 Max target: 48599
+Val step 2 Loss: 8.54
+Val step 3 Max target: 50256
+Val step 3 Loss: 8.98
+Val step 4 Max target: 48384
+Val step 4 Loss: 8.87
+Val step 5 Max target: 47128
+Val step 5 Loss: 8.96
+Val step 6 Max target: 48461
+Val step 6 Loss: 8.83
+Val step 7 Max target: 50256
+Val step 7 Loss: 9.01
+Val step 8 Max target: 45486
+Val step 8 Loss: 8.58
+Val step 9 Max target: 45500
+Val step 9 Loss: 8.70
+Val step 10 Max target: 49158
+Val step 10 Loss: 8.42
+Val step 11 Max target: 31504
+Val step 11 Loss: 8.55
+Val step 12 Max target: 46181
+Val step 12 Loss: 8.69
+Val step 13 Max target: 48137
+Val step 13 Loss: 8.93
+Val step 14 Max target: 33290
+Val step 14 Loss: 8.79
+Val step 15 Max target: 44529
+Val step 15 Loss: 8.83
+Val step 16 Max target: 33290
+Val step 16 Loss: 9.19
+Val step 17 Max target: 44529
+Val step 17 Loss: 8.76
+Val step 18 Max target: 44529
+Val step 18 Loss: 8.85
+Val step 19 Max target: 33290
+Val step 19 Loss: 8.85
+validation loss: 8.7607
+step  1000 | loss: 8.578924 | lr 9.9852e-05 | norm: 2.1222 | dt: 2563.24ms | tok/sec: 399.49
+step  1001 | loss: 8.710463 | lr 9.9850e-05 | norm: 2.1888 | dt: 1056.87ms | tok/sec: 968.90
+step  1002 | loss: 9.092855 | lr 9.9848e-05 | norm: 1.8358 | dt: 1087.45ms | tok/sec: 941.65
+step  1003 | loss: 9.021354 | lr 9.9847e-05 | norm: 1.8402 | dt: 1118.97ms | tok/sec: 915.13
+step  1004 | loss: 8.803593 | lr 9.9845e-05 | norm: 2.1153 | dt: 1116.37ms | tok/sec: 917.26
+step  1005 | loss: 8.751409 | lr 9.9844e-05 | norm: 2.0467 | dt: 1147.85ms | tok/sec: 892.11
+step  1006 | loss: 8.737639 | lr 9.9842e-05 | norm: 2.3215 | dt: 1385.60ms | tok/sec: 739.03
+step  1007 | loss: 9.028625 | lr 9.9840e-05 | norm: 2.2585 | dt: 1339.50ms | tok/sec: 764.47
+step  1008 | loss: 8.680022 | lr 9.9839e-05 | norm: 2.1855 | dt: 1402.46ms | tok/sec: 730.14
+step  1009 | loss: 8.993753 | lr 9.9837e-05 | norm: 2.0327 | dt: 1418.18ms | tok/sec: 722.05
+step  1010 | loss: 8.814331 | lr 9.9835e-05 | norm: 2.3193 | dt: 1410.68ms | tok/sec: 725.89
+step  1011 | loss: 8.558424 | lr 9.9834e-05 | norm: 2.5545 | dt: 1418.00ms | tok/sec: 722.14
+step  1012 | loss: 8.369040 | lr 9.9832e-05 | norm: 2.4105 | dt: 1361.42ms | tok/sec: 752.15
+step  1013 | loss: 8.588238 | lr 9.9830e-05 | norm: 1.9669 | dt: 1436.16ms | tok/sec: 713.01
+step  1014 | loss: 8.387390 | lr 9.9829e-05 | norm: 2.0591 | dt: 1419.36ms | tok/sec: 721.45
+step  1015 | loss: 8.107594 | lr 9.9827e-05 | norm: 3.0646 | dt: 1459.13ms | tok/sec: 701.79
+step  1016 | loss: 8.728961 | lr 9.9825e-05 | norm: 1.9183 | dt: 1399.15ms | tok/sec: 731.87
+step  1017 | loss: 8.841049 | lr 9.9824e-05 | norm: 2.2343 | dt: 1436.97ms | tok/sec: 712.61
+step  1018 | loss: 9.003963 | lr 9.9822e-05 | norm: 1.7750 | dt: 1427.10ms | tok/sec: 717.54
+step  1019 | loss: 8.881804 | lr 9.9820e-05 | norm: 1.8187 | dt: 1427.66ms | tok/sec: 717.26
+step  1020 | loss: 8.641071 | lr 9.9818e-05 | norm: 2.0005 | dt: 1443.34ms | tok/sec: 709.47
+step  1021 | loss: 8.133162 | lr 9.9817e-05 | norm: 2.2665 | dt: 1429.88ms | tok/sec: 716.14
+step  1022 | loss: 8.377088 | lr 9.9815e-05 | norm: 1.9184 | dt: 1359.60ms | tok/sec: 753.16
+step  1023 | loss: 8.858624 | lr 9.9813e-05 | norm: 1.8061 | dt: 1432.74ms | tok/sec: 714.72
+step  1024 | loss: 8.837568 | lr 9.9811e-05 | norm: 2.0214 | dt: 1436.65ms | tok/sec: 712.77
+step  1025 | loss: 8.824465 | lr 9.9810e-05 | norm: 2.1462 | dt: 1359.27ms | tok/sec: 753.35
+step  1026 | loss: 8.881603 | lr 9.9808e-05 | norm: 1.9493 | dt: 1434.98ms | tok/sec: 713.60
+step  1027 | loss: 9.252112 | lr 9.9806e-05 | norm: 1.8626 | dt: 1421.88ms | tok/sec: 720.18
+step  1028 | loss: 8.529948 | lr 9.9804e-05 | norm: 2.0199 | dt: 1437.76ms | tok/sec: 712.22
+step  1029 | loss: 8.732479 | lr 9.9802e-05 | norm: 1.9854 | dt: 1382.79ms | tok/sec: 740.53
+step  1030 | loss: 9.220058 | lr 9.9801e-05 | norm: 2.0885 | dt: 1446.05ms | tok/sec: 708.14
+step  1031 | loss: 8.665923 | lr 9.9799e-05 | norm: 1.9381 | dt: 1412.24ms | tok/sec: 725.09
+step  1032 | loss: 8.970590 | lr 9.9797e-05 | norm: 2.4608 | dt: 1327.79ms | tok/sec: 771.21
+step  1033 | loss: 9.025934 | lr 9.9795e-05 | norm: 1.9256 | dt: 1380.56ms | tok/sec: 741.73
+step  1034 | loss: 8.822313 | lr 9.9793e-05 | norm: 1.9156 | dt: 1380.14ms | tok/sec: 741.95
+step  1035 | loss: 8.353382 | lr 9.9791e-05 | norm: 2.2033 | dt: 1386.73ms | tok/sec: 738.43
+step  1036 | loss: 8.481352 | lr 9.9790e-05 | norm: 2.1669 | dt: 1397.77ms | tok/sec: 732.60
+step  1037 | loss: 8.569758 | lr 9.9788e-05 | norm: 2.4696 | dt: 1375.45ms | tok/sec: 744.49
+step  1038 | loss: 8.474073 | lr 9.9786e-05 | norm: 2.4010 | dt: 1408.49ms | tok/sec: 727.02
+step  1039 | loss: 8.498110 | lr 9.9784e-05 | norm: 2.2992 | dt: 1391.11ms | tok/sec: 736.11
+step  1040 | loss: 8.640232 | lr 9.9782e-05 | norm: 2.0786 | dt: 1405.77ms | tok/sec: 728.42
+step  1041 | loss: 8.632917 | lr 9.9780e-05 | norm: 2.1427 | dt: 1407.17ms | tok/sec: 727.70
+step  1042 | loss: 8.680544 | lr 9.9778e-05 | norm: 2.0261 | dt: 1419.16ms | tok/sec: 721.56
+step  1043 | loss: 8.589435 | lr 9.9776e-05 | norm: 1.9836 | dt: 1410.36ms | tok/sec: 726.06
+step  1044 | loss: 9.079840 | lr 9.9774e-05 | norm: 1.8476 | dt: 1375.64ms | tok/sec: 744.38
+step  1045 | loss: 8.653030 | lr 9.9772e-05 | norm: 2.0043 | dt: 1346.87ms | tok/sec: 760.28
+step  1046 | loss: 8.662524 | lr 9.9771e-05 | norm: 2.2192 | dt: 1445.87ms | tok/sec: 708.22
+step  1047 | loss: 8.826159 | lr 9.9769e-05 | norm: 2.4098 | dt: 1353.74ms | tok/sec: 756.42
+step  1048 | loss: 8.625856 | lr 9.9767e-05 | norm: 1.9096 | dt: 1323.55ms | tok/sec: 773.68
+step  1049 | loss: 8.324622 | lr 9.9765e-05 | norm: 2.1870 | dt: 1356.23ms | tok/sec: 755.03
+step  1050 | loss: 8.202084 | lr 9.9763e-05 | norm: 2.4924 | dt: 1413.20ms | tok/sec: 724.60
+step  1051 | loss: 8.607184 | lr 9.9761e-05 | norm: 1.8282 | dt: 1389.71ms | tok/sec: 736.84
+step  1052 | loss: 8.601689 | lr 9.9759e-05 | norm: 2.1655 | dt: 1395.06ms | tok/sec: 734.02
+step  1053 | loss: 8.710949 | lr 9.9757e-05 | norm: 1.9446 | dt: 1413.98ms | tok/sec: 724.20
+step  1054 | loss: 8.735298 | lr 9.9755e-05 | norm: 1.9446 | dt: 1419.67ms | tok/sec: 721.29
+step  1055 | loss: 8.924908 | lr 9.9753e-05 | norm: 1.8893 | dt: 1373.88ms | tok/sec: 745.34
+step  1056 | loss: 8.465786 | lr 9.9751e-05 | norm: 2.1325 | dt: 1396.88ms | tok/sec: 733.06
+step  1057 | loss: 8.472748 | lr 9.9749e-05 | norm: 1.9287 | dt: 1361.38ms | tok/sec: 752.18
+step  1058 | loss: 8.314613 | lr 9.9746e-05 | norm: 2.4106 | dt: 1416.19ms | tok/sec: 723.06
+step  1059 | loss: 8.014265 | lr 9.9744e-05 | norm: 2.4183 | dt: 1340.96ms | tok/sec: 763.63
+step  1060 | loss: 8.049653 | lr 9.9742e-05 | norm: 2.4535 | dt: 1361.92ms | tok/sec: 751.88
+step  1061 | loss: 8.170090 | lr 9.9740e-05 | norm: 2.4117 | dt: 1460.27ms | tok/sec: 701.24
+step  1062 | loss: 8.097534 | lr 9.9738e-05 | norm: 2.4465 | dt: 1386.61ms | tok/sec: 738.49
+step  1063 | loss: 8.438760 | lr 9.9736e-05 | norm: 2.1196 | dt: 1404.84ms | tok/sec: 728.91
+step  1064 | loss: 8.853908 | lr 9.9734e-05 | norm: 2.2815 | dt: 1423.10ms | tok/sec: 719.55
+step  1065 | loss: 8.907393 | lr 9.9732e-05 | norm: 2.1767 | dt: 1351.10ms | tok/sec: 757.90
+step  1066 | loss: 8.494755 | lr 9.9730e-05 | norm: 2.3205 | dt: 1387.26ms | tok/sec: 738.15
+step  1067 | loss: 9.018883 | lr 9.9728e-05 | norm: 1.9671 | dt: 1394.40ms | tok/sec: 734.36
+step  1068 | loss: 8.785728 | lr 9.9726e-05 | norm: 2.1250 | dt: 1419.08ms | tok/sec: 721.59
+step  1069 | loss: 8.966944 | lr 9.9723e-05 | norm: 1.9770 | dt: 1383.01ms | tok/sec: 740.41
+step  1070 | loss: 8.510048 | lr 9.9721e-05 | norm: 1.9869 | dt: 1390.77ms | tok/sec: 736.28
+step  1071 | loss: 8.796855 | lr 9.9719e-05 | norm: 2.1041 | dt: 1379.55ms | tok/sec: 742.27
+step  1072 | loss: 8.835104 | lr 9.9717e-05 | norm: 2.0943 | dt: 1372.75ms | tok/sec: 745.95
+step  1073 | loss: 8.430542 | lr 9.9715e-05 | norm: 2.1761 | dt: 1366.47ms | tok/sec: 749.37
+step  1074 | loss: 8.598722 | lr 9.9713e-05 | norm: 2.1630 | dt: 1426.57ms | tok/sec: 717.81
+step  1075 | loss: 8.623487 | lr 9.9710e-05 | norm: 1.9984 | dt: 1334.22ms | tok/sec: 767.49
+step  1076 | loss: 8.632256 | lr 9.9708e-05 | norm: 1.9240 | dt: 1391.08ms | tok/sec: 736.12
+step  1077 | loss: 8.339115 | lr 9.9706e-05 | norm: 2.1059 | dt: 1420.34ms | tok/sec: 720.95
+step  1078 | loss: 8.590045 | lr 9.9704e-05 | norm: 2.0361 | dt: 1386.99ms | tok/sec: 738.29
+step  1079 | loss: 8.398932 | lr 9.9702e-05 | norm: 2.3820 | dt: 1372.69ms | tok/sec: 745.98
+step  1080 | loss: 8.797939 | lr 9.9699e-05 | norm: 1.8174 | dt: 1400.09ms | tok/sec: 731.38
+step  1081 | loss: 9.152996 | lr 9.9697e-05 | norm: 2.0427 | dt: 1420.76ms | tok/sec: 720.74
+step  1082 | loss: 8.766073 | lr 9.9695e-05 | norm: 2.0761 | dt: 1432.49ms | tok/sec: 714.84
+step  1083 | loss: 8.640713 | lr 9.9693e-05 | norm: 1.9758 | dt: 1330.99ms | tok/sec: 769.35
+step  1084 | loss: 8.774630 | lr 9.9690e-05 | norm: 2.1798 | dt: 1407.36ms | tok/sec: 727.60
+step  1085 | loss: 8.675932 | lr 9.9688e-05 | norm: 2.0023 | dt: 1396.08ms | tok/sec: 733.48
+step  1086 | loss: 8.716253 | lr 9.9686e-05 | norm: 1.9263 | dt: 1395.15ms | tok/sec: 733.97
+step  1087 | loss: 8.667296 | lr 9.9684e-05 | norm: 2.2201 | dt: 1397.00ms | tok/sec: 733.00
+step  1088 | loss: 8.437075 | lr 9.9681e-05 | norm: 2.1553 | dt: 1411.39ms | tok/sec: 725.53
+step  1089 | loss: 8.423542 | lr 9.9679e-05 | norm: 2.2714 | dt: 1351.98ms | tok/sec: 757.41
+step  1090 | loss: 8.564743 | lr 9.9677e-05 | norm: 2.0751 | dt: 1381.59ms | tok/sec: 741.17
+step  1091 | loss: 8.634939 | lr 9.9674e-05 | norm: 2.2876 | dt: 1389.89ms | tok/sec: 736.75
+step  1092 | loss: 8.513515 | lr 9.9672e-05 | norm: 2.7177 | dt: 1335.29ms | tok/sec: 766.87
+step  1093 | loss: 8.968145 | lr 9.9670e-05 | norm: 3.5351 | dt: 1375.92ms | tok/sec: 744.23
+step  1094 | loss: 8.593934 | lr 9.9667e-05 | norm: 1.9164 | dt: 1393.41ms | tok/sec: 734.89
+step  1095 | loss: 8.526946 | lr 9.9665e-05 | norm: 2.1432 | dt: 1405.05ms | tok/sec: 728.80
+step  1096 | loss: 8.880859 | lr 9.9663e-05 | norm: 2.0417 | dt: 1367.97ms | tok/sec: 748.55
+step  1097 | loss: 8.826767 | lr 9.9660e-05 | norm: 1.8202 | dt: 1378.38ms | tok/sec: 742.90
+step  1098 | loss: 8.959636 | lr 9.9658e-05 | norm: 2.1373 | dt: 1400.94ms | tok/sec: 730.94
+step  1099 | loss: 8.894220 | lr 9.9655e-05 | norm: 2.1675 | dt: 1345.00ms | tok/sec: 761.34
+step  1100 | loss: 8.573258 | lr 9.9653e-05 | norm: 2.3913 | dt: 1351.54ms | tok/sec: 757.66
+step  1101 | loss: 8.539759 | lr 9.9651e-05 | norm: 2.2215 | dt: 1422.60ms | tok/sec: 719.81
+step  1102 | loss: 8.413624 | lr 9.9648e-05 | norm: 2.0534 | dt: 1436.18ms | tok/sec: 713.00
+step  1103 | loss: 8.594171 | lr 9.9646e-05 | norm: 2.0808 | dt: 1422.51ms | tok/sec: 719.85
+step  1104 | loss: 8.701910 | lr 9.9643e-05 | norm: 1.8153 | dt: 1357.71ms | tok/sec: 754.21
+step  1105 | loss: 9.226937 | lr 9.9641e-05 | norm: 2.0358 | dt: 1354.28ms | tok/sec: 756.12
+step  1106 | loss: 8.488245 | lr 9.9639e-05 | norm: 2.1839 | dt: 1394.87ms | tok/sec: 734.12
+step  1107 | loss: 8.325289 | lr 9.9636e-05 | norm: 2.3659 | dt: 1374.45ms | tok/sec: 745.03
+step  1108 | loss: 8.435692 | lr 9.9634e-05 | norm: 2.2289 | dt: 1445.84ms | tok/sec: 708.24
+step  1109 | loss: 8.388889 | lr 9.9631e-05 | norm: 2.2292 | dt: 1391.30ms | tok/sec: 736.00
+step  1110 | loss: 8.443083 | lr 9.9629e-05 | norm: 2.1621 | dt: 1373.89ms | tok/sec: 745.33
+step  1111 | loss: 8.406429 | lr 9.9626e-05 | norm: 2.1307 | dt: 1354.79ms | tok/sec: 755.84
+step  1112 | loss: 8.211689 | lr 9.9624e-05 | norm: 2.2791 | dt: 1371.97ms | tok/sec: 746.37
+step  1113 | loss: 8.712238 | lr 9.9621e-05 | norm: 1.9374 | dt: 1411.66ms | tok/sec: 725.39
+step  1114 | loss: 8.403376 | lr 9.9619e-05 | norm: 1.9497 | dt: 1341.12ms | tok/sec: 763.54
+step  1115 | loss: 8.129252 | lr 9.9616e-05 | norm: 2.1415 | dt: 1409.34ms | tok/sec: 726.58
+step  1116 | loss: 8.580860 | lr 9.9614e-05 | norm: 2.4014 | dt: 1390.46ms | tok/sec: 736.45
+step  1117 | loss: 8.377916 | lr 9.9611e-05 | norm: 2.3426 | dt: 1376.29ms | tok/sec: 744.03
+step  1118 | loss: 8.381933 | lr 9.9609e-05 | norm: 2.0510 | dt: 1351.67ms | tok/sec: 757.58
+step  1119 | loss: 8.547646 | lr 9.9606e-05 | norm: 2.0656 | dt: 1403.79ms | tok/sec: 729.45
+step  1120 | loss: 8.517230 | lr 9.9603e-05 | norm: 1.9959 | dt: 1402.65ms | tok/sec: 730.05
+step  1121 | loss: 8.613762 | lr 9.9601e-05 | norm: 2.2192 | dt: 1345.27ms | tok/sec: 761.18
+step  1122 | loss: 8.209177 | lr 9.9598e-05 | norm: 2.2651 | dt: 1372.73ms | tok/sec: 745.96
+step  1123 | loss: 8.203876 | lr 9.9596e-05 | norm: 2.3149 | dt: 1364.00ms | tok/sec: 750.73
+step  1124 | loss: 8.587133 | lr 9.9593e-05 | norm: 1.9974 | dt: 1401.35ms | tok/sec: 730.72
+step  1125 | loss: 8.791334 | lr 9.9591e-05 | norm: 1.9381 | dt: 1296.32ms | tok/sec: 789.93
+step  1126 | loss: 9.057182 | lr 9.9588e-05 | norm: 1.8967 | dt: 1420.51ms | tok/sec: 720.87
+step  1127 | loss: 8.318361 | lr 9.9585e-05 | norm: 2.1911 | dt: 1365.87ms | tok/sec: 749.71
+step  1128 | loss: 8.758005 | lr 9.9583e-05 | norm: 2.2553 | dt: 1384.37ms | tok/sec: 739.69
+step  1129 | loss: 8.356344 | lr 9.9580e-05 | norm: 2.5531 | dt: 1381.35ms | tok/sec: 741.30
+step  1130 | loss: 8.535027 | lr 9.9577e-05 | norm: 2.2595 | dt: 1382.05ms | tok/sec: 740.93
+step  1131 | loss: 8.775624 | lr 9.9575e-05 | norm: 1.8896 | dt: 1437.81ms | tok/sec: 712.19
+step  1132 | loss: 8.724318 | lr 9.9572e-05 | norm: 2.2964 | dt: 1354.48ms | tok/sec: 756.01
+step  1133 | loss: 9.004309 | lr 9.9569e-05 | norm: 1.8050 | dt: 1396.77ms | tok/sec: 733.12
+step  1134 | loss: 8.690437 | lr 9.9567e-05 | norm: 1.8936 | dt: 1426.95ms | tok/sec: 717.61
+step  1135 | loss: 8.965591 | lr 9.9564e-05 | norm: 1.8281 | dt: 1391.31ms | tok/sec: 736.00
+step  1136 | loss: 9.088151 | lr 9.9561e-05 | norm: 2.2017 | dt: 1377.04ms | tok/sec: 743.62
+step  1137 | loss: 8.526148 | lr 9.9559e-05 | norm: 2.2551 | dt: 1374.61ms | tok/sec: 744.94
+step  1138 | loss: 8.413178 | lr 9.9556e-05 | norm: 2.3683 | dt: 1382.20ms | tok/sec: 740.85
+step  1139 | loss: 8.270978 | lr 9.9553e-05 | norm: 2.3970 | dt: 1363.02ms | tok/sec: 751.27
+step  1140 | loss: 8.461006 | lr 9.9551e-05 | norm: 2.1159 | dt: 1407.47ms | tok/sec: 727.55
+step  1141 | loss: 8.606770 | lr 9.9548e-05 | norm: 2.0608 | dt: 1474.69ms | tok/sec: 694.38
+step  1142 | loss: 8.529438 | lr 9.9545e-05 | norm: 2.3934 | dt: 1415.81ms | tok/sec: 723.26
+step  1143 | loss: 8.593024 | lr 9.9542e-05 | norm: 2.2283 | dt: 1411.81ms | tok/sec: 725.31
+step  1144 | loss: 8.528749 | lr 9.9540e-05 | norm: 2.1634 | dt: 1323.61ms | tok/sec: 773.64
+step  1145 | loss: 8.648702 | lr 9.9537e-05 | norm: 2.0815 | dt: 1415.69ms | tok/sec: 723.32
+step  1146 | loss: 8.844481 | lr 9.9534e-05 | norm: 2.3240 | dt: 1312.34ms | tok/sec: 780.29
+step  1147 | loss: 9.104425 | lr 9.9531e-05 | norm: 2.6371 | dt: 1104.38ms | tok/sec: 927.22
+step  1148 | loss: 8.940792 | lr 9.9528e-05 | norm: 2.7852 | dt: 1114.51ms | tok/sec: 918.79
+step  1149 | loss: 8.866548 | lr 9.9526e-05 | norm: 2.4980 | dt: 1084.30ms | tok/sec: 944.38
+step  1150 | loss: 8.647850 | lr 9.9523e-05 | norm: 2.1845 | dt: 1038.93ms | tok/sec: 985.63
+step  1151 | loss: 8.939981 | lr 9.9520e-05 | norm: 2.0280 | dt: 1108.59ms | tok/sec: 923.69
+step  1152 | loss: 8.804420 | lr 9.9517e-05 | norm: 1.8840 | dt: 1107.66ms | tok/sec: 924.47
+step  1153 | loss: 8.912437 | lr 9.9514e-05 | norm: 1.9599 | dt: 1120.06ms | tok/sec: 914.23
+step  1154 | loss: 8.449440 | lr 9.9512e-05 | norm: 2.1646 | dt: 1052.00ms | tok/sec: 973.38
+step  1155 | loss: 8.565438 | lr 9.9509e-05 | norm: 2.1277 | dt: 1061.01ms | tok/sec: 965.11
+step  1156 | loss: 8.487919 | lr 9.9506e-05 | norm: 2.3436 | dt: 1075.70ms | tok/sec: 951.94
+step  1157 | loss: 8.431740 | lr 9.9503e-05 | norm: 2.1263 | dt: 1078.66ms | tok/sec: 949.33
+step  1158 | loss: 8.498776 | lr 9.9500e-05 | norm: 2.0175 | dt: 1085.82ms | tok/sec: 943.07
+step  1159 | loss: 8.709854 | lr 9.9497e-05 | norm: 2.0998 | dt: 1056.10ms | tok/sec: 969.61
+step  1160 | loss: 8.528307 | lr 9.9494e-05 | norm: 2.0755 | dt: 1077.05ms | tok/sec: 950.75
+step  1161 | loss: 8.597488 | lr 9.9491e-05 | norm: 1.8617 | dt: 1096.52ms | tok/sec: 933.86
+step  1162 | loss: 8.158874 | lr 9.9489e-05 | norm: 2.0681 | dt: 1062.89ms | tok/sec: 963.41
+step  1163 | loss: 8.559606 | lr 9.9486e-05 | norm: 1.9936 | dt: 1049.73ms | tok/sec: 975.49
+step  1164 | loss: 8.508374 | lr 9.9483e-05 | norm: 2.0100 | dt: 1075.84ms | tok/sec: 951.81
+step  1165 | loss: 8.510641 | lr 9.9480e-05 | norm: 2.0379 | dt: 1051.59ms | tok/sec: 973.77
+step  1166 | loss: 8.439880 | lr 9.9477e-05 | norm: 2.0683 | dt: 1132.30ms | tok/sec: 904.35
+step  1167 | loss: 8.037951 | lr 9.9474e-05 | norm: 2.7276 | dt: 1110.66ms | tok/sec: 921.97
+step  1168 | loss: 7.960280 | lr 9.9471e-05 | norm: 2.9718 | dt: 1100.52ms | tok/sec: 930.47
+step  1169 | loss: 8.009353 | lr 9.9468e-05 | norm: 2.8468 | dt: 1081.51ms | tok/sec: 946.82
+step  1170 | loss: 7.928823 | lr 9.9465e-05 | norm: 3.1243 | dt: 1112.17ms | tok/sec: 920.72
+step  1171 | loss: 8.771379 | lr 9.9462e-05 | norm: 1.8354 | dt: 1081.03ms | tok/sec: 947.25
+step  1172 | loss: 8.639129 | lr 9.9459e-05 | norm: 2.0787 | dt: 1083.88ms | tok/sec: 944.75
+step  1173 | loss: 8.357499 | lr 9.9456e-05 | norm: 2.4137 | dt: 1049.63ms | tok/sec: 975.58
+step  1174 | loss: 8.600369 | lr 9.9453e-05 | norm: 1.9099 | dt: 1099.09ms | tok/sec: 931.68
+step  1175 | loss: 8.596007 | lr 9.9450e-05 | norm: 1.8543 | dt: 1036.65ms | tok/sec: 987.80
+step  1176 | loss: 8.594382 | lr 9.9447e-05 | norm: 2.3005 | dt: 1095.62ms | tok/sec: 934.63
+step  1177 | loss: 8.836794 | lr 9.9444e-05 | norm: 2.2678 | dt: 1460.79ms | tok/sec: 700.99
+step  1178 | loss: 8.548772 | lr 9.9441e-05 | norm: 2.0698 | dt: 1449.30ms | tok/sec: 706.55
+step  1179 | loss: 8.521605 | lr 9.9438e-05 | norm: 2.2780 | dt: 1423.00ms | tok/sec: 719.61
+step  1180 | loss: 8.512163 | lr 9.9435e-05 | norm: 2.1714 | dt: 1200.33ms | tok/sec: 853.10
+step  1181 | loss: 8.446819 | lr 9.9432e-05 | norm: 2.2564 | dt: 1155.13ms | tok/sec: 886.48
+step  1182 | loss: 8.837004 | lr 9.9429e-05 | norm: 2.1978 | dt: 1095.15ms | tok/sec: 935.03
+step  1183 | loss: 8.744908 | lr 9.9426e-05 | norm: 2.6024 | dt: 1055.92ms | tok/sec: 969.77
+step  1184 | loss: 8.777987 | lr 9.9423e-05 | norm: 2.5704 | dt: 1098.29ms | tok/sec: 932.36
+step  1185 | loss: 8.799811 | lr 9.9419e-05 | norm: 2.0017 | dt: 1101.70ms | tok/sec: 929.47
+step  1186 | loss: 8.747334 | lr 9.9416e-05 | norm: 2.2081 | dt: 1138.02ms | tok/sec: 899.81
+step  1187 | loss: 8.587797 | lr 9.9413e-05 | norm: 2.1853 | dt: 1096.30ms | tok/sec: 934.05
+step  1188 | loss: 9.037647 | lr 9.9410e-05 | norm: 2.2132 | dt: 1093.70ms | tok/sec: 936.27
+step  1189 | loss: 8.624412 | lr 9.9407e-05 | norm: 2.1427 | dt: 1129.64ms | tok/sec: 906.49
+step  1190 | loss: 8.437462 | lr 9.9404e-05 | norm: 2.3565 | dt: 1073.37ms | tok/sec: 954.00
+step  1191 | loss: 8.750184 | lr 9.9401e-05 | norm: 2.3759 | dt: 1105.88ms | tok/sec: 925.96
+step  1192 | loss: 8.793448 | lr 9.9398e-05 | norm: 2.0479 | dt: 1075.81ms | tok/sec: 951.84
+step  1193 | loss: 8.284652 | lr 9.9394e-05 | norm: 2.5263 | dt: 1069.49ms | tok/sec: 957.46
+step  1194 | loss: 8.586414 | lr 9.9391e-05 | norm: 2.0129 | dt: 1074.90ms | tok/sec: 952.65
+step  1195 | loss: 8.395002 | lr 9.9388e-05 | norm: 2.3264 | dt: 1107.69ms | tok/sec: 924.44
+step  1196 | loss: 8.605891 | lr 9.9385e-05 | norm: 2.2348 | dt: 1108.59ms | tok/sec: 923.69
+step  1197 | loss: 8.491596 | lr 9.9382e-05 | norm: 1.8797 | dt: 1066.56ms | tok/sec: 960.09
+step  1198 | loss: 8.386734 | lr 9.9379e-05 | norm: 2.1188 | dt: 1089.21ms | tok/sec: 940.13
+step  1199 | loss: 8.449796 | lr 9.9375e-05 | norm: 2.0557 | dt: 1094.17ms | tok/sec: 935.87
+step  1200 | loss: 8.603618 | lr 9.9372e-05 | norm: 2.2905 | dt: 1085.74ms | tok/sec: 943.13
+step  1201 | loss: 8.714289 | lr 9.9369e-05 | norm: 2.0886 | dt: 1113.21ms | tok/sec: 919.86
+step  1202 | loss: 8.676416 | lr 9.9366e-05 | norm: 2.0327 | dt: 1088.85ms | tok/sec: 940.44
+step  1203 | loss: 9.269017 | lr 9.9362e-05 | norm: 1.9672 | dt: 1154.81ms | tok/sec: 886.72
+step  1204 | loss: 8.660273 | lr 9.9359e-05 | norm: 2.1351 | dt: 1081.44ms | tok/sec: 946.88
+step  1205 | loss: 8.605550 | lr 9.9356e-05 | norm: 2.0659 | dt: 1073.35ms | tok/sec: 954.02
+step  1206 | loss: 8.637698 | lr 9.9353e-05 | norm: 2.1029 | dt: 1070.76ms | tok/sec: 956.33
+step  1207 | loss: 8.687198 | lr 9.9349e-05 | norm: 1.8289 | dt: 1111.94ms | tok/sec: 920.92
+step  1208 | loss: 8.670036 | lr 9.9346e-05 | norm: 2.0432 | dt: 1124.77ms | tok/sec: 910.40
+step  1209 | loss: 8.632215 | lr 9.9343e-05 | norm: 1.9528 | dt: 1071.32ms | tok/sec: 955.83
+step  1210 | loss: 8.235315 | lr 9.9339e-05 | norm: 2.2862 | dt: 1092.15ms | tok/sec: 937.60
+step  1211 | loss: 8.396139 | lr 9.9336e-05 | norm: 1.9878 | dt: 1063.98ms | tok/sec: 962.43
+step  1212 | loss: 8.284472 | lr 9.9333e-05 | norm: 2.1756 | dt: 1112.34ms | tok/sec: 920.58
+step  1213 | loss: 9.110765 | lr 9.9330e-05 | norm: 1.8495 | dt: 1077.96ms | tok/sec: 949.94
+step  1214 | loss: 9.405680 | lr 9.9326e-05 | norm: 2.0942 | dt: 1096.39ms | tok/sec: 933.97
+step  1215 | loss: 8.830784 | lr 9.9323e-05 | norm: 2.0066 | dt: 1068.34ms | tok/sec: 958.49
+step  1216 | loss: 8.719292 | lr 9.9320e-05 | norm: 1.9474 | dt: 1095.90ms | tok/sec: 934.39
+step  1217 | loss: 8.471691 | lr 9.9316e-05 | norm: 2.1085 | dt: 1052.31ms | tok/sec: 973.10
+step  1218 | loss: 8.622839 | lr 9.9313e-05 | norm: 1.9607 | dt: 1053.46ms | tok/sec: 972.04
+step  1219 | loss: 8.887096 | lr 9.9309e-05 | norm: 2.1830 | dt: 1107.95ms | tok/sec: 924.23
+step  1220 | loss: 8.626417 | lr 9.9306e-05 | norm: 2.0656 | dt: 1067.24ms | tok/sec: 959.48
+step  1221 | loss: 8.895276 | lr 9.9303e-05 | norm: 2.0967 | dt: 1072.24ms | tok/sec: 955.01
+step  1222 | loss: 8.956075 | lr 9.9299e-05 | norm: 1.9693 | dt: 1061.17ms | tok/sec: 964.97
+step  1223 | loss: 9.028554 | lr 9.9296e-05 | norm: 1.8918 | dt: 1031.80ms | tok/sec: 992.44
+step  1224 | loss: 8.581010 | lr 9.9292e-05 | norm: 2.4933 | dt: 1111.41ms | tok/sec: 921.35
+step  1225 | loss: 8.830954 | lr 9.9289e-05 | norm: 3.0015 | dt: 1128.05ms | tok/sec: 907.76
+step  1226 | loss: 8.553495 | lr 9.9286e-05 | norm: 2.2218 | dt: 1113.51ms | tok/sec: 919.61
+step  1227 | loss: 8.569836 | lr 9.9282e-05 | norm: 2.1398 | dt: 1060.46ms | tok/sec: 965.62
+step  1228 | loss: 8.693418 | lr 9.9279e-05 | norm: 1.9762 | dt: 1079.36ms | tok/sec: 948.71
+step  1229 | loss: 8.472929 | lr 9.9275e-05 | norm: 2.0825 | dt: 1122.21ms | tok/sec: 912.49
+step  1230 | loss: 8.296371 | lr 9.9272e-05 | norm: 2.4016 | dt: 1091.82ms | tok/sec: 937.89
+step  1231 | loss: 8.487923 | lr 9.9268e-05 | norm: 2.2235 | dt: 1088.75ms | tok/sec: 940.53
+step  1232 | loss: 8.558060 | lr 9.9265e-05 | norm: 2.0737 | dt: 1124.19ms | tok/sec: 910.88
+step  1233 | loss: 8.401697 | lr 9.9261e-05 | norm: 2.1626 | dt: 1096.44ms | tok/sec: 933.93
+step  1234 | loss: 8.419050 | lr 9.9258e-05 | norm: 2.0058 | dt: 1061.55ms | tok/sec: 964.62
+step  1235 | loss: 8.605286 | lr 9.9254e-05 | norm: 2.0783 | dt: 1435.93ms | tok/sec: 713.13
+step  1236 | loss: 8.668364 | lr 9.9251e-05 | norm: 2.0938 | dt: 1531.79ms | tok/sec: 668.50
+step  1237 | loss: 8.714825 | lr 9.9247e-05 | norm: 1.9602 | dt: 1538.26ms | tok/sec: 665.69
+step  1238 | loss: 9.483294 | lr 9.9244e-05 | norm: 2.6288 | dt: 1556.19ms | tok/sec: 658.02
+step  1239 | loss: 8.866488 | lr 9.9240e-05 | norm: 1.8638 | dt: 1570.76ms | tok/sec: 651.92
+step  1240 | loss: 7.914294 | lr 9.9237e-05 | norm: 2.4472 | dt: 1533.65ms | tok/sec: 667.69
+step  1241 | loss: 8.477975 | lr 9.9233e-05 | norm: 2.1146 | dt: 1553.55ms | tok/sec: 659.14
+step  1242 | loss: 8.778662 | lr 9.9230e-05 | norm: 2.0305 | dt: 1541.17ms | tok/sec: 664.43
+step  1243 | loss: 8.711592 | lr 9.9226e-05 | norm: 2.1339 | dt: 1525.19ms | tok/sec: 671.39
+step  1244 | loss: 8.401883 | lr 9.9222e-05 | norm: 2.2371 | dt: 1535.25ms | tok/sec: 666.99
+step  1245 | loss: 8.519826 | lr 9.9219e-05 | norm: 2.1943 | dt: 1087.84ms | tok/sec: 941.32
+step  1246 | loss: 8.782893 | lr 9.9215e-05 | norm: 1.7643 | dt: 1077.12ms | tok/sec: 950.68
+step  1247 | loss: 8.627445 | lr 9.9212e-05 | norm: 1.8608 | dt: 1145.60ms | tok/sec: 893.85
+step  1248 | loss: 8.583622 | lr 9.9208e-05 | norm: 2.0344 | dt: 1099.45ms | tok/sec: 931.38
+step  1249 | loss: 8.949815 | lr 9.9204e-05 | norm: 2.1075 | dt: 1073.40ms | tok/sec: 953.98
+step  1250 | loss: 8.781084 | lr 9.9201e-05 | norm: 2.0025 | dt: 1093.88ms | tok/sec: 936.12
+step  1251 | loss: 8.700171 | lr 9.9197e-05 | norm: 2.0485 | dt: 1071.40ms | tok/sec: 955.76
+step  1252 | loss: 8.929205 | lr 9.9194e-05 | norm: 2.2897 | dt: 1072.38ms | tok/sec: 954.88
+step  1253 | loss: 8.771473 | lr 9.9190e-05 | norm: 2.1160 | dt: 1055.05ms | tok/sec: 970.57
+step  1254 | loss: 8.951207 | lr 9.9186e-05 | norm: 2.2094 | dt: 1075.12ms | tok/sec: 952.45
+step  1255 | loss: 8.820199 | lr 9.9183e-05 | norm: 1.9573 | dt: 1080.06ms | tok/sec: 948.10
+step  1256 | loss: 8.793619 | lr 9.9179e-05 | norm: 2.0686 | dt: 1075.18ms | tok/sec: 952.40
+step  1257 | loss: 8.672275 | lr 9.9175e-05 | norm: 2.0669 | dt: 1115.25ms | tok/sec: 918.18
+step  1258 | loss: 8.381594 | lr 9.9172e-05 | norm: 2.3969 | dt: 1062.86ms | tok/sec: 963.44
+step  1259 | loss: 8.486302 | lr 9.9168e-05 | norm: 2.2544 | dt: 1095.99ms | tok/sec: 934.32
+step  1260 | loss: 8.633070 | lr 9.9164e-05 | norm: 2.0071 | dt: 1085.61ms | tok/sec: 943.25
+step  1261 | loss: 8.568106 | lr 9.9160e-05 | norm: 2.0973 | dt: 1061.80ms | tok/sec: 964.40
+step  1262 | loss: 8.818316 | lr 9.9157e-05 | norm: 2.0202 | dt: 1136.63ms | tok/sec: 900.91
+step  1263 | loss: 8.402964 | lr 9.9153e-05 | norm: 2.0810 | dt: 882.61ms | tok/sec: 1160.19
+step  1264 | loss: 8.294837 | lr 9.9149e-05 | norm: 2.2491 | dt: 725.82ms | tok/sec: 1410.83
+step  1265 | loss: 8.204774 | lr 9.9145e-05 | norm: 2.1510 | dt: 754.94ms | tok/sec: 1356.40
+step  1266 | loss: 8.334762 | lr 9.9142e-05 | norm: 2.0740 | dt: 732.00ms | tok/sec: 1398.91
+step  1267 | loss: 8.760878 | lr 9.9138e-05 | norm: 1.9290 | dt: 755.64ms | tok/sec: 1355.14
+step  1268 | loss: 8.692581 | lr 9.9134e-05 | norm: 2.0255 | dt: 733.02ms | tok/sec: 1396.96
+step  1269 | loss: 8.672585 | lr 9.9130e-05 | norm: 2.0439 | dt: 754.75ms | tok/sec: 1356.73
+step  1270 | loss: 8.521548 | lr 9.9127e-05 | norm: 2.1194 | dt: 727.17ms | tok/sec: 1408.20
+step  1271 | loss: 8.478389 | lr 9.9123e-05 | norm: 1.9770 | dt: 762.49ms | tok/sec: 1342.97
+step  1272 | loss: 8.633220 | lr 9.9119e-05 | norm: 1.8904 | dt: 740.70ms | tok/sec: 1382.48
+step  1273 | loss: 8.670278 | lr 9.9115e-05 | norm: 2.0997 | dt: 746.00ms | tok/sec: 1372.65
+make: *** [Makefile:96: run-snippet] Terminated

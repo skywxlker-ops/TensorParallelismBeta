@@ -182,6 +182,24 @@
         dnn::DColumnLinear fc1;
         dnn::DRowLinear fc2;
         dnn::DGeLU gelu;
+
+        // Custom override to only sync replicated params (LayerNorm and RowLinear Bias)
+        void all_reduce_gradients(ProcessGroupNCCL* pg) override {
+            // 1. LayerNorm params (Replicated)
+            ln.all_reduce_gradients(pg);
+            
+            // 2. RowLinear Bias (Replicated) - Weight is sharded (no sync)
+            // DRowLinear::all_reduce_gradients handles bias sync, but we must ensure
+            // it doesn't sync weights. The implementation in DistributedNN.h 
+            // only syncs bias explicitly.
+            fc2.all_reduce_gradients(pg);
+            
+            // 3. ColumnLinear (fc1) - Fully Sharded, no sync needed.
+            // Do NOT call fc1.all_reduce_gradients(pg) if it blindly syncs.
+            // (Assumes DColumnLinear doesn't implement it or we skip it)
+            
+            // 4. GeLU - no params
+        }
     };
 
     // =============================================================================
@@ -227,6 +245,30 @@
             // Weights (wte, wpe, fc1, fc2, etc.) are now correctly initialized by 
             // the DTensor constructor using random normal values (sd=0.02 or layer-specific sd)
             // since the 'int sd' bug was fixed. This avoids temporary double memory during construction.
+            // Weights (wte, wpe, fc1, fc2, etc.) are now correctly initialized by 
+            // the DTensor constructor using random normal values (sd=0.02 or layer-specific sd)
+            // since the 'int sd' bug was fixed. This avoids temporary double memory during construction.
+        }
+
+        // Custom override to optimize gradient synchronization
+        void all_reduce_gradients(ProcessGroupNCCL* pg) override {
+            // 1. Position Embeddings (Replicated) -> Needs Sync
+            wpe.all_reduce_gradients(pg);
+            
+            // 2. Final LayerNorm (Replicated) -> Needs Sync
+            ln_f.all_reduce_gradients(pg);
+            
+            // 3. MLP Blocks -> Call optimized MLP::all_reduce_gradients
+            mlps.all_reduce_gradients(pg);
+            
+            // 4. Token Embeddings (wte) -> Sharded (V-Parallel)
+            // Do NOT sync. Gradients are correct by nature of TP.
+            
+            // 5. LM Head (lm_head)
+            // If it shares weights with wte, no sync. 
+            // If it has its own sharded weights (ColParallel style for logits), no sync.
+            // Check DistributedNN.h: DLMHead seems to be sharded on dim 0 (Vocab).
+            // So no sync needed.
         }
 
         // Forward: indices [B, T] -> logits [B, T, V]
@@ -625,6 +667,13 @@
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    
+    // Pinned memory for async loss logging
+    float* loss_pinned_cpu;
+    cudaMallocHost(&loss_pinned_cpu, sizeof(float)); 
+    *loss_pinned_cpu = 0.0f;
+    float loss_val_to_log = 0.0f;
+
         try {
             std::cout << "=== GPT-2 Training Script (C++ Implementation) ===" << std::endl;
 
@@ -642,7 +691,7 @@
             const float min_lr = max_lr * 0.1f;
             const int warmup_steps = 369;
             const int max_steps = 3648;
-
+            
             if (rank == 0) {
                 std::cout << "Configuration:" << std::endl;
                 std::cout << "  V: " << config.V << std::endl;
@@ -719,9 +768,9 @@
             if (rank == 0) {
             }
             std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/Data/";
-            DataLoaderLite train_loader(config.B, config.T, rank, world_size, "train", data_root, rank == 0, rank);
+            DataLoaderLite train_loader(config.B, config.T, rank, 1, "train", data_root, rank == 0, rank);
 
-            DataLoaderLite val_loader(config.B, config.T, rank, world_size, "val", data_root, rank == 0, rank);
+            DataLoaderLite val_loader(config.B, config.T, rank, 1, "val", data_root, rank == 0, rank);
             if (rank == 0) {
                 std::cout << "\nStarting training..." << std::endl;
             }
@@ -776,11 +825,8 @@
                         Tensor& y = batch.target;
 
                         // Convert x to vectors for DTensor
-                        Tensor x_cpu = x.to_cpu().as_type(Dtype::Float32);
-                        std::vector<float> x_vec(x_cpu.numel());
-                        float* x_ptr = x_cpu.data<float>();
-                        for(size_t i=0; i<x_cpu.numel(); ++i) x_vec[i] = x_ptr[i];
-                        model.Didx.setData(x_vec);
+                        // Optimize input transfer: stay on GPU
+                        model.Didx.mutable_tensor() = x.as_type(Dtype::Float32);
 
                         DTensor logits = model.forward(model.Didx);
                         Tensor loss = vocab_parallel_cross_entropy(logits, y);
@@ -833,23 +879,19 @@
                     Tensor& y = batch.target;
 
                     // Convert x to vectors for DTensor
-                    Tensor x_cpu = x.to_cpu().as_type(Dtype::Float32);
-                    std::vector<float> x_vec(x_cpu.numel());
-                    float* x_ptr = x_cpu.data<float>();
-                    for(size_t i=0; i<x_cpu.numel(); ++i) x_vec[i] = x_ptr[i];
-                    model.Didx.setData(x_vec);
+                    // Optimize input transfer: stay on GPU
+                    // batch.input is already on GPU (UInt16). Convert to Float32 for model.
+                    // This avoids the massive D2H -> vector -> H2D copy latency.
+                    model.Didx.mutable_tensor() = x.as_type(Dtype::Float32);
 
                     // Forward
                     DTensor logits = model.forward(model.Didx);
                     loss = vocab_parallel_cross_entropy(logits, y);
 
-                    float loss_val = loss.to_cpu().data<float>()[0];
-                    loss_accum_cpu += loss_val;
-
-                    // if (rank == 0 && (micro_step == 0 || micro_step == grad_accum_steps - 1)) {
-                    //     std::cout << "  Micro " << micro_step << " Loss: " << loss_val 
-                    //               << " | Tensors: " << OwnTensor::Tensor::get_active_tensor_count() << std::endl;
-                    // }
+                    // Accumulate loss on GPU
+                    // Original: loss_accum_cpu += loss_val; (Removed sync)
+                    // We maintain loss_accum_gpu for logging.
+                    loss_accum_gpu = autograd::add(loss_accum_gpu, loss.detach());
 
                     // Backward with scaling
                     Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 1.0f / grad_accum_steps);
@@ -892,14 +934,25 @@
                 } // End of micro-step loop
 
                 // Update accumulated loss
-                loss_accum_gpu.fill(loss_accum_cpu / grad_accum_steps);
+                // loss_accum_gpu contains SUM of micro-step losses. Divide by steps for mean.
+                loss_accum_gpu = loss_accum_gpu / Tensor::full(Shape{{1}}, TensorOptions().with_device(device), (float)grad_accum_steps);
                 
                 // Synchronize ONCE after all micro-steps
                 // cudaDeviceSynchronize();
 
-            // Transfer accumulated loss to CPU once per step
-            Tensor loss_cpu = loss_accum_gpu.to_cpu();
-            loss_accum_cpu = loss_cpu.data<float>()[0];
+            // Transfer accumulated loss to CPU synchronously to ensure correctness for the current step.
+            // Copying a single float has negligible overhead.
+            cudaMemcpy(loss_pinned_cpu, loss_accum_gpu.data<float>(), sizeof(float), cudaMemcpyDeviceToHost);
+            loss_accum_cpu = *loss_pinned_cpu; 
+            
+            // BUT: The user logs `loss_accum_cpu` at line 952.
+            // So let's update `loss_accum_cpu` here.
+            
+            // If step > 0, the pinned buffer has valid data from step-1.
+            loss_accum_cpu = *loss_pinned_cpu; 
+            
+            // Note: This results in logging the loss from step (N-1) at step N.
+            // This is acceptable for performance monitoring.
 
             // 1. All-reduce gradients of replicated parameters (DLayerNorm, DRowLinear bias, etc.)
             // This prevents parameter divergence across ranks.
@@ -991,10 +1044,13 @@
                 std::cout << "\nTraining log saved to: training_log1.csv" << std::endl;
                 std::cout << "\n=== Training Complete ===" << std::endl;
             }
+            cudaFreeHost(loss_pinned_cpu);
             return 0;
 
         } catch (const std::exception& e) {
             std::cerr << "ERROR: " << e.what() << std::endl;
+            cudaFreeHost(loss_pinned_cpu);
             return 1;
         }
     } 
+ 

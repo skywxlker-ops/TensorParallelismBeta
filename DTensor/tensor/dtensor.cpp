@@ -80,7 +80,7 @@ DTensor::DTensor()
 // std::cout<<"default DTensor contructor :  size = "<< size_<< " rank =  "<< rank_ << std::endl;
 }
 
-DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name, float sd)
+DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL> pg, Layout layout, std::string name, float sd, int seed)
     : rank_(pg->get_rank()),
       world_size_(pg->get_worldsize()),// worldsize is no. of GPUs in a group.
       device_mesh_(&device_mesh),
@@ -126,9 +126,11 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
         // for (int d : layout_.get_global_shape()) size_ *= d;  
         
         
-        tensor_ = OwnTensor::Tensor::randn<float>( shape, opts, 42, sd) ;
+        tensor_ = OwnTensor::Tensor::randn<float>( shape, opts, seed , sd) ;
         
         size_ = tensor_.numel();
+        
+        name_ = name;
         // std::cout<<"\n\n shape = [ "<<tensor_.shape().dims[0]<<" , "<<tensor_.shape().dims[1]<<" ] \n\n"<<std::endl; 
         
         // std::cout<<" size = "<< size_<< " rank =  "<< rank_ << " name = "<< name <<std::endl;
@@ -180,6 +182,34 @@ DTensor::~DTensor() {
 }
 
 void DTensor::setData(const std::vector<float>& host_data) {
+
+    if (host_data.size() != (size_t)size_) {
+        std::ostringstream oss;
+        oss << "DTensor::setData: host_data size (" << host_data.size() 
+            << ") does not match calculated local shard size (" << size_ << ")."
+            << " Rank: " << rank_ << ", " << layout_.describe(rank_);
+        throw std::runtime_error(oss.str());
+    }
+
+    // OwnTensor::Shape shape_obj;
+    // shape_obj.dims.assign(local_shape.begin(), local_shape.end());
+
+    // OwnTensor::TensorOptions opts;
+    // opts = opts.with_device(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, rank_))
+    //            .with_dtype(OwnTensor::Dtype::Float32);
+
+    // tensor_ = OwnTensor::Tensor(shape_obj, opts);
+    tensor_.set_data(host_data);
+
+    // temp_tensor_ = OwnTensor::Tensor(shape_obj, opts);
+
+    // if (data_block_) gAllocator.freeMemory(data_block_);
+    // if (temp_block_) gAllocator.freeMemory(temp_block_);
+    
+    // data_block_ = gAllocator.allocateMemory(size_ * sizeof(float), stream_);
+    // temp_block_ = gAllocator.allocateMemory(layout_.global_numel() * sizeof(float), stream_);
+}
+void DTensor::setData(const std::vector<int64_t>& host_data) {
 
     if (host_data.size() != (size_t)size_) {
         std::ostringstream oss;
