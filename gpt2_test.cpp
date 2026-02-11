@@ -159,6 +159,9 @@ public:
     nn::LayerNorm ln_f; // Final LayerNorm
     Tensor W_out;  // Separate output projection weight [n_embd, vocab_size]
 
+    // Component timing (accumulated per step, reset after printing)
+    double t_tok_emb = 0, t_pos_emb = 0, t_mlp = 0, t_ln_f = 0, t_lm_head = 0;
+
     GPT(GPTConfig cfg, DeviceIndex device, uint64_t seed = 1234)
         : config(cfg), 
           wte(cfg.vocab_size, cfg.n_embd, device, seed),
@@ -186,6 +189,19 @@ public:
         register_module(ln_f);
         register_parameter(W_out);
     }
+
+    void reset_timing() {
+        t_tok_emb = t_pos_emb = t_mlp = t_ln_f = t_lm_head = 0;
+    }
+
+    void print_timing() {
+        std::cout << "  [LAYER] tok_emb: " << std::fixed << std::setprecision(1) << (t_tok_emb * 1000.0) << "ms"
+                  << " | pos_emb: " << (t_pos_emb * 1000.0) << "ms"
+                  << " | mlps: " << (t_mlp * 1000.0) << "ms"
+                  << " | ln_f: " << (t_ln_f * 1000.0) << "ms"
+                  << " | lm_head: " << (t_lm_head * 1000.0) << "ms"
+                  << std::endl;
+    }
     
     // Forward: indices [B, T] -> logits [B, T, vocab_size]
     Tensor forward(const Tensor& idx) override {
@@ -208,24 +224,44 @@ public:
             }
         }
         
-        // Get embeddings [B, T, C]
-        // Use regular forward() - both embeddings now track gradients independently
-        Tensor tok_emb = wte.forward(idx);  // [B, T, C] - gradients flow through embedding
+        // --- Token Embedding ---
+        cudaDeviceSynchronize();
+        auto t0 = std::chrono::high_resolution_clock::now();
+        Tensor tok_emb = wte.forward(idx);  // [B, T, C]
+        cudaDeviceSynchronize();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        t_tok_emb += std::chrono::duration<double>(t1 - t0).count();
+
+        // --- Position Embedding ---
+        auto t2 = std::chrono::high_resolution_clock::now();
         Tensor pos_emb = wpe.forward(pos);  // [1, T, C] - broadcasts
+        cudaDeviceSynchronize();
+        auto t3 = std::chrono::high_resolution_clock::now();
+        t_pos_emb += std::chrono::duration<double>(t3 - t2).count();
         
         // Add embeddings
         Tensor x = autograd::add(tok_emb, pos_emb);
         
-        // Apply MLP blocks (Sequential handles the loop and residual is inside MLP now)
+        // --- MLP Blocks ---
+        auto t4 = std::chrono::high_resolution_clock::now();
         x = mlps.forward(x);
+        cudaDeviceSynchronize();
+        auto t5 = std::chrono::high_resolution_clock::now();
+        t_mlp += std::chrono::duration<double>(t5 - t4).count();
         
-        // Final normalization
+        // --- Final LayerNorm ---
+        auto t6 = std::chrono::high_resolution_clock::now();
         x = ln_f.forward(x);
+        cudaDeviceSynchronize();
+        auto t7 = std::chrono::high_resolution_clock::now();
+        t_ln_f += std::chrono::duration<double>(t7 - t6).count();
         
-        // Final projection to vocab size [B, T, vocab_size]
-        // Uses separate W_out instead of wte.weight.t()
-
+        // --- LM Head (Final Projection) ---
+        auto t8 = std::chrono::high_resolution_clock::now();
         Tensor logits = autograd::matmul(x, W_out);
+        cudaDeviceSynchronize();
+        auto t9 = std::chrono::high_resolution_clock::now();
+        t_lm_head += std::chrono::duration<double>(t9 - t8).count();
         
         return logits;
     }
@@ -348,7 +384,8 @@ int main() {
                 val_loss_accum_log = val_loss_accum;
             }
             
-            // Training step
+            // Training step with component timing
+            double time_data = 0, time_forward = 0, time_loss = 0, time_backward = 0, time_clip = 0, time_optim = 0;
 
             optimizer.zero_grad();
             float loss_accum = 0.0f;
@@ -357,20 +394,38 @@ int main() {
             Tensor loss_accum_gpu = Tensor::zeros(Shape{{1}}, TensorOptions().with_device(device));
             
             for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
+                // --- Data Loading ---
+                cudaDeviceSynchronize();
+                auto t_data_start = std::chrono::high_resolution_clock::now();
                 Batch batch = train_loader.next_batch();
                 Tensor x = batch.input.to(device);
                 Tensor y = batch.target.to(device);
+                cudaDeviceSynchronize();
+                auto t_data_end = std::chrono::high_resolution_clock::now();
+                time_data += std::chrono::duration<double>(t_data_end - t_data_start).count();
                 
-                // Forward
+                // --- Forward Pass ---
+                auto t_fwd_start = std::chrono::high_resolution_clock::now();
                 Tensor logits = model.forward(x);
+                cudaDeviceSynchronize();
+                auto t_fwd_end = std::chrono::high_resolution_clock::now();
+                time_forward += std::chrono::duration<double>(t_fwd_end - t_fwd_start).count();
+                
+                // --- Loss Computation ---
+                auto t_loss_start = std::chrono::high_resolution_clock::now();
                 Tensor loss = autograd::sparse_cross_entropy_loss(logits, y);
-                
-                // Accumulate loss on GPU (no graph tracking needed for logging)
                 loss_accum_gpu = loss_accum_gpu + loss;
+                cudaDeviceSynchronize();
+                auto t_loss_end = std::chrono::high_resolution_clock::now();
+                time_loss += std::chrono::duration<double>(t_loss_end - t_loss_start).count();
                 
-                // Backward with scaling
+                // --- Backward Pass ---
+                auto t_bwd_start = std::chrono::high_resolution_clock::now();
                 Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 1.0f / grad_accum_steps);
                 loss.backward(&grad_scale);
+                cudaDeviceSynchronize();
+                auto t_bwd_end = std::chrono::high_resolution_clock::now();
+                time_backward += std::chrono::duration<double>(t_bwd_end - t_bwd_start).count();
             }
 
         //    std::cout<< "Token embedding: " << std::endl;
@@ -378,9 +433,6 @@ int main() {
         //     std::cout<< "Position embedding: " << std::endl;
         //     model.wpe.weight.grad_view().display();
         //     model.mlps[0].fc_up.weight.grad_view().display();
-            
-            // Synchronize ONCE after all micro-steps
-            cudaDeviceSynchronize();
             
             // Transfer accumulated loss to CPU once per step
             Tensor loss_cpu = loss_accum_gpu.to_cpu();
@@ -393,17 +445,23 @@ int main() {
                 return 1;
             }
             
-            // Clip gradients
+            // --- Gradient Clipping ---
+            auto t_clip_start = std::chrono::high_resolution_clock::now();
             float norm = nn::clip_grad_norm_(params, 1.0f);
             cudaDeviceSynchronize();
+            auto t_clip_end = std::chrono::high_resolution_clock::now();
+            time_clip = std::chrono::duration<double>(t_clip_end - t_clip_start).count();
             
             // Update learning rate
             float lr = get_lr(step, max_lr, min_lr, warmup_steps, max_steps);
             optimizer.set_lr(lr);
             
-            // Optimizer step
+            // --- Optimizer Step ---
+            auto t_optim_start = std::chrono::high_resolution_clock::now();
             optimizer.step();
             cudaDeviceSynchronize();
+            auto t_optim_end = std::chrono::high_resolution_clock::now();
+            time_optim = std::chrono::duration<double>(t_optim_end - t_optim_start).count();
             
             auto t1 = std::chrono::high_resolution_clock::now();
             double dt = std::chrono::duration<double>(t1 - t0).count();
@@ -420,6 +478,19 @@ int main() {
                       << " | dt: " << std::fixed << std::setprecision(2) << (dt * 1000.0) << "ms"
                       << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec 
                       << std::endl;
+            
+            // Component timing breakdown (in ms)
+            std::cout << "  [TIMING] data: " << std::fixed << std::setprecision(1) << (time_data * 1000.0) << "ms"
+                      << " | fwd: " << (time_forward * 1000.0) << "ms"
+                      << " | loss: " << (time_loss * 1000.0) << "ms"
+                      << " | bwd: " << (time_backward * 1000.0) << "ms"
+                      << " | clip: " << (time_clip * 1000.0) << "ms"
+                      << " | optim: " << (time_optim * 1000.0) << "ms"
+                      << std::endl;
+            
+            // Layer-level timing breakdown
+            model.print_timing();
+            model.reset_timing();
             
             // Log metrics to CSV
             log_file << step << "," 

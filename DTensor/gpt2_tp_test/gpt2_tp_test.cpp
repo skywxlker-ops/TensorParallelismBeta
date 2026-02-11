@@ -44,7 +44,7 @@ using namespace OwnTensor;
 int rank, world_size;
 
 struct GPTConfig {
-    int64_t batch_size = 4;
+    int64_t batch_size = 8;
     int64_t context_length = 1024;
     int64_t vocab_size = 50304;  // GPT-2 vocab size
     int64_t n_embd = 384;
@@ -114,8 +114,8 @@ public:
     
     MLP(GPTConfig config, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg,  DeviceIndex device, uint64_t seed = 1234)
         : ln(config.n_embd),
-          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd,{}, true, seed),
-          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, true, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed + 5)
+          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd,{}, false, seed),
+          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, false, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed + 5)
 
     {
         // GPT-2 style initialization - create tensors directly on target device
@@ -161,7 +161,7 @@ private:
 class GPT : public dnn::DModule {
 public:
     GPTConfig config;
-    dnn::DEmbeddingVParallel wte;  // Token embedding
+    dnn::DEmbedding wte;  // Token embedding
     dnn::DEmbedding wpe;  // Position embedding
     dnn::DSequential mlps;
     dnn::DLayerNorm ln_f; // Final LayerNorm
@@ -170,11 +170,14 @@ public:
     DTensor logits;
     DTensor Didx;  // Input token indices
 
+    // Component timing (accumulated per step, reset after printing)
+    double t_tok_emb = 0, t_pos_emb = 0, t_mlp = 0, t_ln_f = 0, t_lm_head = 0;
+
     GPT(GPTConfig cfg, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg, DeviceIndex device, uint64_t seed = 1234)
         : config(cfg), 
           wte(mesh, pg, cfg.vocab_size, cfg.n_embd),
-          wpe(mesh, pg, cfg.vocab_size, cfg.n_embd, seed + 100),
-          lm(mesh, pg, cfg.batch_size, cfg.context_length, cfg.n_embd, cfg.vocab_size, wte.weight.get()),
+          wpe(mesh, pg, cfg.context_length, cfg.n_embd, seed + 100),
+          lm(mesh, pg, cfg.batch_size, cfg.context_length, cfg.n_embd, cfg.vocab_size, true, wte.weight.get()),
           ln_f(cfg.n_embd)
     {
         ln_f.to(device);
@@ -215,6 +218,21 @@ public:
         register_module(lm);
     }
     
+    void reset_timing() {
+        t_tok_emb = t_pos_emb = t_mlp = t_ln_f = t_lm_head = 0;
+    }
+
+    void print_timing(int rank) {
+        if (rank == 0) {
+            std::cout << "  [LAYER] tok_emb: " << std::fixed << std::setprecision(1) << (t_tok_emb * 1000.0) << "ms"
+                      << " | pos_emb: " << (t_pos_emb * 1000.0) << "ms"
+                      << " | mlps: " << (t_mlp * 1000.0) << "ms"
+                      << " | ln_f: " << (t_ln_f * 1000.0) << "ms"
+                      << " | lm_head: " << (t_lm_head * 1000.0) << "ms"
+                      << std::endl;
+        }
+    }
+
     // Forward: indices [B, T] -> logits [B, T, vocab_size]
     DTensor forward(DTensor& idx) {
         // auto shape = idx.shape().dims;
@@ -233,23 +251,46 @@ public:
         //     }
         // }
         
-        // Get embeddings [B, T, C]
-        // Use regular forward() - both embeddings now track gradients independently
-        DTensor tok_emb = wte.forward(idx);  // [B, T, C] - gradients flow through embedding
+        // --- Token Embedding ---
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        DTensor tok_emb = wte.forward(idx);  // [B, T, C]
+
+        auto t1 = std::chrono::high_resolution_clock::now();
+        t_tok_emb += std::chrono::duration<double>(t1 - t0).count();
+
+        // --- Position Embedding ---
+        auto t2 = std::chrono::high_resolution_clock::now();
         DTensor pos_emb = wpe.forward(pos);  // [1, T, C] - broadcasts
+
+        auto t3 = std::chrono::high_resolution_clock::now();
+        t_pos_emb += std::chrono::duration<double>(t3 - t2).count();
         
         // Properly construct x with mesh/pg/layout from embedding output
         DTensor x(tok_emb.get_device_mesh(), tok_emb.get_pg(), tok_emb.get_layout(), "x_combined");
         // Add embeddings
         x.mutable_tensor() = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
         
-        // Apply MLP blocks (Sequential handles the loop and residual is inside MLP now)
+        // --- MLP Blocks ---
+        auto t4 = std::chrono::high_resolution_clock::now();
         x = mlps.forward(x);
+
+        auto t5 = std::chrono::high_resolution_clock::now();
+        t_mlp += std::chrono::duration<double>(t5 - t4).count();
         
-        // Final normalization
+        // --- Final LayerNorm ---
+        auto t6 = std::chrono::high_resolution_clock::now();
         x = ln_f.forward(x);
 
+        auto t7 = std::chrono::high_resolution_clock::now();
+        t_ln_f += std::chrono::duration<double>(t7 - t6).count();
+
+        // --- LM Head ---
+        auto t8 = std::chrono::high_resolution_clock::now();
         logits = lm.forward(x);
+
+        auto t9 = std::chrono::high_resolution_clock::now();
+        t_lm_head += std::chrono::duration<double>(t9 - t8).count();
         
         // Final projection to vocab size [B, T, vocab_size]
         // Uses separate W_out instead of wte.weight.t()
@@ -294,22 +335,22 @@ int main(int argc, char** argv) {
         
         // Configuration
         GPTConfig config;
-        config.batch_size = 4;
+        config.batch_size = 8;
         config.context_length = 1024;
         config.vocab_size = 50304;
         config.n_embd = 384;
         config.n_layers = 3;
         
         // Training hyperparameters
-        const int B = 4;           // Batch size
+        const int B = 8;           // Batch size
         const int T = 1024;        // Sequence length
         const int global_batch = 65536;  // Global batch size
         const int grad_accum_steps = global_batch / (B * T);
         
         const float max_lr = 1e-4f;  
         const float min_lr = max_lr * 0.1f;
-        const int warmup_steps = 324;
-        const int max_steps = 3249;
+        const int warmup_steps = 259;
+        const int max_steps = 2584;
 
 
         
@@ -368,7 +409,39 @@ int main(int argc, char** argv) {
         }
         
         // Create CSV log file
-        std::ofstream log_file("log_nnmodseq_bluwerp_lossscale.csv");
+        // Enable dynamic log filename generation
+        std::string log_filename;
+        int log_idx = 1;
+        while (true) {
+            log_filename = "CPP_Training__log" + std::to_string(log_idx) + ".csv";
+            std::ifstream check(log_filename);
+            if (!check.good()) {
+                break; 
+            }
+            check.close();
+            log_idx++;
+        }
+        
+        if (rank == 0) {
+            std::cout << "Saving logs to: " << log_filename << std::endl;
+            
+            // Save configuration
+            std::string config_filename = "CPP_Training__log" + std::to_string(log_idx) + "_config.txt";
+            std::ofstream config_file(config_filename);
+            config_file << "Configuration:\n";
+            config_file << "  vocab_size: " << config.vocab_size << "\n";
+            config_file << "  context_length: " << config.context_length << "\n";
+            config_file << "  n_embd: " << config.n_embd << "\n";
+            config_file << "  n_layers: " << config.n_layers << "\n";
+            config_file << "  B: " << B << "\n";
+            config_file << "  T: " << T << "\n";
+            config_file << "  global_batch: " << global_batch << "\n";
+            config_file << "  grad_accum_steps: " << grad_accum_steps << "\n";
+            config_file << "  Number of parameters: " << num_params << "\n";
+            config_file.close();
+        }
+
+        std::ofstream log_file(log_filename);
         log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
         log_file << std::fixed << std::setprecision(6);
         
@@ -402,7 +475,8 @@ int main(int argc, char** argv) {
                 val_loss_accum_log = val_loss_accum;
             }
             
-            // Training step
+            // Training step with component timing
+            double time_data = 0, time_forward = 0, time_loss = 0, time_backward = 0, time_allreduce = 0, time_clip = 0, time_optim = 0;
 
             optimizer.zero_grad();
             float loss_accum = 0.0f;
@@ -411,33 +485,53 @@ int main(int argc, char** argv) {
             Tensor loss_accum_gpu = Tensor::zeros(Shape{{1}}, TensorOptions().with_device(device));
             
             for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
-
+                
+                // --- Data Loading ---
+                auto t_data_start = std::chrono::high_resolution_clock::now();
                 Batch batch = train_loader.next_batch();
                 model.Didx.mutable_tensor() = batch.input.to(device).as_type(Dtype::Float32);
                 Tensor y = batch.target.to(device);
+        
+                auto t_data_end = std::chrono::high_resolution_clock::now();
+                time_data += std::chrono::duration<double>(t_data_end - t_data_start).count();
                 
-                // Forward
+                // --- Forward Pass ---
+                auto t_fwd_start = std::chrono::high_resolution_clock::now();
                 DTensor logits = model.forward(model.Didx);
-                Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
-
+        
+                auto t_fwd_end = std::chrono::high_resolution_clock::now();
+                time_forward += std::chrono::duration<double>(t_fwd_end - t_fwd_start).count();
                 
-                // Accumulate loss on GPU (no graph tracking needed for logging)
+                // --- Loss Computation ---
+                auto t_loss_start = std::chrono::high_resolution_clock::now();
+                // Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
+                Tensor loss = autograd::sparse_cross_entropy_loss(logits.mutable_tensor(),y);
                 loss = loss / grad_accum_steps;
                 loss_accum_gpu = loss_accum_gpu + loss;
+        
+                auto t_loss_end = std::chrono::high_resolution_clock::now();
+                time_loss += std::chrono::duration<double>(t_loss_end - t_loss_start).count();
                 
-                // Backward with scaling
+                // --- Backward Pass ---
+                auto t_bwd_start = std::chrono::high_resolution_clock::now();
                 Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 1.0f);
                 loss.backward(&grad_scale);
+                auto t_bwd_end = std::chrono::high_resolution_clock::now();
+                time_backward += std::chrono::duration<double>(t_bwd_end - t_bwd_start).count();
             }
+            
+            // --- All-reduce gradients for replicated parameters ---
+            auto t_ar_start = std::chrono::high_resolution_clock::now();
+            model.all_reduce_gradients(pg.get());
+    
+            auto t_ar_end = std::chrono::high_resolution_clock::now();
+            time_allreduce = std::chrono::duration<double>(t_ar_end - t_ar_start).count();
 
         //    std::cout<< "Token embedding: " << std::endl;
         //     model.wte.weight.grad_view().display() ;
         //     std::cout<< "Position embedding: " << std::endl;
         //     model.wpe.weight.grad_view().display();
         //     model.mlps[0].fc_up.weight.grad_view().display();
-            
-            // Synchronize ONCE after all micro-steps
-            cudaDeviceSynchronize();
             
             // Transfer accumulated loss to CPU once per step
             Tensor loss_cpu = loss_accum_gpu.to_cpu();
@@ -450,18 +544,22 @@ int main(int argc, char** argv) {
                 return 1;
             }
             
-            // Clip gradients
-            // float norm = nn::clip_grad_norm_(params*, 1.0f );
+            // --- Gradient Clipping ---
+            auto t_clip_start = std::chrono::high_resolution_clock::now();
             float norm = dnn::clip_grad_norm_dtensor_nccl(params, 1.0f, pg);
-            cudaDeviceSynchronize();
+    
+            auto t_clip_end = std::chrono::high_resolution_clock::now();
+            time_clip = std::chrono::duration<double>(t_clip_end - t_clip_start).count();
             
             // Update learning rate
             float lr = get_lr(step, max_lr, min_lr, warmup_steps, max_steps);
             optimizer.set_lr(lr);
             
-            // Optimizer step
+            // --- Optimizer Step ---
+            auto t_optim_start = std::chrono::high_resolution_clock::now();
             optimizer.step(params);
-            cudaDeviceSynchronize();
+            auto t_optim_end = std::chrono::high_resolution_clock::now();
+            time_optim = std::chrono::duration<double>(t_optim_end - t_optim_start).count();
             
             auto t1 = std::chrono::high_resolution_clock::now();
             double dt = std::chrono::duration<double>(t1 - t0).count();
@@ -480,6 +578,20 @@ int main(int argc, char** argv) {
                         << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec 
                         << std::endl;
             
+            // Component timing breakdown (in ms)
+            std::cout << "  [TIMING] data: " << std::fixed << std::setprecision(1) << (time_data * 1000.0) << "ms"
+                      << " | fwd: " << (time_forward * 1000.0) << "ms"
+                      << " | loss: " << (time_loss * 1000.0) << "ms"
+                      << " | bwd: " << (time_backward * 1000.0) << "ms"
+                      << " | clip: " << (time_clip * 1000.0) << "ms"
+                      << " | optim: " << (time_optim * 1000.0) << "ms"
+                      << " | gradients allreduce: " << std::fixed << std::setprecision(1) << (time_allreduce * 1000.0) << "ms"
+                      << std::endl;
+            
+            // Layer-level timing breakdown
+            model.print_timing(rank);
+            model.reset_timing();
+            
             // Log metrics to CSV
             log_file << step << "," 
                         << loss_accum << ","
@@ -494,7 +606,7 @@ int main(int argc, char** argv) {
         }
         if(rank == 0){
             log_file.close();
-            std::cout << "\nTraining log saved to: log_no_weight_tying.csv" << std::endl;
+            std::cout << "\nTraining log saved to: " << log_filename << std::endl;
         
             std::cout << "\n=== Training Complete ===" << std::endl;
         }

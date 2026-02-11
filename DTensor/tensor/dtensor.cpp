@@ -1234,30 +1234,28 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
     #endif
     
     std::vector<int64_t> parent_shape = parent_tensor.shape_;
+    std::vector<int64_t> local_shard_shape = parent_tensor.get_layout().get_local_shape(rank_);
+    int ndim = parent_shape.size();
     
-    if (parent_shape.size() != 3) {
-        throw std::runtime_error("shard_fused_transpose currently only supports 3D tensors");
+    if (ndim != 2 && ndim != 3) {
+        throw std::runtime_error("shard_fused_transpose: only supports 2D and 3D tensors, got " + std::to_string(ndim) + "D");
     }
     
-    int64_t D0 = parent_shape[0];
-    int64_t D1 = parent_shape[1];
-    int64_t D2 = parent_shape[2];
+    if (dim < 0 || dim >= ndim) {
+        throw std::runtime_error("shard_fused_transpose: dim " + std::to_string(dim) + " out of range for " + std::to_string(ndim) + "D tensor");
+    }
     
     // Calculate local dimension size and shard numel
     int64_t local_dim_size;
-    size_t shard_numel;
+    size_t shard_numel = tensor_.numel();
     
     if (dim == 0) {
-        local_dim_size = D0 / world_size_;
-        shard_numel = local_dim_size * D1 * D2;
+        local_dim_size = local_shard_shape[0] / world_size_;
     } else if (dim == 1) {
-        local_dim_size = D1 / world_size_;
-        shard_numel = D0 * local_dim_size * D2;
-    } else if (dim == 2) {
-        local_dim_size = D2 / world_size_;
-        shard_numel = D0 * D1 * local_dim_size;
-    } else {
-        throw std::runtime_error("shard_fused_transpose: dim must be 0, 1, or 2");
+        local_dim_size = local_shard_shape[1] / world_size_;
+    } else { // dim == 2, only valid for 3D
+        local_dim_size = local_shard_shape[2] / world_size_;
+        shard_numel = local_shard_shape[0] * local_shard_shape[1] * local_dim_size;
     }
     
     std::shared_ptr<Work> work;
@@ -1276,7 +1274,7 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
         } else {
             // For dim 1 and 2, need to reorder using kernel
             OwnTensor::Shape send_shape;
-            send_shape.dims = {D0 * D1 * D2};
+            send_shape.dims = {static_cast<int64_t>(tensor_.numel())};
             OwnTensor::Tensor send_buffer(send_shape, parent_tensor.tensor_.dtype(), parent_tensor.tensor_.device());
             
             nvtxRangePush("shard_fused_transpose");
@@ -1285,7 +1283,7 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
                     launch_shard_dim1_kernel(
                         parent_tensor.tensor_.data<float>(),
                         send_buffer.data<float>() + r * shard_numel,
-                        D0, D1, D2,
+                        local_shard_shape,
                         local_dim_size,
                         r,
                         shard_numel,
@@ -1295,7 +1293,7 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
                     launch_shard_dim2_kernel(
                         parent_tensor.tensor_.data<float>(),
                         send_buffer.data<float>() + r * shard_numel,
-                        D0, D1, D2,
+                        local_shard_shape,
                         local_dim_size,
                         r,
                         shard_numel,

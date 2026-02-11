@@ -31,7 +31,7 @@
 #include "nn/NN.h"
 
 // Dataloader
-#include "Data_Loader/dl_test.cpp"
+#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/dl_test.cpp"
 
 using namespace OwnTensor;
 
@@ -397,8 +397,9 @@ int main() {
             }
             
             // Clip gradients
-            float norm = clip_grad_norm_(params, 1.0f);
+            float norm = nn::clip_grad_norm_(params, 1.0f);
             cudaDeviceSynchronize();
+            (void)B;
             
             // Update learning rate
             float lr = get_lr(step, max_lr, min_lr, warmup_steps, max_steps);
