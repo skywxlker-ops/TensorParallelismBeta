@@ -6,7 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <numeric>
-#include "process_group/ProcessGroupNCCL_new.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include <mpi.h>
 #include <nccl.h>
 

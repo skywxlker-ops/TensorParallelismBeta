@@ -12,7 +12,7 @@
 #include "mlp/layers.h"
 #include "device/DeviceCore.h"  // For OwnTensor::cuda::setCurrentStream
 // #include "reverse.cuh"
-#include <nvtx3/nvtx3.hpp>
+// #include <nvtx3/nvtx3.hpp>
 #include <nvtx3/nvToolsExt.h>
 #include "process_group/fused_transpose_kernel.cuh"
 #include "process_group/shard_fused_transpose_kernel.cuh"

@@ -39,7 +39,7 @@ LDFLAGS = -L/home/blu-bridge25/.local/lib -Xlinker -rpath -Xlinker /home/blu-bri
 SRCS = main.cpp \
 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/processGroupNccl_new.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
@@ -65,7 +65,7 @@ TEST_MLP_SRCS = \
 	tests/kiruthik_mlp_test.cpp \
 # 	tensor/dtensor.cpp \
 	tensor/device_mesh.cpp \
-	process_group/processGroupNccl_new.cpp \
+	process_group/processGroupNccl.cpp \
 	memory/cachingAllocator.cpp \
 	bridge/tensor_ops_bridge.cpp \
 
@@ -227,7 +227,7 @@ TP_MLP_SRCS = \
     examples/tensor_parallel_mlp_copy.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp 
@@ -254,7 +254,7 @@ TP_MLP_AUTOGRAD_SRCS = \
     examples/tensor_parallel_mlp.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
@@ -272,7 +272,7 @@ MLP_SEED_SRCS = \
     examples/mlp_seed.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
@@ -290,7 +290,7 @@ TP_MLP_SEED_SRCS = \
     examples/tensor_parallel_mlp_seed.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
@@ -308,7 +308,7 @@ DMLP_EXAMPLE_SRCS = \
     examples/dmlp_example.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
@@ -344,7 +344,7 @@ SHARD_BENCH_SRCS = \
     benchmarks/shard_benchmarking.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -362,7 +362,7 @@ INTERCONNECT_BENCH_SRCS = \
     benchmarks/interconnect_benchmarks.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -381,7 +381,7 @@ interconnect_benchmarks: $(INTERCONNECT_BENCH_OBJS) $(TENSOR_LIB_A)
 #     benchmarks/Rotate_benchmark.cpp \
 #     tensor/dtensor.cpp \
 #     tensor/device_mesh.cpp \
-#     process_group/processGroupNccl_new.cpp \
+#     process_group/processGroupNccl.cpp \
 #     memory/cachingAllocator.cpp \
 #     bridge/tensor_ops_bridge.cpp \
 #     tensor/placement.cpp
@@ -444,7 +444,7 @@ EMBEDDING_EXAMPLE_SRCS = \
     examples/embedding_example.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -462,7 +462,7 @@ DMLP_EMBEDDING_SRCS = \
     examples/dmlp_embedding_example.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -480,7 +480,7 @@ DMLP_FULL_SRCS = \
     examples/dmlp_full.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -498,7 +498,7 @@ GPT2_PARALLEL_TEST_SRCS = \
     TrainingScripts/gpt2_parallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -516,7 +516,7 @@ GPT2_ENTROPY_PARALLEL_TEST_SRCS = \
     TrainingScripts/gpt2_entropy_parallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -534,7 +534,7 @@ GPT2_TP_TEST_SRCS = \
     gpt2_tp_test/gpt2_tp_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -551,7 +551,7 @@ GPT2_TP_MLP_TEST_SRCS = \
     gpt2_tp_test/gpt2_tp_mlp_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -569,7 +569,7 @@ gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 #     gpt2_tp_test/gpt2_tp_mlp_test.cpp \
 #     tensor/dtensor.cpp \
 #     tensor/device_mesh.cpp \
-#     process_group/processGroupNccl_new.cpp \
+#     process_group/processGroupNccl.cpp \
 #     memory/cachingAllocator.cpp \
 #     bridge/tensor_ops_bridge.cpp \
 #     tensor/placement.cpp
@@ -587,7 +587,7 @@ GPT2_SYNC_VERIFY_TEST_SRCS = \
     TrainingScripts/gpt2_sync_verify_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -605,7 +605,7 @@ GPT2_MLP_PARALLEL_TEST_SRCS = \
     TrainingScripts/gpt2_mlp_parallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -624,7 +624,7 @@ GPT2_TENSOR_PARALLEL_TEST_SRCS = \
     TrainingScripts/GPT2_TesnorParallel_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
@@ -646,7 +646,7 @@ DTENSOR_LEAK_TESTS_SRCS = \
     tests/dtensor_leak_tests/test_gpt2_components.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl_new.cpp \
+    process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp

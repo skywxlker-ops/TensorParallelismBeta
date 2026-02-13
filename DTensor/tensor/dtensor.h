@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "process_group/ProcessGroupNCCL_new.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "memory/cachingAllocator.hpp"
 
 

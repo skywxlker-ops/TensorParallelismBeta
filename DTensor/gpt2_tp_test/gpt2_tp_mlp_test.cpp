@@ -259,6 +259,7 @@ public:
                                           .with_device(device)
                                           .with_req_grad(true);
         W_out = Tensor::randn<float>(Shape{{config.n_embd, config.vocab_size}}, opts, seed + 500, 0.02f);
+        W_out = wte.weight.t();
         register_parameter(&W_out);
     }
 
@@ -475,7 +476,7 @@ int main(int argc, char** argv) {
             std::cout << "Saving logs to: " << log_filename << std::endl;
             
             // Save configuration
-            std::string config_filename = "TP_MLP_Training__log" + std::to_string(log_idx) + "_config.txt";
+            std::string config_filename = "TP_MLP_Training_log" + std::to_string(log_idx) + "_config.txt";
             std::ofstream config_file(config_filename);
             config_file << "Configuration:\n";
             config_file << "  vocab_size: " << config.vocab_size << "\n";

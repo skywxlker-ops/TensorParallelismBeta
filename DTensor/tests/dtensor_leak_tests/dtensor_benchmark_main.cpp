@@ -1,7 +1,7 @@
 #include <iostream>
 #include <mpi.h>
 #include "dtensor_test_utils.h"
-#include "process_group/ProcessGroupNCCL_new.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
 
 // Forward declarations of test runners

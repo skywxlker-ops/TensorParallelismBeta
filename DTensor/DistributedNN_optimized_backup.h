@@ -10,7 +10,7 @@
 #include <iostream>
 #include <mpi.h>
 
-#include "process_group/ProcessGroupNCCL_new.h"
+#include "process_group/ProcessGroupNCCL.h"
 #include "ops/helpers/GradNormKernels.h"
 #include <cuda_runtime.h>
 #include <cmath>
