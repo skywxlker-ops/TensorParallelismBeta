@@ -400,10 +400,8 @@ int main(int argc, char** argv) {
         
         const float max_lr = 1e-4f;  
         const float min_lr = max_lr * 0.1f;
-        const int warmup_steps = 259;
-        const int max_steps = 2584;
-
-
+        
+        
         
         std::cout << "Configuration:" << std::endl;
         std::cout << "  vocab_size: " << config.vocab_size << std::endl;
@@ -428,7 +426,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < world_size; i++) ranks_vec[i] = i;
         DeviceMesh mesh({world_size}, ranks_vec);
         auto pg = mesh.get_process_group(0);
-
+        
         std::cout << "\nInitializing model on CUDA device "<< device.index << "..." << std::endl;
         
         // Create model
@@ -438,10 +436,16 @@ int main(int argc, char** argv) {
         std::vector<DTensor*> params = model.parameters();
         int64_t num_params = 0;
         for(auto& p : params) num_params += p->mutable_tensor().numel();
-
+        
+                const int max_steps = num_params * 5 / global_batch;
+                const int warmup_steps = max_steps / 10;
+        
         if(rank == 0){
             std::cout << "Number of parameters: " << num_params << std::endl;
+            std::cout << "Number of steps: " << max_steps << std::endl;
+            std::cout << "Number of warmup_steps: " << warmup_steps << std::endl;
         }
+        
         // std::cout << "(Note: More params than weight-tied version due to separate W_out)" << std::endl;
         
         // Get all parameters
@@ -479,19 +483,22 @@ int main(int argc, char** argv) {
             std::string config_filename = "TP_MLP_Training_log" + std::to_string(log_idx) + "_config.txt";
             std::ofstream config_file(config_filename);
             config_file << "Configuration:\n";
-            config_file << "  vocab_size: " << config.vocab_size << "\n";
+            config_file << "  Batch_size: " << B << "\n";
             config_file << "  context_length: " << config.context_length << "\n";
             config_file << "  n_embd: " << config.n_embd << "\n";
+            config_file << "  vocab_size: " << config.vocab_size << "\n";
             config_file << "  n_layers: " << config.n_layers << "\n";
-            config_file << "  B: " << B << "\n";
-            config_file << "  T: " << T << "\n";
             config_file << "  global_batch: " << global_batch << "\n";
             config_file << "  grad_accum_steps: " << grad_accum_steps << "\n";
             config_file << "  Number of parameters: " << num_params << "\n";
+            config_file << "  Max Learning Rate: " << max_lr << "\n";
+            config_file << "  Min Learning Rate: " << min_lr << "\n";
+            config_file << "  Number of steps: " << max_steps << "\n";
+            config_file << "  Number of warmup_steps: " << warmup_steps << "\n";
             config_file.close();
 
             log_file.open(log_filename);
-            log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
+            log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec,timer_step, timer_data, timer_fwd, timer_loss, timer_bwd, timer_clip, timer_optim\n";
             log_file << std::fixed << std::setprecision(6);
         }
         
