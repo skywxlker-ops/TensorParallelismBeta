@@ -547,6 +547,41 @@ gpt2_tp_test: $(GPT2_TP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 TP Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_test_exec \n"
 
+GPT2_TP_MLP_TEST_SRCS = \
+    gpt2_tp_test/gpt2_tp_mlp_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNccl_new.cpp \
+    memory/cachingAllocator.cpp \
+    bridge/tensor_ops_bridge.cpp \
+    tensor/placement.cpp
+
+GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
+gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: gpt2_tp_mlp_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_tp_mlp_test_exec $(GPT2_TP_MLP_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 TP MLP Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_mlp_test_exec \n"
+
+
+# GPT2_TP_MLP_TEST_SRCS = \
+#     gpt2_tp_test/gpt2_tp_mlp_test.cpp \
+#     tensor/dtensor.cpp \
+#     tensor/device_mesh.cpp \
+#     process_group/processGroupNccl_new.cpp \
+#     memory/cachingAllocator.cpp \
+#     bridge/tensor_ops_bridge.cpp \
+#     tensor/placement.cpp
+
+# GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
+# gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
+# 	@echo "\n[LINKING] Creating example executable: gpt2_tp_mlp_test_"
+# 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_tp_mlp_test $(GPT2_TP_MLP_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+# 	@echo "[SUCCESS] GPT2 TP MLP Test build complete."
+# 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_mlp_test \n"
+
 # GPT2 Sync Verification Test
 GPT2_SYNC_VERIFY_TEST_SRCS = \
     TrainingScripts/gpt2_sync_verify_test.cpp \

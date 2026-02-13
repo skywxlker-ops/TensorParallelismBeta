@@ -7,4 +7,4 @@ Configuration:
   T: 1024
   global_batch: 65536
   grad_accum_steps: 8
-  Number of parameters: 33868800
+  Number of parameters: 40799232

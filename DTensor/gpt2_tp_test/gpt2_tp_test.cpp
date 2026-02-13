@@ -20,6 +20,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <filesystem> 
 
 // Tensor library includes
 #include "TensorLib.h"
@@ -42,6 +43,29 @@ using namespace OwnTensor;
 // =============================================================================
 
 int rank, world_size;
+
+struct CudaTimer {
+    cudaEvent_t start, stop;
+    CudaTimer() {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+    }
+    ~CudaTimer() {
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+    void start_timer() { cudaEventRecord(start); }
+    float get_elapsed_ms() {
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        float ms = 0;
+        cudaEventElapsedTime(&ms, start, stop);
+        return ms;
+    }
+    double get_elapsed_seconds() {
+        return get_elapsed_ms() / 1000.0;
+    }
+};
 
 struct GPTConfig {
     int64_t batch_size = 8;
@@ -172,6 +196,7 @@ public:
 
     // Component timing (accumulated per step, reset after printing)
     double t_tok_emb = 0, t_pos_emb = 0, t_mlp = 0, t_ln_f = 0, t_lm_head = 0;
+    CudaTimer timer_tok_emb, timer_pos_emb, timer_mlp, timer_ln_f, timer_lm_head;
 
     GPT(GPTConfig cfg, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg, DeviceIndex device, uint64_t seed = 1234)
         : config(cfg), 
@@ -253,18 +278,18 @@ public:
         
         // --- Token Embedding ---
 
-        auto t0 = std::chrono::high_resolution_clock::now();
+        // --- Token Embedding ---
+
+        timer_tok_emb.start_timer();
         DTensor tok_emb = wte.forward(idx);  // [B, T, C]
 
-        auto t1 = std::chrono::high_resolution_clock::now();
-        t_tok_emb += std::chrono::duration<double>(t1 - t0).count();
+        t_tok_emb += timer_tok_emb.get_elapsed_seconds();
 
         // --- Position Embedding ---
-        auto t2 = std::chrono::high_resolution_clock::now();
+        timer_pos_emb.start_timer();
         DTensor pos_emb = wpe.forward(pos);  // [1, T, C] - broadcasts
 
-        auto t3 = std::chrono::high_resolution_clock::now();
-        t_pos_emb += std::chrono::duration<double>(t3 - t2).count();
+        t_pos_emb += timer_pos_emb.get_elapsed_seconds();
         
         // Properly construct x with mesh/pg/layout from embedding output
         DTensor x(tok_emb.get_device_mesh(), tok_emb.get_pg(), tok_emb.get_layout(), "x_combined");
@@ -272,25 +297,22 @@ public:
         x.mutable_tensor() = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
         
         // --- MLP Blocks ---
-        auto t4 = std::chrono::high_resolution_clock::now();
+        timer_mlp.start_timer();
         x = mlps.forward(x);
 
-        auto t5 = std::chrono::high_resolution_clock::now();
-        t_mlp += std::chrono::duration<double>(t5 - t4).count();
+        t_mlp += timer_mlp.get_elapsed_seconds();
         
         // --- Final LayerNorm ---
-        auto t6 = std::chrono::high_resolution_clock::now();
+        timer_ln_f.start_timer();
         x = ln_f.forward(x);
 
-        auto t7 = std::chrono::high_resolution_clock::now();
-        t_ln_f += std::chrono::duration<double>(t7 - t6).count();
+        t_ln_f += timer_ln_f.get_elapsed_seconds();
 
         // --- LM Head ---
-        auto t8 = std::chrono::high_resolution_clock::now();
+        timer_lm_head.start_timer();
         logits = lm.forward(x);
 
-        auto t9 = std::chrono::high_resolution_clock::now();
-        t_lm_head += std::chrono::duration<double>(t9 - t8).count();
+        t_lm_head += timer_lm_head.get_elapsed_seconds();
         
         // Final projection to vocab size [B, T, vocab_size]
         // Uses separate W_out instead of wte.weight.t()
@@ -411,18 +433,17 @@ int main(int argc, char** argv) {
         // Create CSV log file
         // Enable dynamic log filename generation
         std::string log_filename;
-        int log_idx = 1;
-        while (true) {
-            log_filename = "CPP_Training__log" + std::to_string(log_idx) + ".csv";
-            std::ifstream check(log_filename);
-            if (!check.good()) {
-                break; 
-            }
-            check.close();
-            log_idx++;
-        }
-        
+        std::ofstream log_file;
+
         if (rank == 0) {
+            int log_idx = 1;
+            while (true) {
+                log_filename = "TP_Training_log" + std::to_string(log_idx) + ".csv";
+                std::ifstream check(log_filename);
+                if (!check.good()) break;
+                log_idx++;
+            }
+        
             std::cout << "Saving logs to: " << log_filename << std::endl;
             
             // Save configuration
@@ -439,16 +460,18 @@ int main(int argc, char** argv) {
             config_file << "  grad_accum_steps: " << grad_accum_steps << "\n";
             config_file << "  Number of parameters: " << num_params << "\n";
             config_file.close();
-        }
 
-        std::ofstream log_file(log_filename);
-        log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
-        log_file << std::fixed << std::setprecision(6);
+            log_file.open(log_filename);
+            log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
+            log_file << std::fixed << std::setprecision(6);
+        }
         
         float val_loss_accum_log = -1.0f;  // -1 indicates no validation this step
         
+        CudaTimer timer_step, timer_data, timer_fwd, timer_loss, timer_bwd, timer_clip, timer_optim;
+
         for (int step = 0; step < max_steps; ++step) {
-            auto t0 = std::chrono::high_resolution_clock::now();
+            timer_step.start_timer();
             
             // Validation every 100 steps
             if (step % 100 == 0 || step == max_steps - 1) {
@@ -487,45 +510,41 @@ int main(int argc, char** argv) {
             for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
                 
                 // --- Data Loading ---
-                auto t_data_start = std::chrono::high_resolution_clock::now();
+                timer_data.start_timer();
                 Batch batch = train_loader.next_batch();
                 model.Didx.mutable_tensor() = batch.input.to(device).as_type(Dtype::Float32);
                 Tensor y = batch.target.to(device);
         
-                auto t_data_end = std::chrono::high_resolution_clock::now();
-                time_data += std::chrono::duration<double>(t_data_end - t_data_start).count();
+                time_data += timer_data.get_elapsed_seconds();
                 
                 // --- Forward Pass ---
-                auto t_fwd_start = std::chrono::high_resolution_clock::now();
+                timer_fwd.start_timer();
                 DTensor logits = model.forward(model.Didx);
         
-                auto t_fwd_end = std::chrono::high_resolution_clock::now();
-                time_forward += std::chrono::duration<double>(t_fwd_end - t_fwd_start).count();
+                time_forward += timer_fwd.get_elapsed_seconds();
                 
                 // --- Loss Computation ---
-                auto t_loss_start = std::chrono::high_resolution_clock::now();
+                timer_loss.start_timer();
                 // Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
                 Tensor loss = autograd::sparse_cross_entropy_loss(logits.mutable_tensor(),y);
                 loss = loss / grad_accum_steps;
                 loss_accum_gpu = loss_accum_gpu + loss;
         
-                auto t_loss_end = std::chrono::high_resolution_clock::now();
-                time_loss += std::chrono::duration<double>(t_loss_end - t_loss_start).count();
+                time_loss += timer_loss.get_elapsed_seconds();
                 
                 // --- Backward Pass ---
-                auto t_bwd_start = std::chrono::high_resolution_clock::now();
+                timer_bwd.start_timer();
                 Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 1.0f);
                 loss.backward(&grad_scale);
-                auto t_bwd_end = std::chrono::high_resolution_clock::now();
-                time_backward += std::chrono::duration<double>(t_bwd_end - t_bwd_start).count();
+                time_backward += timer_bwd.get_elapsed_seconds();
             }
             
             // --- All-reduce gradients for replicated parameters ---
-            auto t_ar_start = std::chrono::high_resolution_clock::now();
-            model.all_reduce_gradients(pg.get());
+            // auto t_ar_start = std::chrono::high_resolution_clock::now();
+            // model.all_reduce_gradients(pg.get());
     
-            auto t_ar_end = std::chrono::high_resolution_clock::now();
-            time_allreduce = std::chrono::duration<double>(t_ar_end - t_ar_start).count();
+            // auto t_ar_end = std::chrono::high_resolution_clock::now();
+            // time_allreduce = std::chrono::duration<double>(t_ar_end - t_ar_start).count();
 
         //    std::cout<< "Token embedding: " << std::endl;
         //     model.wte.weight.grad_view().display() ;
@@ -545,24 +564,21 @@ int main(int argc, char** argv) {
             }
             
             // --- Gradient Clipping ---
-            auto t_clip_start = std::chrono::high_resolution_clock::now();
+            timer_clip.start_timer();
             float norm = dnn::clip_grad_norm_dtensor_nccl(params, 1.0f, pg);
     
-            auto t_clip_end = std::chrono::high_resolution_clock::now();
-            time_clip = std::chrono::duration<double>(t_clip_end - t_clip_start).count();
+            time_clip = timer_clip.get_elapsed_seconds();
             
             // Update learning rate
             float lr = get_lr(step, max_lr, min_lr, warmup_steps, max_steps);
             optimizer.set_lr(lr);
             
             // --- Optimizer Step ---
-            auto t_optim_start = std::chrono::high_resolution_clock::now();
+            timer_optim.start_timer();
             optimizer.step(params);
-            auto t_optim_end = std::chrono::high_resolution_clock::now();
-            time_optim = std::chrono::duration<double>(t_optim_end - t_optim_start).count();
+            time_optim = timer_optim.get_elapsed_seconds();
             
-            auto t1 = std::chrono::high_resolution_clock::now();
-            double dt = std::chrono::duration<double>(t1 - t0).count();
+            double dt = timer_step.get_elapsed_seconds();
             
             // Compute throughput
             int64_t tokens_processed = static_cast<int64_t>(B) * T * grad_accum_steps;
@@ -585,7 +601,7 @@ int main(int argc, char** argv) {
                       << " | bwd: " << (time_backward * 1000.0) << "ms"
                       << " | clip: " << (time_clip * 1000.0) << "ms"
                       << " | optim: " << (time_optim * 1000.0) << "ms"
-                      << " | gradients allreduce: " << std::fixed << std::setprecision(1) << (time_allreduce * 1000.0) << "ms"
+                    //   << " | gradients allreduce: " << std::fixed << std::setprecision(1) << (time_allreduce * 1000.0) << "ms"
                       << std::endl;
             
             // Layer-level timing breakdown
