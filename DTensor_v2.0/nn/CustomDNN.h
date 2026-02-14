@@ -339,7 +339,7 @@ public:
      * 
      * If sharded, performs local lookup + AllReduce to combine partial results.
      */
-    DTensor forward(const std::vector<int32_t>& token_ids);
+    DTensor forward(const std::vector<int>& token_ids);
 
     /**
      * @brief Forward pass: lookup embeddings using DTensor indices [B, T]

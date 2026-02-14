@@ -3,8 +3,6 @@
 #include "ops/helpers/AdamKernels.h"
 #include "mlp/WeightInit.h"
 #include <cuda_runtime.h>
-#include "device/DeviceTransfer.h"
-#include <mpi.h>
 #include <cmath>
 #include <iostream>
 #include <fstream>
@@ -46,18 +44,18 @@ DLinear::DLinear(std::shared_ptr<DeviceMesh> mesh,
     
     if (weight_sharding_.is_shard()) {
         Layout w_layout(*mesh, {in_features_, out_features_}, weight_sharding_.shard_dim());
-        // For sharded weights, use seed + rank to ensure different values on each shard
+        // Create DTensor with randn (mean=0, std=1), then scale by He factor
         weight_ = std::make_unique<DTensor>(
-            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout, 1337 + pg->get_rank()));
+            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
         
         // Scale by He standard deviation (in-place)
         weight_->local_tensor() *= he_std;
         
     } else {
-        // Replicated weight: MUST use SAME seed on all ranks
+        // Replicated weight
         Layout w_layout = Layout::replicated(*mesh, {in_features_, out_features_});
         weight_ = std::make_unique<DTensor>(
-            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout, 1337));
+            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
         
         // Scale by He standard deviation (in-place)
         weight_->local_tensor() *= he_std;
@@ -114,12 +112,12 @@ DLinear::DLinear(int64_t in_features,
         // Column parallel: shard output dimension (dim 1)
         Layout w_layout(*mesh, {in_features_, out_features_}, 1);
         weight_ = std::make_unique<DTensor>(
-            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout, 1337 + pg->get_rank()));
+            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
     } else {
         // Row parallel: shard input dimension (dim 0)
         Layout w_layout(*mesh, {in_features_, out_features_}, 0);
         weight_ = std::make_unique<DTensor>(
-            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout, 1337 + pg->get_rank()));
+            DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
     }
     
     // Xavier initialization: scale weights by 1/sqrt(in_features)
@@ -132,16 +130,13 @@ DLinear::DLinear(int64_t in_features,
 }
 
 DTensor DLinear::forward(const DTensor& input, bool no_sync) {
-    // If column-parallel, the input is replicated across ranks.
-    // To ensure the gradient for the replicated input is correctly summed 
-    // across all ranks during backward, we use reduce_grad().
-    DTensor x = input;
-    if (sharding_.is_shard() && sharding_.shard_dim() == 1) { // Column Parallel
-        x = input.reduce_grad();
-    }
-
     // Compute Y = X @ W
-    DTensor output = x.matmul(*weight_);
+    DTensor output = input.matmul(*weight_);
+    
+    // Note: matmul handles sync() for row-parallel case (Shard(1) @ Shard(0))
+    // in DTensor::_row_parallel_matmul. Calling it again here would result 
+    // in doubled values and potential NCCL synchronization hangs. 
+    // DTensor::matmul is designed to return a fully synchronized result where necessary.
 
     // Add bias if present
     // Note: Add bias AFTER sync for row-parallel to avoid adding bias multiple times
@@ -205,7 +200,7 @@ DLinearReplicated::DLinearReplicated(int64_t in_features,
     
     // Xavier/He initialization: scale = sqrt(2/in_features)
     weight_ = std::make_unique<DTensor>(
-        DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout, 1337));
+        DTensor::randn({in_features_, out_features_}, mesh, pg, w_layout));
     
     // Scale weights for better initialization
     float scale = std::sqrt(2.0f / in_features_);
@@ -267,22 +262,15 @@ DMLP::DMLP(int64_t in_features,
 
 
 DTensor DMLP::forward(const DTensor& input) {
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    
-    // Layer 1: Column-parallel matmul
-    // if (rank == 0) std::cout << "  DMLP: fc1 forward..." << std::endl;
+    // Layer 1: Column-parallel matmul (no sync needed, output is sharded)
     DTensor h = fc1_->forward(input);
     
-    // Activation: GeLU
-    // if (rank == 0) std::cout << "  DMLP: gelu..." << std::endl;
+    // Activation: GeLU (operates on shards)
     DTensor h_act = h.gelu();
     
-    // Layer 2: Row-parallel matmul
-    // if (rank == 0) std::cout << "  DMLP: fc2 forward..." << std::endl;
+    // Layer 2: Row-parallel matmul - handles its own sync() inside fc2_->forward()
     DTensor output = fc2_->forward(h_act);
     
-    // if (rank == 0) std::cout << "  DMLP: done." << std::endl;
     return output;
 }
 
@@ -344,9 +332,8 @@ DEmbedding::DEmbedding(int64_t vocab_size,
         
         Layout weight_layout(*mesh, {vocab_size_, embedding_dim_}, 0);  // Shard on dim 0
         weight_ = std::make_unique<DTensor>(
-            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout, 1337 + pg->get_rank())
+            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout)
         );
-        weight_->set_requires_grad(true);
     } else if (sharding_.is_shard() && sharding_.shard_dim() == 1) {
         // Column Parallel: shard embedding dimension
         // Each rank gets [vocab_size, embedding_dim / world_size]
@@ -355,7 +342,7 @@ DEmbedding::DEmbedding(int64_t vocab_size,
         
         Layout weight_layout(*mesh, {vocab_size_, embedding_dim_}, 1);  // Shard on dim 1
         weight_ = std::make_unique<DTensor>(
-            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout, 1337 + pg->get_rank())
+            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout)
         );
     } else {
         // Replicated mode (default)
@@ -363,172 +350,127 @@ DEmbedding::DEmbedding(int64_t vocab_size,
         vocab_start_idx_ = 0;
         
         Layout weight_layout = Layout::replicated(*mesh, {vocab_size_, embedding_dim_});
-        // MUST use same seed for replicated weights
         weight_ = std::make_unique<DTensor>(
-            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout, 1337)
+            DTensor::randn({vocab_size_, embedding_dim_}, mesh, pg, weight_layout)
         );
     }
-    
-    cudaDeviceSynchronize();
-    // std::cout << "[TRACE][Rank " << pg->get_rank() << "] DEmbedding weights created" << std::endl;
     
     // Xavier-like initialization: scale by 1/sqrt(embedding_dim)
     float scale = 1.0f / std::sqrt(static_cast<float>(embedding_dim_));
     weight_->local_tensor() *= scale;
     
-    cudaDeviceSynchronize();
-    
     weight_->set_requires_grad(true);
 }
 
-
-DTensor DEmbedding::forward(const std::vector<int32_t>& token_ids) {
+DTensor DEmbedding::forward(const std::vector<int>& token_ids) {
     int64_t batch_size = static_cast<int64_t>(token_ids.size());
     
     if (!sharding_.is_shard()) {
+        // Replicated path: simple lookup
         OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{batch_size}}, 
                                          OwnTensor::TensorOptions()
                                              .with_device(weight_->local_tensor().device())
                                              .with_dtype(OwnTensor::Dtype::Int32));
-        device::copy_memory(indices_tensor.data(), indices_tensor.device().device,
-                           token_ids.data(), Device::CPU,
-                           token_ids.size() * sizeof(int32_t));
+        indices_tensor.set_data(token_ids.data(), token_ids.size());
         return DTensor::embedding(indices_tensor, *weight_);
     }
     
     if (sharding_.shard_dim() == 1) {
+        // Column Parallel: shard embedding dimension
+        // Each rank has full vocab but partial embedding dim [V, H/P]
+        // No masking needed - just do lookup, output is [B, H/P] sharded
         OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{batch_size}}, 
                                          OwnTensor::TensorOptions()
                                              .with_device(weight_->local_tensor().device())
                                              .with_dtype(OwnTensor::Dtype::Int32));
-        device::copy_memory(indices_tensor.data(), indices_tensor.device().device,
-                           token_ids.data(), Device::CPU,
-                           token_ids.size() * sizeof(int32_t));
+        indices_tensor.set_data(token_ids.data(), token_ids.size());
         
+        // Local lookup on sharded weight
         OwnTensor::Tensor local_result = Bridge::autograd::embedding(
-             indices_tensor, weight_->local_tensor(), -1
+            indices_tensor, weight_->local_tensor(), -1
         );
         
-        Layout out_layout(*mesh_, {batch_size, embedding_dim_}, 1);
+        // Output is sharded on dim 1 (embedding dim)
+        Layout out_layout(*mesh_, {batch_size, embedding_dim_}, 1);  // Shard(1)
         return DTensor::from_local(local_result, mesh_, pg_, out_layout);
     }
     
-    // Sharded path: Row Parallel
-    std::vector<uint16_t> local_indices(batch_size);
+    // Sharded path: Row Parallel with AllReduce
+    // 1. Map global token IDs to local indices (or -1 if OOB for this rank)
+    std::vector<int> local_indices(batch_size);
     std::vector<float> mask(batch_size);
     
-    int64_t min_id = 1000000, max_id = -1000000;
-    int local_count = 0;
-
     for (int64_t i = 0; i < batch_size; ++i) {
-        int64_t global_id = static_cast<int64_t>(token_ids[i]);
+        int global_id = token_ids[i];
         if (global_id >= vocab_start_idx_ && global_id < vocab_start_idx_ + local_vocab_size_) {
-            local_indices[i] = static_cast<uint16_t>(global_id - vocab_start_idx_);
+            // Token belongs to this rank
+            local_indices[i] = global_id - vocab_start_idx_;
             mask[i] = 1.0f;
-            if (global_id < min_id) min_id = global_id;
-            if (global_id > max_id) max_id = global_id;
-            local_count++;
         } else {
+            // Token belongs to another rank - use index 0 for lookup, mask out result
             local_indices[i] = 0;
             mask[i] = 0.0f;
         }
     }
     
+    // 2. Create local indices tensor
     OwnTensor::Tensor indices_tensor(OwnTensor::Shape{{batch_size}}, 
                                      OwnTensor::TensorOptions()
                                          .with_device(weight_->local_tensor().device())
-                                         .with_dtype(OwnTensor::Dtype::UInt16));
-    device::copy_memory(indices_tensor.data(), indices_tensor.device().device,
-                       local_indices.data(), Device::CPU,
-                       local_indices.size() * sizeof(uint16_t));
+                                         .with_dtype(OwnTensor::Dtype::Int32));
+    indices_tensor.set_data(local_indices.data(), local_indices.size());
     
-    cudaDeviceSynchronize();
-    
+    // 3. Perform local lookup
     OwnTensor::Tensor local_result = Bridge::autograd::embedding(
-        indices_tensor, weight_->local_tensor(), -1
+        indices_tensor, weight_->local_tensor(), -1  // padding_idx = -1 (unused)
     );
     
-    // Broadcast mask manually to avoid potential buggy CUDA broadcasting
-    // mask is [batch_size], we want [batch_size, embedding_dim]
-    OwnTensor::Tensor mask_expanded(OwnTensor::Shape{{batch_size, (int64_t)embedding_dim_}}, 
-                                    OwnTensor::TensorOptions()
-                                        .with_device(local_result.device())
-                                        .with_dtype(OwnTensor::Dtype::Float32));
-    
-    // Fill mask_expanded: better to have a dedicated broadcast kernel, 
-    // but for now let's just use what's available or loop on CPU if needed.
-    // Actually, let's use the fact that local_result is [batch_size, C] 
-    // and mask is [batch_size].
-    // If OwnTensor's binary mul is buggy, we can do it more safely.
-    
+    // 4. Apply mask: zero out embeddings for tokens not on this rank
+    // mask is [batch_size], result is [batch_size, embedding_dim]
     OwnTensor::Tensor mask_tensor(OwnTensor::Shape{{batch_size, 1}}, 
                                   OwnTensor::TensorOptions()
                                       .with_device(local_result.device())
                                       .with_dtype(OwnTensor::Dtype::Float32));
-    device::copy_memory(mask_tensor.data(), mask_tensor.device().device,
-                       mask.data(), Device::CPU,
-                       mask.size() * sizeof(float));
+    mask_tensor.set_data(mask.data(), mask.size());
     
-    // Use out-of-place mul which uses the better ND broadcast kernel
-    local_result = OwnTensor::autograd::mul(local_result, mask_tensor);
+    // Broadcast mask and multiply
+    local_result = local_result * mask_tensor;
     
-    cudaDeviceSynchronize();
-    
-    Layout out_layout = Layout::replicated(*mesh_, {batch_size, (int64_t)embedding_dim_});
+    // 5. AllReduce to combine partial results from all ranks
+    // Create output layout (replicated)
+    Layout out_layout = Layout::replicated(*mesh_, {batch_size, embedding_dim_});
     DTensor output = DTensor::from_local(local_result, mesh_, pg_, out_layout);
+    output.sync();  // AllReduce sum
     
-    output.sync_w_autograd();
-    
-    cudaDeviceSynchronize();
     return output;
 }
 
 DTensor DEmbedding::forward(const DTensor& indices) {
-    if (!sharding_.is_shard()) {
-        OwnTensor::Tensor local_indices = indices.local_tensor();
-        if (local_indices.dtype() != OwnTensor::Dtype::UInt16) {
-            local_indices = local_indices.as_type(OwnTensor::Dtype::UInt16);
-        }
-        
-        int64_t numel = local_indices.numel();
-        OwnTensor::Tensor flat_indices = local_indices.reshape(OwnTensor::Shape{{numel}});
-        
-        DTensor result = DTensor::embedding(flat_indices, *weight_);
-        
-        auto shape = indices.shape();
-        shape.push_back(embedding_dim_);
-        return result.reshape(shape);
-    }
-
-    OwnTensor::Tensor local_indices_tensor = indices.local_tensor();
-    auto local_indices_cpu = local_indices_tensor.to_cpu();
-    cudaDeviceSynchronize();
-    
-    int64_t numel = local_indices_cpu.numel();
+    // For now, simpler implementation: convert DTensor indices to vector and use token_ids version
+    // In a high-performance setting, we would stay on GPU.
+    // However, if indices are small [B, T], the overhead is manageable.
+    auto local_indices = indices.local_tensor().to_cpu();
+    int64_t numel = local_indices.numel();
     std::vector<int> token_ids(numel);
     
-    if (local_indices_cpu.dtype() == OwnTensor::Dtype::Int64) {
-        const int64_t* data = local_indices_cpu.data<int64_t>();
+    if (local_indices.dtype() == OwnTensor::Dtype::Int64) {
+        const int64_t* data = local_indices.data<int64_t>();
         for (int64_t i = 0; i < numel; ++i) token_ids[i] = static_cast<int>(data[i]);
-    } else if (local_indices_cpu.dtype() == OwnTensor::Dtype::Int32) {
-        const int32_t* data = local_indices_cpu.data<int32_t>();
+    } else if (local_indices.dtype() == OwnTensor::Dtype::Int32) {
+        const int* data = local_indices.data<int>();
         for (int64_t i = 0; i < numel; ++i) token_ids[i] = data[i];
-    } else if (local_indices_cpu.dtype() == OwnTensor::Dtype::UInt16) {
-        const uint16_t* data = local_indices_cpu.data<uint16_t>();
+    } else if (local_indices.dtype() == OwnTensor::Dtype::UInt16) {
+        const uint16_t* data = local_indices.data<uint16_t>();
         for (int64_t i = 0; i < numel; ++i) token_ids[i] = static_cast<int>(data[i]);
-    } else {
-         std::cerr << "[ERROR][Rank " << pg_->get_rank() << "] Unsupported dtype " << (int)local_indices_cpu.dtype() << std::endl;
     }
     
     DTensor result = forward(token_ids);
     
+    // Reshape result to [B, T, C]
     auto shape = indices.shape();
     shape.push_back(embedding_dim_);
     return result.reshape(shape);
 }
-
-
-
 
 DTensor& DEmbedding::weight() {
     return *weight_;
@@ -576,18 +518,39 @@ void AdamW::step(std::vector<DTensor*> params) {
     float bias_corr1 = 1.0f - std::pow(beta1_, t_);
     float bias_corr2 = 1.0f - std::pow(beta2_, t_);
 
+    // Gradient clipping for stability
+    float global_norm_sq = 0.0f;
+    const float max_norm = 1.0f;
+    
+    for (DTensor* param : params) {
+        if (!param->requires_grad()) continue;
+        OwnTensor::Tensor grad = param->grad();
+        float local_norm_sq = 0.0f;
+        auto grad_cpu = grad.to_cpu();
+        const float* g_ptr = grad_cpu.data<float>();
+        for (size_t i = 0; i < grad.numel(); ++i) {
+            local_norm_sq += g_ptr[i] * g_ptr[i];
+        }
+        global_norm_sq += local_norm_sq;
+    }
+    
+    float global_sum_sq = 0.0f;
+    pg->all_reduce_cpu(&global_norm_sq, &global_sum_sq, 1, OwnTensor::Dtype::Float32, op_t::sum);
+    
+    float global_norm = std::sqrt(global_sum_sq);
+    float clip_coef = (global_norm > max_norm) ? (max_norm / global_norm) : 1.0f;
+
     for (DTensor* param : params) {
         if (!param->requires_grad()) continue;
 
         OwnTensor::Tensor& weight = param->local_tensor();
         OwnTensor::Tensor grad = param->grad();
 
-        // NOTE: Synchronize and Scale gradients for replicated parameters
-        // is now handled in the main training loop before clipping to ensure
-        // consistent clipping coefficients across ranks.
-        // NOTE: Sharded parameters (Column/Row Parallel) do NOT need scaling here.
-        // Each rank calculates the gradient for its own unique piece of the weight.
-        // Since TP ranks process the same batch, the local gradient is already correct.
+        // 1. Synchronize gradients for Replicated parameters
+        if (param->get_layout().is_replicated()) {
+             pg->all_reduce(grad.data<float>(), grad.data<float>(), 
+                            grad.numel(), OwnTensor::Dtype::Float32, op_t::sum, true);
+        }
 
         // 2. Initialize state if needed
         if (m_.find(param) == m_.end()) {
@@ -606,7 +569,7 @@ void AdamW::step(std::vector<DTensor*> params) {
             m.data<float>(),
             v.data<float>(),
             weight.numel(),
-            lr_,
+            lr_ * clip_coef,
             beta1_,
             beta2_,
             eps_,
@@ -656,8 +619,6 @@ DLayerNorm::DLayerNorm(int normalized_shape,
     // Initialize weight to ones and bias to zeros
     weight_ = std::make_unique<DTensor>(DTensor::ones({(int64_t)normalized_shape_}, mesh_, pg_, repl_layout));
     bias_ = std::make_unique<DTensor>(DTensor::zeros({(int64_t)normalized_shape_}, mesh_, pg_, repl_layout));
-    weight_->set_requires_grad(true);
-    bias_->set_requires_grad(true);
 }
 
 DTensor DLayerNorm::forward(const DTensor& input) {
@@ -680,5 +641,3 @@ std::vector<DTensor*> DLayerNorm::parameters() {
 
 } // namespace dnn
 } // namespace OwnTensor
-
-

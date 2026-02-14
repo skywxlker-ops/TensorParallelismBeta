@@ -1,0 +1,317 @@
+Compiling [CUDA]: src/Kernels/cuda/LayerNormKernels.cu
+nvcc -Iinclude -I/usr/local/cuda/include -DWITH_CUDA  -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -g  -O3 --expt-relaxed-constexpr -c src/Kernels/cuda/LayerNormKernels.cu -o lib/objects/src/Kernels/cuda/LayerNormKernels.o
+
+
+--- Creating shared library: lib/libtensor.so
+nvcc -shared -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -g  -O3 --expt-relaxed-constexpr lib/objects/src/Views/ViewUtils.o lib/objects/src/Views/ViewOps.o lib/objects/src/core/Storage.o lib/objects/src/core/AsTypeTensor.o lib/objects/src/core/TensorFactory.o lib/objects/src/core/Tensor.o lib/objects/src/core/AutogradMeta.o lib/objects/src/core/TensorUtils.o lib/objects/src/core/TensorImpl.o lib/objects/src/core/TensorDelete.o lib/objects/src/ScalarOps/cpu/ScalarOpsDispatcher.o lib/objects/src/ScalarOps/cpu/ScalarOps.o lib/objects/src/Kernels/cpu/GenMatmul.o lib/objects/src/device/DeviceTransfer.o lib/objects/src/device/CUDAAllocator.o lib/objects/src/device/CPUAllocator.o lib/objects/src/device/DeviceCore.o lib/objects/src/device/PinnedCPUAllocator.o lib/objects/src/device/AllocatorRegistry.o lib/objects/src/TensorOps/cpu/TensorOps.o lib/objects/src/autograd/Node.o lib/objects/src/autograd/Variable.o lib/objects/src/autograd/operations/ReductionOps.o lib/objects/src/autograd/operations/LossOps.o lib/objects/src/autograd/operations/ActivationOps.o lib/objects/src/autograd/operations/ReshapeOps.o lib/objects/src/autograd/operations/BinaryOps.o lib/objects/src/autograd/operations/TrigonometryOps.o lib/objects/src/autograd/operations/NormalizationOps.o lib/objects/src/autograd/operations/ExponentsOps.o lib/objects/src/autograd/operations/EmbeddingOps.o lib/objects/src/autograd/operations/ArithmeticsOps.o lib/objects/src/autograd/operations/MatrixOps.o lib/objects/src/autograd/Engine.o lib/objects/src/autograd/AnomalyMode.o lib/objects/src/autograd/Hooks.o lib/objects/src/autograd/ops_template.o lib/objects/src/autograd/backward/TrigonometryBackward.o lib/objects/src/autograd/backward/MatrixBackward.o lib/objects/src/autograd/backward/ReductionBackward.o lib/objects/src/autograd/backward/BinaryBackward.o lib/objects/src/autograd/backward/ExponentsBackward.o lib/objects/src/autograd/backward/NormalizationBackward.o lib/objects/src/autograd/backward/ArithmeticsBackward.o lib/objects/src/autograd/backward/LossBackward.o lib/objects/src/autograd/backward/ActivationBackward.o lib/objects/src/autograd/backward/EmbeddingBackward.o lib/objects/src/autograd/backward/GradAccumulator.o lib/objects/src/autograd/SavedVariable.o lib/objects/src/compiler/cpu/ConditionalOpsDispatcher.o lib/objects/src/compiler/cpu/ConditionalOps.o lib/objects/src/UnaryOps/cpu/ExponentCore.o lib/objects/src/UnaryOps/cpu/TrigonometryCore.o lib/objects/src/UnaryOps/cpu/Exponents.o lib/objects/src/UnaryOps/cpu/ConjugateCore.o lib/objects/src/UnaryOps/cpu/Reduction.o lib/objects/src/UnaryOps/cpu/Trigonometry.o lib/objects/src/UnaryOps/cpu/Arithmetics.o lib/objects/src/UnaryOps/cpu/ReductionUtils.o lib/objects/src/UnaryOps/cpu/ArithmeticsCore.o lib/objects/src/mlp-blocks/layers.o lib/objects/src/mlp-blocks/loss.o lib/objects/src/mlp-blocks/WeightInit.o lib/objects/src/mlp-blocks/activation.o lib/objects/src/nn/NN.o lib/objects/src/nn/optimizer/Optim.o lib/objects/src/nn/optimizer/LossScaler.o lib/objects/src/nn/LayerNorm.o lib/objects/src/ScalarOps/cuda/ScalarOps.o lib/objects/src/Kernels/cuda/IndexingKernels.o lib/objects/src/Kernels/cuda/ActivationKernels.o lib/objects/src/Kernels/cuda/MatmulBackward.o lib/objects/src/Kernels/cuda/AdamKernels.o lib/objects/src/Kernels/cuda/GenMatmul.o lib/objects/src/Kernels/cuda/ConversionKernels.o lib/objects/src/Kernels/cuda/GradNormKernels.o lib/objects/src/Kernels/cuda/EmbeddingKernels.o lib/objects/src/Kernels/cuda/LossKernels.o lib/objects/src/Kernels/cuda/LayerNormKernels.o lib/objects/src/ops/IndexingOps.o lib/objects/src/TensorOps/cuda/TensorOpsSub.o lib/objects/src/TensorOps/cuda/TensorBoolGEq.o lib/objects/src/TensorOps/cuda/TensorOpsMul.o lib/objects/src/TensorOps/cuda/TensorBoolGt.o lib/objects/src/TensorOps/cuda/TensorBoolLEq.o lib/objects/src/TensorOps/cuda/TensorBoolLogOR.o lib/objects/src/TensorOps/cuda/TensorOpsAdd.o lib/objects/src/TensorOps/cuda/TensorOpsDiv.o lib/objects/src/TensorOps/cuda/TensorBoolLogNot.o lib/objects/src/TensorOps/cuda/TensorBoolLogXOR.o lib/objects/src/TensorOps/cuda/TensorBoolLt.o lib/objects/src/TensorOps/cuda/TensorBoolLogAND.o lib/objects/src/TensorOps/cuda/TensorBoolNeq.o lib/objects/src/TensorOps/cuda/TensorBoolEq.o lib/objects/src/compiler/cuda/ConditionalOps.o lib/objects/src/UnaryOps/cuda/Exponents.o lib/objects/src/UnaryOps/cuda/Arithmetics.o lib/objects/src/UnaryOps/cuda/Trigonometry.o lib/objects/src/Views/ContiguousKernel.o lib/objects/src/UnaryOps/cuda/ReductionImplGPU.o lib/objects/device_link.o -L/usr/local/cuda/lib64 -Llib -Xlinker -rpath -Xlinker '$ORIGIN/lib' -lcudart -ltbb -lcurand -lcublas -o lib/libtensor.so
+--- Compiling snippet: ../gpt2_test.cpp ---
+g++ -Iinclude -I/usr/local/cuda/include -DWITH_CUDA  -std=c++20 -fPIC -Wall -Wextra -g -O3 -fopenmp -o snippet_runner ../gpt2_test.cpp -L/usr/local/cuda/lib64 -Llib -Xlinker -rpath -Xlinker '$ORIGIN/lib' -ltensor -lcudart -ltbb -lcurand -lcublas
+In file included from include/dtype/DtypeTraits.h:15,
+                 from include/TensorLib.h:16,
+                 from ../gpt2_test.cpp:19:
+include/dtype/fp4.h: In function ‘uint8_t detail_fp4::float_to_fp4_e2m1(float)’:
+include/dtype/fp4.h:44:11: warning: dereferencing type-punned pointer will break strict-aliasing rules [-Wstrict-aliasing]
+   44 |     if ((*(uint32_t*)&f) & 0x80000000) sign_bit = 8;
+      |           ^~~~~~~~~~~~~
+../gpt2_test.cpp: In constructor ‘MLP::MLP(int64_t, OwnTensor::DeviceIndex, uint64_t)’:
+../gpt2_test.cpp:144:17: warning: ‘MLP::n_embd_’ will be initialized after [-Wreorder]
+  144 |         int64_t n_embd_;
+      |                 ^~~~~~~
+../gpt2_test.cpp:85:23: warning:   ‘OwnTensor::nn::LayerNorm MLP::ln’ [-Wreorder]
+   85 |         nn::LayerNorm ln;       // LayerNorm before MLP
+      |                       ^~
+../gpt2_test.cpp:89:9: warning:   when initialized here [-Wreorder]
+   89 |         MLP(int64_t n_embd, DeviceIndex device, uint64_t seed = 1234)
+      |         ^~~
+../gpt2_test.cpp: In member function ‘std::vector<OwnTensor::Tensor*> MLP::parameters()’:
+../gpt2_test.cpp:129:24: warning: unused variable ‘p’ [-Wunused-variable]
+  129 |             for (auto& p : ln.parameters()) {
+      |                        ^
+../gpt2_test.cpp: In member function ‘OwnTensor::Tensor GPT::forward(const OwnTensor::Tensor&, bool)’:
+../gpt2_test.cpp:177:21: warning: unused variable ‘B’ [-Wunused-variable]
+  177 |             int64_t B = shape[0];
+      |                     ^
+../gpt2_test.cpp: In function ‘int main()’:
+../gpt2_test.cpp:458:39: warning: unused variable ‘x_data’ [-Wunused-variable]
+  458 |                             uint16_t* x_data = x_cpu.data<uint16_t>(); // Input x is NOT uint16! Wait.
+      |                                       ^~~~~~
+../gpt2_test.cpp:547:24: warning: unused variable ‘t_data’ [-Wunused-variable]
+  547 |                 double t_data = 0, t_forward = 0, t_backward = 0;
+      |                        ^~~~~~
+../gpt2_test.cpp:547:36: warning: unused variable ‘t_forward’ [-Wunused-variable]
+  547 |                 double t_data = 0, t_forward = 0, t_backward = 0;
+      |                                    ^~~~~~~~~
+../gpt2_test.cpp:547:51: warning: unused variable ‘t_backward’ [-Wunused-variable]
+  547 |                 double t_data = 0, t_forward = 0, t_backward = 0;
+      |                                                   ^~~~~~~~~~
+../gpt2_test.cpp:582:24: warning: unused variable ‘t_clip’ [-Wunused-variable]
+  582 |                 double t_clip = std::chrono::duration<double, std::milli>(t_c1 - t_c0).count();
+      |                        ^~~~~~
+../gpt2_test.cpp:593:24: warning: unused variable ‘t_opt’ [-Wunused-variable]
+  593 |                 double t_opt = std::chrono::duration<double, std::milli>(t_o1 - t_o0).count();
+      |                        ^~~~~
+In file included from ../gpt2_test.cpp:31:
+../dl_test.cpp: At global scope:
+../dl_test.cpp:25:12: warning: ‘int getenv_int(const char*, int)’ defined but not used [-Wunused-function]
+   25 | static int getenv_int(const char* key, int def) {
+      |            ^~~~~~~~~~
+
+--- Running snippet_runner ---
+./snippet_runner
+=== GPT-2 Training Script (C++ Implementation) ===
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 768
+  n_layers: 6
+  B=2, T=128
+  global_batch: 1024
+  grad_accum_steps: 4
+
+Initializing model on CUDA device 0...
+Number of parameters: 67765248
+found 10 shards for split train
+Tokens: 100000000
+found 1 shards for split val
+Tokens: 100000000
+
+Starting training...
+Tokens: 100000000
+Val step 0 Max target: 48866
+Val step 0 Loss: 10.9427
+Val step 1 Max target: 47866
+Val step 1 Loss: 10.9072
+Val step 2 Max target: 48599
+Val step 2 Loss: 10.88
+Val step 3 Max target: 50256
+Val step 3 Loss: 10.9325
+Val step 4 Max target: 48384
+Val step 4 Loss: 10.8677
+Val step 5 Max target: 47128
+Val step 5 Loss: 10.8738
+Val step 6 Max target: 48461
+Val step 6 Loss: 10.8949
+Val step 7 Max target: 50256
+Val step 7 Loss: 10.8221
+Val step 8 Max target: 45486
+Val step 8 Loss: 10.958
+Val step 9 Max target: 45500
+Val step 9 Loss: 10.9208
+Val step 10 Max target: 49158
+Val step 10 Loss: 10.9132
+Val step 11 Max target: 31504
+Val step 11 Loss: 10.9186
+Val step 12 Max target: 46181
+Val step 12 Loss: nan
+DEBUG: Loss is NaN at step 12! Re-running forward with layer checks...
+x after add (sample: -0.0134233)
+x after ln_f (sample: -1.3399)
+wte_t (sample: 0.0156195)
+CRITICAL: NaN/Inf in x BEFORE final projection at index 768
+wte_t is clean before matmul
+logits (sample: -0.723217)
+DEBUG: Checking Logits...
+Logits NaN/Inf: YES
+Logits Range: [-2.8716, 2.95192]
+Running Reference CPU LayerNorm...
+Val step 13 Max target: 48137
+Val step 13 Loss: 10.9543
+Val step 14 Max target: 33290
+Val step 14 Loss: 10.9141
+Val step 15 Max target: 44529
+Val step 15 Loss: 10.8852
+Val step 16 Max target: 33290
+Val step 16 Loss: 10.8867
+Val step 17 Max target: 44529
+Val step 17 Loss: 10.8969
+Val step 18 Max target: 44529
+Val step 18 Loss: 10.9003
+Val step 19 Max target: 33290
+Val step 19 Loss: 10.8899
+validation loss: nan
+step     0 | loss: 10.920849 | lr 1.2330e-07 | norm: 3.0070 | dt: 3666.38ms | tok/sec: 279.29
+step     1 | loss: 10.853645 | lr 2.4661e-07 | norm: 3.2512 | dt: 1421.52ms | tok/sec: 720.35
+step     2 | loss: 10.895292 | lr 3.6991e-07 | norm: 3.0484 | dt: 1377.92ms | tok/sec: 743.15
+step     3 | loss: 10.895381 | lr 4.9322e-07 | norm: 2.9338 | dt: 1373.37ms | tok/sec: 745.61
+step     4 | loss: 10.923470 | lr 6.1652e-07 | norm: 2.8490 | dt: 1387.21ms | tok/sec: 738.17
+step     5 | loss: 10.875555 | lr 7.3983e-07 | norm: 3.0196 | dt: 1407.69ms | tok/sec: 727.43
+step     6 | loss: 10.900126 | lr 8.6313e-07 | norm: 2.7169 | dt: 1369.39ms | tok/sec: 747.78
+step     7 | loss: 10.881801 | lr 9.8644e-07 | norm: 2.7814 | dt: 1403.83ms | tok/sec: 729.43
+step     8 | loss: 10.873877 | lr 1.1097e-06 | norm: 3.1159 | dt: 1408.39ms | tok/sec: 727.07
+step     9 | loss: 10.903027 | lr 1.2330e-06 | norm: 3.1039 | dt: 1400.35ms | tok/sec: 731.25
+step    10 | loss: 10.881887 | lr 1.3564e-06 | norm: 2.9184 | dt: 1414.21ms | tok/sec: 724.08
+step    11 | loss: 10.846548 | lr 1.4797e-06 | norm: 2.8659 | dt: 1420.97ms | tok/sec: 720.64
+step    12 | loss: 10.870102 | lr 1.6030e-06 | norm: 3.0081 | dt: 1348.77ms | tok/sec: 759.21
+step    13 | loss: 10.876652 | lr 1.7263e-06 | norm: 3.1515 | dt: 1407.71ms | tok/sec: 727.42
+step    14 | loss: 10.864222 | lr 1.8496e-06 | norm: 2.8118 | dt: 1364.12ms | tok/sec: 750.66
+step    15 | loss: 10.822546 | lr 1.9729e-06 | norm: 3.2924 | dt: 1392.97ms | tok/sec: 735.12
+step    16 | loss: 10.844251 | lr 2.0962e-06 | norm: 3.1288 | dt: 1390.93ms | tok/sec: 736.20
+step    17 | loss: 10.839899 | lr 2.2195e-06 | norm: 2.6904 | dt: 1381.07ms | tok/sec: 741.45
+step    18 | loss: 10.821918 | lr 2.3428e-06 | norm: 2.7414 | dt: 1381.37ms | tok/sec: 741.30
+step    19 | loss: 10.766465 | lr 2.4661e-06 | norm: 3.2428 | dt: 1401.89ms | tok/sec: 730.44
+step    20 | loss: 10.772134 | lr 2.5894e-06 | norm: 3.0448 | dt: 1380.97ms | tok/sec: 741.51
+step    21 | loss: 10.770571 | lr 2.7127e-06 | norm: 3.2053 | dt: 1414.52ms | tok/sec: 723.92
+step    22 | loss: 10.746516 | lr 2.8360e-06 | norm: 3.4556 | dt: 1384.03ms | tok/sec: 739.87
+step    23 | loss: 10.742194 | lr 2.9593e-06 | norm: 3.2764 | dt: 1347.86ms | tok/sec: 759.72
+step    24 | loss: 10.804615 | lr 3.0826e-06 | norm: 2.7596 | dt: 1350.20ms | tok/sec: 758.40
+step    25 | loss: 10.808985 | lr 3.2059e-06 | norm: 3.4152 | dt: 1414.47ms | tok/sec: 723.95
+step    26 | loss: 10.770128 | lr 3.3292e-06 | norm: 3.2259 | dt: 1390.66ms | tok/sec: 736.34
+step    27 | loss: 10.753851 | lr 3.4525e-06 | norm: 3.1557 | dt: 1352.09ms | tok/sec: 757.35
+step    28 | loss: 10.702034 | lr 3.5758e-06 | norm: 2.8860 | dt: 1386.17ms | tok/sec: 738.73
+step    29 | loss: 10.689344 | lr 3.6991e-06 | norm: 2.9898 | dt: 1382.79ms | tok/sec: 740.53
+step    30 | loss: 10.668420 | lr 3.8224e-06 | norm: 3.0849 | dt: 1389.11ms | tok/sec: 737.16
+step    31 | loss: 10.736879 | lr 3.9457e-06 | norm: 2.8163 | dt: 1384.16ms | tok/sec: 739.80
+step    32 | loss: 10.627664 | lr 4.0691e-06 | norm: 3.6456 | dt: 1387.31ms | tok/sec: 738.12
+step    33 | loss: 10.636484 | lr 4.1924e-06 | norm: 3.5373 | dt: 1390.96ms | tok/sec: 736.18
+step    34 | loss: 10.723456 | lr 4.3157e-06 | norm: 3.2888 | dt: 1438.51ms | tok/sec: 711.85
+step    35 | loss: 10.607702 | lr 4.4390e-06 | norm: 3.1703 | dt: 1382.61ms | tok/sec: 740.63
+step    36 | loss: 10.660520 | lr 4.5623e-06 | norm: 2.9835 | dt: 1439.16ms | tok/sec: 711.53
+step    37 | loss: 10.667485 | lr 4.6856e-06 | norm: 2.8520 | dt: 1393.34ms | tok/sec: 734.93
+step    38 | loss: 10.689089 | lr 4.8089e-06 | norm: 2.9241 | dt: 1451.39ms | tok/sec: 705.53
+step    39 | loss: 10.570375 | lr 4.9322e-06 | norm: 3.0334 | dt: 1387.19ms | tok/sec: 738.18
+step    40 | loss: 10.589535 | lr 5.0555e-06 | norm: 2.9460 | dt: 1424.46ms | tok/sec: 718.87
+step    41 | loss: 10.580782 | lr 5.1788e-06 | norm: 2.9629 | dt: 1416.81ms | tok/sec: 722.75
+step    42 | loss: 10.588186 | lr 5.3021e-06 | norm: 2.7583 | dt: 1414.10ms | tok/sec: 724.13
+step    43 | loss: 10.543701 | lr 5.4254e-06 | norm: 2.8969 | dt: 1381.64ms | tok/sec: 741.15
+step    44 | loss: 10.555806 | lr 5.5487e-06 | norm: 2.9932 | dt: 1382.19ms | tok/sec: 740.85
+step    45 | loss: 10.512178 | lr 5.6720e-06 | norm: 2.9611 | dt: 1392.17ms | tok/sec: 735.54
+step    46 | loss: 10.529567 | lr 5.7953e-06 | norm: 2.9456 | dt: 1396.42ms | tok/sec: 733.30
+step    47 | loss: 10.478019 | lr 5.9186e-06 | norm: 3.0629 | dt: 1387.98ms | tok/sec: 737.76
+step    48 | loss: 10.430304 | lr 6.0419e-06 | norm: 2.9635 | dt: 1394.45ms | tok/sec: 734.34
+step    49 | loss: 10.443841 | lr 6.1652e-06 | norm: 2.8740 | dt: 1385.77ms | tok/sec: 738.94
+step    50 | loss: 10.419658 | lr 6.2885e-06 | norm: 3.0733 | dt: 1412.25ms | tok/sec: 725.09
+step    51 | loss: 10.382368 | lr 6.4118e-06 | norm: 2.9293 | dt: 1382.26ms | tok/sec: 740.82
+step    52 | loss: 10.437008 | lr 6.5351e-06 | norm: 2.7799 | dt: 1391.23ms | tok/sec: 736.04
+step    53 | loss: 10.476311 | lr 6.6584e-06 | norm: 2.5576 | dt: 1390.63ms | tok/sec: 736.35
+step    54 | loss: 10.387477 | lr 6.7818e-06 | norm: 2.7369 | dt: 1378.51ms | tok/sec: 742.83
+step    55 | loss: 10.405588 | lr 6.9051e-06 | norm: 2.7599 | dt: 1416.08ms | tok/sec: 723.12
+step    56 | loss: 10.326602 | lr 7.0284e-06 | norm: 2.9736 | dt: 1446.79ms | tok/sec: 707.77
+step    57 | loss: 10.328976 | lr 7.1517e-06 | norm: 2.8685 | dt: 1394.58ms | tok/sec: 734.27
+step    58 | loss: 10.323408 | lr 7.2750e-06 | norm: 2.7751 | dt: 1373.69ms | tok/sec: 745.44
+step    59 | loss: 10.364252 | lr 7.3983e-06 | norm: 2.6934 | dt: 1380.47ms | tok/sec: 741.78
+step    60 | loss: 10.265102 | lr 7.5216e-06 | norm: 2.9380 | dt: 1387.44ms | tok/sec: 738.05
+step    61 | loss: 10.269329 | lr 7.6449e-06 | norm: 2.8746 | dt: 1357.33ms | tok/sec: 754.42
+step    62 | loss: 10.363247 | lr 7.7682e-06 | norm: 3.0961 | dt: 1377.30ms | tok/sec: 743.48
+step    63 | loss: 10.240353 | lr 7.8915e-06 | norm: 2.8319 | dt: 1380.51ms | tok/sec: 741.76
+step    64 | loss: 10.273755 | lr 8.0148e-06 | norm: 2.7548 | dt: 1402.20ms | tok/sec: 730.28
+step    65 | loss: 10.277277 | lr 8.1381e-06 | norm: 2.7560 | dt: 1399.01ms | tok/sec: 731.95
+step    66 | loss: 10.194496 | lr 8.2614e-06 | norm: 2.8900 | dt: 1400.77ms | tok/sec: 731.02
+step    67 | loss: 10.269266 | lr 8.3847e-06 | norm: 2.6297 | dt: 1385.10ms | tok/sec: 739.30
+step    68 | loss: 10.202394 | lr 8.5080e-06 | norm: 2.9366 | dt: 1424.14ms | tok/sec: 719.03
+step    69 | loss: 10.090834 | lr 8.6313e-06 | norm: 2.7705 | dt: 1387.16ms | tok/sec: 738.20
+step    70 | loss: 10.204370 | lr 8.7546e-06 | norm: 2.6221 | dt: 1400.65ms | tok/sec: 731.09
+step    71 | loss: 10.159760 | lr 8.8779e-06 | norm: 2.9573 | dt: 1362.99ms | tok/sec: 751.29
+step    72 | loss: 10.150561 | lr 9.0012e-06 | norm: 2.6661 | dt: 1375.58ms | tok/sec: 744.41
+step    73 | loss: 10.255177 | lr 9.1245e-06 | norm: 2.6448 | dt: 1444.64ms | tok/sec: 708.82
+step    74 | loss: 10.136155 | lr 9.2478e-06 | norm: 2.5908 | dt: 1373.71ms | tok/sec: 745.43
+step    75 | loss: 10.188342 | lr 9.3711e-06 | norm: 2.5604 | dt: 1389.28ms | tok/sec: 737.07
+step    76 | loss: 10.156614 | lr 9.4945e-06 | norm: 2.8111 | dt: 1633.89ms | tok/sec: 626.72
+step    77 | loss: 10.138941 | lr 9.6178e-06 | norm: 2.7137 | dt: 1640.91ms | tok/sec: 624.04
+step    78 | loss: 10.009126 | lr 9.7411e-06 | norm: 3.1258 | dt: 1719.00ms | tok/sec: 595.69
+step    79 | loss: 9.904631 | lr 9.8644e-06 | norm: 3.2441 | dt: 1718.74ms | tok/sec: 595.78
+step    80 | loss: 9.957146 | lr 9.9877e-06 | norm: 2.8642 | dt: 1742.38ms | tok/sec: 587.70
+step    81 | loss: 9.868866 | lr 1.0111e-05 | norm: 3.2161 | dt: 1769.51ms | tok/sec: 578.69
+step    82 | loss: 10.018732 | lr 1.0234e-05 | norm: 2.6104 | dt: 1737.42ms | tok/sec: 589.38
+step    83 | loss: 10.061320 | lr 1.0358e-05 | norm: 2.6298 | dt: 1723.67ms | tok/sec: 594.08
+step    84 | loss: 9.879612 | lr 1.0481e-05 | norm: 2.8690 | dt: 1748.19ms | tok/sec: 585.75
+step    85 | loss: 9.980437 | lr 1.0604e-05 | norm: 2.7308 | dt: 1769.20ms | tok/sec: 578.79
+step    86 | loss: 9.893570 | lr 1.0727e-05 | norm: 2.7072 | dt: 1730.83ms | tok/sec: 591.62
+step    87 | loss: 9.930319 | lr 1.0851e-05 | norm: 2.7023 | dt: 1764.95ms | tok/sec: 580.19
+step    88 | loss: 9.895553 | lr 1.0974e-05 | norm: 2.6985 | dt: 1712.40ms | tok/sec: 597.99
+step    89 | loss: 9.824469 | lr 1.1097e-05 | norm: 2.9362 | dt: 1749.54ms | tok/sec: 585.30
+step    90 | loss: 9.964643 | lr 1.1221e-05 | norm: 2.6959 | dt: 1759.55ms | tok/sec: 581.97
+step    91 | loss: 9.809764 | lr 1.1344e-05 | norm: 2.9818 | dt: 1721.72ms | tok/sec: 594.76
+step    92 | loss: 10.083420 | lr 1.1467e-05 | norm: 2.5839 | dt: 1711.68ms | tok/sec: 598.24
+step    93 | loss: 10.083487 | lr 1.1591e-05 | norm: 2.3722 | dt: 1748.22ms | tok/sec: 585.74
+step    94 | loss: 9.899842 | lr 1.1714e-05 | norm: 2.7448 | dt: 1710.29ms | tok/sec: 598.73
+step    95 | loss: 9.788301 | lr 1.1837e-05 | norm: 2.7875 | dt: 1734.20ms | tok/sec: 590.47
+step    96 | loss: 9.960371 | lr 1.1961e-05 | norm: 2.4680 | dt: 1749.51ms | tok/sec: 585.31
+step    97 | loss: 9.795341 | lr 1.2084e-05 | norm: 2.8053 | dt: 1742.37ms | tok/sec: 587.70
+step    98 | loss: 9.752853 | lr 1.2207e-05 | norm: 2.7223 | dt: 1732.77ms | tok/sec: 590.96
+step    99 | loss: 9.939680 | lr 1.2330e-05 | norm: 2.4451 | dt: 1744.29ms | tok/sec: 587.06
+step   100 | loss: 9.763472 | lr 1.2454e-05 | norm: 2.9533 | dt: 1749.96ms | tok/sec: 585.16
+step   101 | loss: 9.819852 | lr 1.2577e-05 | norm: 2.7576 | dt: 1722.38ms | tok/sec: 594.52
+step   102 | loss: 9.587677 | lr 1.2700e-05 | norm: 3.0282 | dt: 1751.65ms | tok/sec: 584.59
+step   103 | loss: 9.638779 | lr 1.2824e-05 | norm: 2.9718 | dt: 1688.16ms | tok/sec: 606.58
+step   104 | loss: 9.899648 | lr 1.2947e-05 | norm: 2.4437 | dt: 1741.50ms | tok/sec: 588.00
+step   105 | loss: 9.959805 | lr 1.3070e-05 | norm: 2.5795 | dt: 1735.43ms | tok/sec: 590.06
+step   106 | loss: 9.933622 | lr 1.3194e-05 | norm: 2.7465 | dt: 1744.87ms | tok/sec: 586.86
+step   107 | loss: 9.906155 | lr 1.3317e-05 | norm: 2.4679 | dt: 1737.10ms | tok/sec: 589.49
+step   108 | loss: 9.831285 | lr 1.3440e-05 | norm: 2.5039 | dt: 1736.32ms | tok/sec: 589.75
+step   109 | loss: 9.819634 | lr 1.3564e-05 | norm: 2.4644 | dt: 1735.31ms | tok/sec: 590.10
+step   110 | loss: 9.776478 | lr 1.3687e-05 | norm: 2.6112 | dt: 1706.49ms | tok/sec: 600.06
+step   111 | loss: 9.674069 | lr 1.3810e-05 | norm: 2.6828 | dt: 1741.29ms | tok/sec: 588.07
+step   112 | loss: 9.807022 | lr 1.3933e-05 | norm: 2.4335 | dt: 1720.63ms | tok/sec: 595.13
+step   113 | loss: 9.738949 | lr 1.4057e-05 | norm: 2.5905 | dt: 1736.70ms | tok/sec: 589.62
+step   114 | loss: 9.608123 | lr 1.4180e-05 | norm: 2.8888 | dt: 1734.33ms | tok/sec: 590.43
+step   115 | loss: 9.789287 | lr 1.4303e-05 | norm: 2.3990 | dt: 1747.30ms | tok/sec: 586.05
+step   116 | loss: 9.803859 | lr 1.4427e-05 | norm: 2.6049 | dt: 1762.66ms | tok/sec: 580.94
+step   117 | loss: 9.665029 | lr 1.4550e-05 | norm: 2.6466 | dt: 1714.59ms | tok/sec: 597.23
+step   118 | loss: 9.668919 | lr 1.4673e-05 | norm: 2.6517 | dt: 1720.11ms | tok/sec: 595.31
+step   119 | loss: 9.888957 | lr 1.4797e-05 | norm: 2.7648 | dt: 1759.72ms | tok/sec: 581.91
+step   120 | loss: 9.852374 | lr 1.4920e-05 | norm: 2.9434 | dt: 1749.97ms | tok/sec: 585.15
+step   121 | loss: 9.839877 | lr 1.5043e-05 | norm: 2.7483 | dt: 1728.11ms | tok/sec: 592.56
+step   122 | loss: 9.799615 | lr 1.5166e-05 | norm: 2.6737 | dt: 1725.36ms | tok/sec: 593.50
+step   123 | loss: 9.827415 | lr 1.5290e-05 | norm: 2.4400 | dt: 1764.27ms | tok/sec: 580.41
+step   124 | loss: 9.898657 | lr 1.5413e-05 | norm: 2.4976 | dt: 1735.59ms | tok/sec: 590.00
+step   125 | loss: 9.920628 | lr 1.5536e-05 | norm: 2.3119 | dt: 1722.91ms | tok/sec: 594.34
+step   126 | loss: 9.811248 | lr 1.5660e-05 | norm: 2.9120 | dt: 1733.93ms | tok/sec: 590.57
+step   127 | loss: 9.785463 | lr 1.5783e-05 | norm: 2.7345 | dt: 1743.37ms | tok/sec: 587.37
+step   128 | loss: 9.665789 | lr 1.5906e-05 | norm: 2.8167 | dt: 1751.22ms | tok/sec: 584.74
+step   129 | loss: 9.587817 | lr 1.6030e-05 | norm: 2.7279 | dt: 1695.02ms | tok/sec: 604.12
+step   130 | loss: 9.771664 | lr 1.6153e-05 | norm: 2.6713 | dt: 1760.20ms | tok/sec: 581.75
+step   131 | loss: 9.613198 | lr 1.6276e-05 | norm: 2.5113 | dt: 1721.06ms | tok/sec: 594.98
+step   132 | loss: 9.740893 | lr 1.6400e-05 | norm: 2.5253 | dt: 1747.77ms | tok/sec: 585.89
+step   133 | loss: 9.780716 | lr 1.6523e-05 | norm: 2.3708 | dt: 1726.77ms | tok/sec: 593.01
+step   134 | loss: 9.455935 | lr 1.6646e-05 | norm: 2.9885 | dt: 1737.69ms | tok/sec: 589.29
+step   135 | loss: 9.649006 | lr 1.6769e-05 | norm: 2.8450 | dt: 1732.26ms | tok/sec: 591.13
+step   136 | loss: 9.660000 | lr 1.6893e-05 | norm: 2.8482 | dt: 1748.97ms | tok/sec: 585.49
+step   137 | loss: 9.626524 | lr 1.7016e-05 | norm: 2.6843 | dt: 1744.36ms | tok/sec: 587.04
+step   138 | loss: 9.598539 | lr 1.7139e-05 | norm: 2.9211 | dt: 1740.07ms | tok/sec: 588.48
+step   139 | loss: 9.263884 | lr 1.7263e-05 | norm: 3.3826 | dt: 1742.54ms | tok/sec: 587.65
+step   140 | loss: 9.417231 | lr 1.7386e-05 | norm: 3.1287 | dt: 1761.16ms | tok/sec: 581.44
+step   141 | loss: 9.653837 | lr 1.7509e-05 | norm: 2.8667 | dt: 1759.60ms | tok/sec: 581.95
+step   142 | loss: 9.489306 | lr 1.7633e-05 | norm: 3.0137 | dt: 1692.34ms | tok/sec: 605.08
+step   143 | loss: 9.449205 | lr 1.7756e-05 | norm: 3.0452 | dt: 1756.89ms | tok/sec: 582.85
+step   144 | loss: 9.560727 | lr 1.7879e-05 | norm: 2.7488 | dt: 1742.34ms | tok/sec: 587.72
+step   145 | loss: 9.358412 | lr 1.8002e-05 | norm: 3.0530 | dt: 1724.95ms | tok/sec: 593.64
+step   146 | loss: 9.686684 | lr 1.8126e-05 | norm: 2.6002 | dt: 1750.06ms | tok/sec: 585.12
+step   147 | loss: 9.925207 | lr 1.8249e-05 | norm: 2.3633 | dt: 1713.37ms | tok/sec: 597.65
+step   148 | loss: 9.945396 | lr 1.8372e-05 | norm: 2.4592 | dt: 1753.33ms | tok/sec: 584.03
+step   149 | loss: 10.058209 | lr 1.8496e-05 | norm: 2.2741 | dt: 1715.79ms | tok/sec: 596.81
+step   150 | loss: 9.900641 | lr 1.8619e-05 | norm: 2.3301 | dt: 1757.55ms | tok/sec: 582.63
+step   151 | loss: 9.461835 | lr 1.8742e-05 | norm: 2.9600 | dt: 1748.97ms | tok/sec: 585.49
+step   152 | loss: 9.370391 | lr 1.8866e-05 | norm: 2.9881 | dt: 1736.64ms | tok/sec: 589.64
+step   153 | loss: 9.566011 | lr 1.8989e-05 | norm: 2.9619 | dt: 1721.36ms | tok/sec: 594.88
+step   154 | loss: 9.443073 | lr 1.9112e-05 | norm: 2.8544 | dt: 1743.27ms | tok/sec: 587.40
+step   155 | loss: 9.491686 | lr 1.9236e-05 | norm: 2.8450 | dt: 1732.47ms | tok/sec: 591.06
+step   156 | loss: 9.372769 | lr 1.9359e-05 | norm: 2.8915 | dt: 1739.34ms | tok/sec: 588.73
+step   157 | loss: 9.390720 | lr 1.9482e-05 | norm: 3.0803 | dt: 1732.59ms | tok/sec: 591.02
+step   158 | loss: 9.355024 | lr 1.9605e-05 | norm: 2.9638 | dt: 1748.05ms | tok/sec: 585.80
+step   159 | loss: 9.362395 | lr 1.9729e-05 | norm: 3.2710 | dt: 1760.36ms | tok/sec: 581.70
+step   160 | loss: 9.351652 | lr 1.9852e-05 | norm: 3.1453 | dt: 1716.98ms | tok/sec: 596.40
+step   161 | loss: 9.554082 | lr 1.9975e-05 | norm: 2.6154 | dt: 1739.20ms | tok/sec: 588.78
+step   162 | loss: 9.562065 | lr 2.0099e-05 | norm: 2.8626 | dt: 1707.75ms | tok/sec: 599.62
+step   163 | loss: 9.433661 | lr 2.0222e-05 | norm: 2.7095 | dt: 1687.24ms | tok/sec: 606.91
+step   164 | loss: 9.829664 | lr 2.0345e-05 | norm: 2.5426 | dt: 1738.36ms | tok/sec: 589.06
+step   165 | loss: 9.811495 | lr 2.0469e-05 | norm: 2.6559 | dt: 1765.12ms | tok/sec: 580.13
+step   166 | loss: 9.589838 | lr 2.0592e-05 | norm: 2.4394 | dt: 1705.35ms | tok/sec: 600.46
+step   167 | loss: 10.087292 | lr 2.0715e-05 | norm: 5.4060 | dt: 1743.06ms | tok/sec: 587.47
+step   168 | loss: 9.363021 | lr 2.0838e-05 | norm: 3.3435 | dt: 1743.77ms | tok/sec: 587.23
+step   169 | loss: 9.507665 | lr 2.0962e-05 | norm: 2.9384 | dt: 1755.08ms | tok/sec: 583.45
+step   170 | loss: 9.603835 | lr 2.1085e-05 | norm: 2.5908 | dt: 1711.16ms | tok/sec: 598.43
+step   171 | loss: 9.751242 | lr 2.1208e-05 | norm: 2.4850 | dt: 1720.31ms | tok/sec: 595.24
+step   172 | loss: 9.470458 | lr 2.1332e-05 | norm: 4.0802 | dt: 1744.05ms | tok/sec: 587.14
+step   173 | loss: 9.332943 | lr 2.1455e-05 | norm: 4.0477 | dt: 1748.92ms | tok/sec: 585.50
+step   174 | loss: 9.633551 | lr 2.1578e-05 | norm: 2.7156 | dt: 1748.88ms | tok/sec: 585.52
+step   175 | loss: 9.673338 | lr 2.1702e-05 | norm: 2.5548 | dt: 1751.15ms | tok/sec: 584.76
+step   176 | loss: 9.501782 | lr 2.1825e-05 | norm: 2.8214 | dt: 1732.26ms | tok/sec: 591.14
+step   177 | loss: 9.615595 | lr 2.1948e-05 | norm: 2.5431 | dt: 1716.16ms | tok/sec: 596.68
+step   178 | loss: 9.532512 | lr 2.2072e-05 | norm: 2.7160 | dt: 1731.49ms | tok/sec: 591.40
+step   179 | loss: 9.530146 | lr 2.2195e-05 | norm: 2.8147 | dt: 1768.48ms | tok/sec: 579.03
+step   180 | loss: 9.675404 | lr 2.2318e-05 | norm: 2.5724 | dt: 1748.30ms | tok/sec: 585.71
+step   181 | loss: 9.753452 | lr 2.2441e-05 | norm: 2.2825 | dt: 1761.03ms | tok/sec: 581.48
+step   182 | loss: 9.792236 | lr 2.2565e-05 | norm: 2.5011 | dt: 1998.11ms | tok/sec: 512.48
+CUDA Allocation Failed: out of memory(requested 147 MB
+ERROR: CUDA allcation failed
+make: *** [Makefile:96: run-snippet] Error 1

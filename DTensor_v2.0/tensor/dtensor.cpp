@@ -25,7 +25,7 @@
 // Global Allocator
 // ============================================================================
 
-// gAllocator is now OwnTensor::CachingCUDAAllocator::instance(), defined in Tensor-Implementations/src/device/CudaCachingAllocator.cpp
+// gAllocator is now OwnTensor::gAllocator, defined in Tensor-Implementations/src/device/cachingAllocator.cpp
 
 // Initialize static members
 cudaStream_t DTensor::shared_compute_stream_ = nullptr;
@@ -82,105 +82,6 @@ size_t numelFromShape(const std::vector<int64_t>& shape) {
 }
 
 } // anonymous namespace
-
-// Autograd Node Classes
-// ============================================================================
-
-class AllReduceSumBackward : public OwnTensor::Node {
-    std::shared_ptr<ProcessGroupNCCL> pg_;
-public:
-    AllReduceSumBackward(std::shared_ptr<ProcessGroupNCCL> pg) : Node(1), pg_(pg) {}
-    OwnTensor::variable_list apply(OwnTensor::variable_list&& grads) override {
-        // Gradient of AllReduceSum needs to sum the gradients from all ranks
-        // because the forward Y = sum(X_i) was used by all ranks.
-        // dL/dX_i = sum_j (dL/dY_j)
-        
-        if (grads[0].is_valid() && grads[0].numel() > 0) {
-            pg_->all_reduce_async(grads[0].data<float>(), grads[0].data<float>(),
-                                  grads[0].numel(), OwnTensor::Dtype::Float32, sum, false)->wait();
-        }
-        return {grads[0]};
-    }
-    const char* name() const override { return "AllReduceSumBackward"; }
-};
-
-class DistributedSparseCrossEntropyBackward : public OwnTensor::Node {
-    std::shared_ptr<DeviceMesh> mesh_;
-    std::shared_ptr<ProcessGroupNCCL> pg_;
-    OwnTensor::Tensor logits_shard_;
-    OwnTensor::Tensor targets_;
-    OwnTensor::Tensor max_logits_;
-    OwnTensor::Tensor sum_exps_;
-    int64_t vocab_offset_;
-    int64_t num_classes_local_;
-
-public:
-    DistributedSparseCrossEntropyBackward(
-        std::shared_ptr<DeviceMesh> mesh,
-        std::shared_ptr<ProcessGroupNCCL> pg,
-        OwnTensor::Tensor logits_shard,
-        OwnTensor::Tensor targets,
-        OwnTensor::Tensor max_logits,
-        OwnTensor::Tensor sum_exps,
-        int64_t vocab_offset,
-        int64_t num_classes_local)
-        : Node(1),
-          mesh_(mesh),
-          pg_(pg),
-          logits_shard_(logits_shard),
-          targets_(targets),
-          max_logits_(max_logits),
-          sum_exps_(sum_exps),
-          vocab_offset_(vocab_offset),
-          num_classes_local_(num_classes_local) {}
-
-    OwnTensor::variable_list apply(OwnTensor::variable_list&& grads) override {
-        OwnTensor::Tensor grad_output = grads[0];
-
-        OwnTensor::Tensor grad_logits_shard = OwnTensor::Tensor::zeros(logits_shard_.shape(), 
-                                                                    OwnTensor::TensorOptions()
-                                                                        .with_dtype(logits_shard_.dtype())
-                                                                        .with_device(logits_shard_.device()));
-        
-        int64_t batch_size = targets_.numel();
-        cudaStream_t stream = OwnTensor::cuda::getCurrentStream(); 
-
-        if (logits_shard_.device().is_cuda()) {
-            if (targets_.dtype() == OwnTensor::Dtype::UInt16) {
-                DistributedLoss::launch_distributed_sparse_ce_backward<float, uint16_t>(
-                    grad_logits_shard.data<float>(),
-                    logits_shard_.data<float>(),
-                    targets_.data<uint16_t>(),
-                    max_logits_.data<float>(),
-                    sum_exps_.data<float>(),
-                    grad_output.data<float>(),
-                    batch_size,
-                    num_classes_local_,
-                    vocab_offset_,
-                    stream
-                );
-
-            } else if (targets_.dtype() == OwnTensor::Dtype::Int64) {
-                 DistributedLoss::launch_distributed_sparse_ce_backward<float, int64_t>(
-                    grad_logits_shard.data<float>(),
-                    logits_shard_.data<float>(),
-                    targets_.data<int64_t>(),
-                    max_logits_.data<float>(),
-                    sum_exps_.data<float>(),
-                    grad_output.data<float>(),
-                    batch_size,
-                    num_classes_local_,
-                    vocab_offset_,
-                    stream
-                );
-            }
-        }
-        
-        return {grad_logits_shard};
-    }
-
-    const char* name() const override { return "DistributedSparseCrossEntropyBackward"; }
-};
 
 // ============================================================================
 // Constructors & Destructor
@@ -378,9 +279,6 @@ void DTensor::setDataFromRoot(const std::vector<float>& host_data, const Layout&
 }
 
 std::vector<float> DTensor::getData() const {
-    // Ensure any pending computation is finished before copying data to host
-    cudaStreamSynchronize(compute_stream_);
-
     std::vector<float> host_data(size_);
     cudaMemcpyAsync(host_data.data(), tensor_.data<float>(),
                     size_ * sizeof(float), cudaMemcpyDeviceToHost, data_stream_);
@@ -437,7 +335,11 @@ void DTensor::broadcast(int root) {
 }
 
 void DTensor::sync() {
-    sync_w_autograd();
+    recordComputeDone();
+    waitForCompute();
+    pg_->all_reduce(tensor_.data<float>(), tensor_.data<float>(),
+                    size_, OwnTensor::Dtype::Float32, sum, true);
+    recordCommDone();
 }
 
 // ============================================================================
@@ -562,24 +464,8 @@ void DTensor::shard(int dim, int root) {
 }
 
 void DTensor::scale(float factor) {
-    if (factor == 1.0f) return;
-    
-    // Create a 1-element scalar tensor on the same device as the current tensor
-    // IMPORTANT: It MUST NOT require grad, even if the parent tensor does.
-    OwnTensor::Tensor factor_tensor = OwnTensor::Tensor(OwnTensor::Shape{{1}}, 
-                                                       tensor_.opts().with_req_grad(false));
-    factor_tensor.fill(factor);
-    
-    // Use autograd-aware multiplication to preserve/build the graph correctly
-    tensor_ = OwnTensor::autograd::mul(tensor_, factor_tensor);
-}
-
-void DTensor::scale_grad(float factor) {
-    if (factor == 1.0f) return;
-    OwnTensor::Tensor g = grad();
-    if (g.is_valid() && g.numel() > 0) {
-        g *= factor;
-    }
+    OwnTensor::Tensor scaled = Bridge::mul(tensor_, factor);
+    tensor_ = std::move(scaled);
 }
 
 // ============================================================================
@@ -686,12 +572,11 @@ DTensor DTensor::matmul(const DTensor& other) const {
     // Replicated × Replicated: X [M, K] @ W [K, N] -> Y [M, N] (local matmul)
     if (a_placement->type() == PlacementType::REPLICATE &&
         b_placement->type() == PlacementType::REPLICATE) {
+        OwnTensor::Tensor Y_local = Bridge::autograd::matmul(tensor_, other.tensor_);
         
-        // Shape inference for ND: [..., M, K] @ [K, N] -> [..., M, N]
+        // Correct shape inference for ND: [..., M, K] @ [K, N] -> [..., M, N]
         std::vector<int64_t> Y_global_shape = a_layout.get_global_shape();
         Y_global_shape.back() = b_layout.get_global_shape().back();
-
-        OwnTensor::Tensor Y_local = Bridge::autograd::matmul(tensor_, other.tensor_);
         
         Layout Y_layout = Layout::replicated(*device_mesh_, Y_global_shape);
         return DTensor(device_mesh_, pg_, Y_local, Y_layout);
@@ -705,15 +590,14 @@ DTensor DTensor::matmul(const DTensor& other) const {
 }
 
 DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
-    cudaSetDevice(rank_);
-    // cudaDeviceSynchronize(); // Removed for performance, stream sync is enough
+    // Column-Parallel: X [M, K] @ W1 [K, N/P] -> H [M, N/P]
+    // Use other.tensor_ directly (not local_tensor() which makes a copy)
+    // so gradients accumulate to the actual weight tensor
+    OwnTensor::Tensor Y_shard = Bridge::autograd::matmul(this->tensor_, other.tensor_);
 
     // Correct shape inference for ND: [..., M, K] @ [K, N] -> [..., M, N]
     std::vector<int64_t> Y_global_shape = this->layout_.get_global_shape();
     Y_global_shape.back() = other.get_layout().get_global_shape().back();
-    
-    OwnTensor::Tensor Y_shard = Bridge::autograd::matmul(this->tensor_, other.tensor_);
-    // cudaDeviceSynchronize(); 
     
     // Shard on the last dimension (columns/vocab)
     Layout Y_layout(*device_mesh_, Y_global_shape, (int)Y_global_shape.size() - 1);
@@ -721,14 +605,14 @@ DTensor DTensor::_column_parallel_matmul(const DTensor& other) const {
     return DTensor(device_mesh_, pg_, Y_shard, Y_layout);
 }
 
-
 DTensor DTensor::_row_parallel_matmul(const DTensor& other) const {
+    // Row-Parallel: H [M, N/P] @ W2 [N/P, K] -> Y_partial [M, K]
+    OwnTensor::Tensor Y_partial = Bridge::autograd::matmul(this->tensor_, other.local_tensor());
+
     // Correct shape inference for ND: [..., M, K] @ [K, N] -> [..., M, N]
     std::vector<int64_t> Y_global_shape = this->layout_.get_global_shape();
     Y_global_shape.back() = other.get_layout().get_global_shape().back();
-
-    OwnTensor::Tensor Y_partial = Bridge::autograd::matmul(this->tensor_, other.local_tensor());
-
+    
     Layout Y_layout = Layout::replicated(*device_mesh_, Y_global_shape);
     DTensor Y_out(device_mesh_, pg_, Y_partial, Y_layout);
 
@@ -819,18 +703,6 @@ DTensor DTensor::randn(const std::vector<int64_t>& global_shape,
     return DTensor(mesh, pg, local_tensor, layout);
 }
 
-DTensor DTensor::randn(const std::vector<int64_t>& global_shape,
-                       std::shared_ptr<DeviceMesh> mesh,
-                       std::shared_ptr<ProcessGroupNCCL> pg,
-                       const Layout& layout,
-                       uint64_t seed,
-                       float stddev) {
-    int rank = pg->get_rank();
-    std::vector<int64_t> local_shape = layout.get_local_shape(rank);
-    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::randn<float>(toShape(local_shape), getOpts(rank), seed, stddev);
-    return DTensor(mesh, pg, local_tensor, layout);
-}
-
 DTensor DTensor::randint(int64_t low, int64_t high,
                          const std::vector<int64_t>& global_shape,
                          std::shared_ptr<DeviceMesh> mesh,
@@ -840,30 +712,6 @@ DTensor DTensor::randint(int64_t low, int64_t high,
     std::vector<int64_t> local_shape = layout.get_local_shape(rank);
     
     OwnTensor::Tensor local_tensor = OwnTensor::Tensor::rand<float>(toShape(local_shape), getOpts(rank));
-    size_t numel = numelFromShape(local_shape);
-    
-    std::vector<float> data(numel);
-    cudaMemcpy(data.data(), local_tensor.data<float>(), numel * sizeof(float), cudaMemcpyDeviceToHost);
-    
-    for (size_t i = 0; i < numel; ++i) {
-        data[i] = static_cast<float>(static_cast<int64_t>(data[i] * (high - low) + low));
-    }
-    
-    cudaMemcpy(local_tensor.data<float>(), data.data(), numel * sizeof(float), cudaMemcpyHostToDevice);
-    
-    return DTensor(mesh, pg, local_tensor, layout);
-}
-
-DTensor DTensor::randint(int64_t low, int64_t high,
-                         const std::vector<int64_t>& global_shape,
-                         std::shared_ptr<DeviceMesh> mesh,
-                         std::shared_ptr<ProcessGroupNCCL> pg,
-                         const Layout& layout,
-                         uint64_t seed) {
-    int rank = pg->get_rank();
-    std::vector<int64_t> local_shape = layout.get_local_shape(rank);
-    
-    OwnTensor::Tensor local_tensor = OwnTensor::Tensor::rand<float>(toShape(local_shape), getOpts(rank), seed);
     size_t numel = numelFromShape(local_shape);
     
     std::vector<float> data(numel);
@@ -1009,8 +857,8 @@ void DTensor::saveCheckpoint(const std::string& path) const {
     file.write(reinterpret_cast<const char*>(host_data.data()), size_ * sizeof(float));
     file.close();
 
-    // std::cout << "[Rank " << rank_ << "] Checkpoint saved: " << path
-    //           << " (" << ndim << "D, " << size_ << " elements)\n";
+    std::cout << "[Rank " << rank_ << "] Checkpoint saved: " << path
+              << " (" << ndim << "D, " << size_ << " elements)\n";
 }
 
 void DTensor::loadCheckpoint(const std::string& path) {
@@ -1039,8 +887,8 @@ void DTensor::loadCheckpoint(const std::string& path) {
     Layout loaded_layout = Layout::replicated(*device_mesh_, std::vector<int64_t>(loaded_shape.begin(), loaded_shape.end()));
     setData(host_data, loaded_layout);
 
-    // std::cout << "[Rank " << rank_ << "] Checkpoint loaded: " << path
-    //           << " (" << ndim << "D, " << size_ << " elements)\n";
+    std::cout << "[Rank " << rank_ << "] Checkpoint loaded: " << path
+              << " (" << ndim << "D, " << size_ << " elements)\n";
 }
 
 // ============================================================================
@@ -1053,7 +901,7 @@ void DTensor::print() const {
         return;
     }
 
-    // std::cout << layout_.describe(rank_) << std::endl;
+    std::cout << layout_.describe(rank_) << std::endl;
 
     std::vector<float> host_data(size_);
     cudaMemcpyAsync(host_data.data(), tensor_.data<float>(),
@@ -1068,36 +916,6 @@ void DTensor::print() const {
 void DTensor::printRecursive(const std::vector<float>& data,
                              const std::vector<int64_t>& dims,
                              int dim, int offset) const {
-    /*
-    std::cout << "[Rank " << rank_ << " Data] ";
-    if (tensor_.dtype() == OwnTensor::Dtype::Float32) {
-        std::cout << "\n";
-        auto* data = tensor_.data<float>();
-        auto size = tensor_.numel();
-        auto offset = 0;
-        auto limit = std::min((size_t)10, size);
-        
-        std::cout << "[";
-        for (size_t i = 0; i < limit; ++i) {
-            if (i > 0) std::cout << ", ";
-            if (tensor_.dtype() == OwnTensor::Dtype::Float32) {
-                std::cout << data[offset + i];
-            }
-        }
-        std::cout << "]";
-    } else {
-        // Fallback for non-float types if needed
-        auto size = tensor_.numel();
-        std::cout << "[";
-        auto limit = std::min((size_t)10, size);
-        for (size_t i = 0; i < limit; ++i) {
-            if (i > 0) std::cout << ", ";
-            std::cout << "?"; 
-        }
-        std::cout << "]";
-    }
-    std::cout << std::endl;
-    */
     if (dims.empty() || dim < 0) return;
 
     if (static_cast<size_t>(dim) == dims.size() - 1) {
@@ -1338,7 +1156,7 @@ void DTensor::waitForComm() {
 }
 
 DTensor DTensor::transpose(int dim1, int dim2) const {
-    std::vector<int64_t> new_global_shape = layout_.get_global_shape();
+    std::vector<int64_t> new_global_shape = shape_;
     std::swap(new_global_shape[dim1], new_global_shape[dim2]);
     
     // Transpose the local tensor
@@ -1380,7 +1198,7 @@ void DTensor::backward(const DTensor* grad_output) {
         throw std::runtime_error("backward() called on DTensor that doesn't require grad");
     }
     
-
+    // std::cout << "[DEBUG] Rank " << rank_ << " DTensor::backward() called on tensor of shape " << tensor_.shape().toString() << " requires_grad=" << tensor_.requires_grad() << std::endl;
     
     if (grad_output) {
         Bridge::autograd::backward(tensor_, &grad_output->local_tensor());
@@ -1396,7 +1214,6 @@ void DTensor::zero_grad() {
 }
 
 float DTensor::grad_norm() const {
-
     // Get the gradient tensor (local shard)
     OwnTensor::Tensor g = grad();
     
@@ -1405,50 +1222,20 @@ float DTensor::grad_norm() const {
         return 0.0f;
     }
     
-    // Use Float32 for norm calculation locally
-    OwnTensor::cuda::setCurrentStream(compute_stream_);
+    // Compute squared values on GPU
+    OwnTensor::Tensor g_sq = g * g;
     
-
-
-    // Compute squared values on GPU - use Float32 to prevent underflow/pression issues
-    OwnTensor::Tensor g_fp32 = g.as_type(OwnTensor::Dtype::Float32);
-    OwnTensor::Tensor g_sq = g_fp32 * g_fp32;
+    // Sum all elements on GPU using reduce_sum
+    OwnTensor::Tensor local_sum_tensor = OwnTensor::reduce_sum(g_sq);
     
-    // Sum locally on GPU (Reduce all to a 1x1 tensor)
-    auto local_sum_tensor = OwnTensor::reduce_sum(g_sq, {}, false, compute_stream_);
-    
-    // Ensure reduction is complete before moving result to CPU
-    cudaStreamSynchronize(compute_stream_);
-
-    // Copy result to CPU
+    // Copy result to CPU before accessing data pointer
     OwnTensor::Tensor local_sum_cpu = local_sum_tensor.to_cpu();
+    float local_norm_sq = local_sum_cpu.data<float>()[0];
     
-    // Safety check: if no sum, return 0
-    if (local_sum_cpu.numel() == 0) {
-        return 0.0f;
-    }
-
-    // Handle different dtypes for the sum result
-    float local_norm_sq = 0.0f;
-    if (local_sum_cpu.dtype() == OwnTensor::Dtype::Float32) {
-        local_norm_sq = local_sum_cpu.data<float>()[0];
-    } else if (local_sum_cpu.dtype() == OwnTensor::Dtype::Float16) {
-        local_norm_sq = (float)local_sum_cpu.data<OwnTensor::float16_t>()[0];
-    } else if (local_sum_cpu.dtype() == OwnTensor::Dtype::Bfloat16) {
-        local_norm_sq = (float)local_sum_cpu.data<OwnTensor::bfloat16_t>()[0];
-    }
-    
-
-    
-
     // All-reduce across ranks to get global norm squared
     float global_norm_sq = 0.0f;
-    if (pg_->get_worldsize() > 1 && layout_.is_sharded()) {
-        pg_->all_reduce_cpu(&local_norm_sq, &global_norm_sq, 1, OwnTensor::Dtype::Float32, sum);
-    } else {
-        global_norm_sq = local_norm_sq;
-    }
-
+    pg_->all_reduce_cpu(&local_norm_sq, &global_norm_sq, 1, OwnTensor::Dtype::Float32, op_t::sum);
+    
     return std::sqrt(global_norm_sq);
 }
 
@@ -1477,51 +1264,19 @@ bool DTensor::has_pending_collective() const {
     return has_pending_collective_;
 }
 
-
 void DTensor::sync_w_autograd() {
     // Autograd-aware sync: performs all-reduce and sets up backward graph
     // Forward: Y = all_reduce_sum(X) - sum partial results across GPUs
     // Backward: automatically all-reduces gradient dY before flowing to previous ops
     
-    // 1. Ensure streams are synchronized
-    recordComputeDone();
-    waitForCompute();
-    
-    // 2. Forward: Blocking all-reduce
+    // 1. Forward: Blocking all-reduce
     pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), 
                           size_, OwnTensor::Dtype::Float32, sum, false)->wait();
     
-    // 3. Autograd graph update
-    if (this->requires_grad()) {
-        auto grad_fn = std::make_shared<AllReduceSumBackward>(pg_);
-        auto edge = OwnTensor::autograd::get_grad_edge(tensor_);
-        grad_fn->set_next_edge(0, edge);
-        tensor_.set_grad_fn(grad_fn);
-    }
-
-    // Clear pending state
+    // 2. Autograd graph update would go here (requires AllReduceSumBackward node)
+    // For now, just clear pending state
     has_pending_collective_ = false;
     pending_work_ = nullptr;
-    recordCommDone();
-}
-
-DTensor DTensor::reduce_grad() const {
-    if (!requires_grad_) return *this;
-    
-    // Create a NEW identity (view) for the same underlying data.
-    // This prevents in-place modification of the original tensor's grad_fn
-    // when multiple operations use the same DTensor as input.
-    OwnTensor::Tensor new_local = tensor_.view(tensor_.shape());
-    
-    // Wrap with AllReduceSumBackward logic
-    // Forward: Identity
-    // Backward: All-Reduce Sum
-    auto grad_fn = std::make_shared<AllReduceSumBackward>(pg_);
-    auto edge = OwnTensor::autograd::get_grad_edge(new_local);
-    grad_fn->set_next_edge(0, edge);
-    new_local.set_grad_fn(grad_fn);
-    
-    return DTensor(device_mesh_, pg_, new_local, layout_);
 }
 
 // ============================================================================
@@ -1671,6 +1426,82 @@ DTensor DTensor::layer_norm(const DTensor& weight, const DTensor& bias, float ep
 // Distributed Cross Entropy Implementation
 // ============================================================================
 
+class DistributedSparseCrossEntropyBackward : public OwnTensor::Node {
+    std::shared_ptr<DeviceMesh> mesh_;
+    std::shared_ptr<ProcessGroupNCCL> pg_;
+    OwnTensor::Tensor logits_shard_;
+    OwnTensor::Tensor targets_;
+    OwnTensor::Tensor max_logits_;
+    OwnTensor::Tensor sum_exps_;
+    int64_t vocab_offset_;
+    int64_t num_classes_local_;
+
+public:
+    DistributedSparseCrossEntropyBackward(
+        std::shared_ptr<DeviceMesh> mesh,
+        std::shared_ptr<ProcessGroupNCCL> pg,
+        OwnTensor::Tensor logits_shard,
+        OwnTensor::Tensor targets,
+        OwnTensor::Tensor max_logits,
+        OwnTensor::Tensor sum_exps,
+        int64_t vocab_offset,
+        int64_t num_classes_local)
+        : Node(1),
+          mesh_(mesh),
+          pg_(pg),
+          logits_shard_(logits_shard),
+          targets_(targets),
+          max_logits_(max_logits),
+          sum_exps_(sum_exps),
+          vocab_offset_(vocab_offset),
+          num_classes_local_(num_classes_local) {}
+
+    OwnTensor::variable_list apply(OwnTensor::variable_list&& grads) override {
+        OwnTensor::Tensor grad_output = grads[0];
+        
+        OwnTensor::Tensor grad_logits_shard = OwnTensor::Tensor::empty(logits_shard_.shape(), 
+                                                                    OwnTensor::TensorOptions()
+                                                                        .with_dtype(logits_shard_.dtype())
+                                                                        .with_device(logits_shard_.device()));
+        
+        int64_t batch_size = targets_.numel();
+        cudaStream_t stream = 0; // Use default for now or shared stream
+
+        if (logits_shard_.device().is_cuda()) {
+            if (targets_.dtype() == OwnTensor::Dtype::UInt16) {
+                DistributedLoss::launch_distributed_sparse_ce_backward<float, uint16_t>(
+                    grad_logits_shard.data<float>(),
+                    logits_shard_.data<float>(),
+                    targets_.data<uint16_t>(),
+                    max_logits_.data<float>(),
+                    sum_exps_.data<float>(),
+                    grad_output.data<float>(),
+                    batch_size,
+                    num_classes_local_,
+                    vocab_offset_,
+                    stream
+                );
+            } else if (targets_.dtype() == OwnTensor::Dtype::Int64) {
+                 DistributedLoss::launch_distributed_sparse_ce_backward<float, int64_t>(
+                    grad_logits_shard.data<float>(),
+                    logits_shard_.data<float>(),
+                    targets_.data<int64_t>(),
+                    max_logits_.data<float>(),
+                    sum_exps_.data<float>(),
+                    grad_output.data<float>(),
+                    batch_size,
+                    num_classes_local_,
+                    vocab_offset_,
+                    stream
+                );
+            }
+        }
+        
+        return {grad_logits_shard};
+    }
+
+    std::string name() const override { return "DistributedSparseCrossEntropyBackward"; }
+};
 
 DTensor DTensor::distributed_sparse_cross_entropy_loss(const DTensor& target) const {
     if (!layout_.is_sharded()) {
@@ -1693,22 +1524,22 @@ DTensor DTensor::distributed_sparse_cross_entropy_loss(const DTensor& target) co
     // 1. Local Max
     OwnTensor::Tensor local_max = OwnTensor::reduce_max(logits_shard, {(int64_t)logits_shard.ndim() - 1}, true);
     
-    // 2. Global Max — in-place all_reduce on a copy of local_max
-    cudaStreamSynchronize(OwnTensor::cuda::getCurrentStream());
-    OwnTensor::Tensor global_max = local_max.clone();
-    pg_->all_reduce(global_max.data(), global_max.data(), global_max.numel(), global_max.dtype(), op_t::max, true);
+    // 2. Global Max
+    OwnTensor::Tensor global_max = OwnTensor::Tensor::empty(local_max.shape(), local_max.opts());
+    pg_->all_reduce(local_max.data(), global_max.data(), local_max.numel(), local_max.dtype(), op_t::max, false);
     
     // 3. Local SumExp
+    // Use manual exp(logits - max) to avoid creating too many large temporaries if possible,
+    // although exp(logits_shard) is same size as logits_shard.
     OwnTensor::Tensor exp_shard = OwnTensor::exp(logits_shard - global_max);
     OwnTensor::Tensor local_sum_exp = OwnTensor::reduce_sum(exp_shard, {(int64_t)logits_shard.ndim() - 1}, true);
     
-    // 4. Global SumExp — in-place all_reduce on a copy of local_sum_exp
-    cudaStreamSynchronize(OwnTensor::cuda::getCurrentStream());
-    OwnTensor::Tensor global_sum_exp = local_sum_exp.clone();
-    pg_->all_reduce(global_sum_exp.data(), global_sum_exp.data(), global_sum_exp.numel(), global_sum_exp.dtype(), op_t::sum, true);
+    // 4. Global SumExp
+    OwnTensor::Tensor global_sum_exp = OwnTensor::Tensor::empty(local_sum_exp.shape(), local_sum_exp.opts());
+    pg_->all_reduce(local_sum_exp.data(), global_sum_exp.data(), local_sum_exp.numel(), local_sum_exp.dtype(), op_t::sum, false);
     
     // 5. Target Logit extraction (from shard)
-    OwnTensor::Tensor target_logits_shard = OwnTensor::Tensor::zeros(global_max.shape(), logits_shard.opts());
+    OwnTensor::Tensor target_logits_shard = OwnTensor::Tensor::zeros(OwnTensor::Shape{{batch_size, 1}}, logits_shard.opts());
     
     if (targets.dtype() == OwnTensor::Dtype::UInt16) {
         DistributedLoss::launch_distributed_sparse_ce_forward<float, uint16_t>(
@@ -1730,33 +1561,28 @@ DTensor DTensor::distributed_sparse_cross_entropy_loss(const DTensor& target) co
         );
     }
     
-    // 6. Global Target Logit — in-place all_reduce on a copy of target_logits_shard
-    cudaStreamSynchronize(OwnTensor::cuda::getCurrentStream());
-    OwnTensor::Tensor global_target_logits = target_logits_shard.clone();
-    pg_->all_reduce(global_target_logits.data(), global_target_logits.data(), global_target_logits.numel(), global_target_logits.dtype(), op_t::sum, true);
+    // 6. Global Target Logit
+    OwnTensor::Tensor global_target_logits = OwnTensor::Tensor::empty(target_logits_shard.shape(), target_logits_shard.opts());
+    pg_->all_reduce(target_logits_shard.data(), global_target_logits.data(), target_logits_shard.numel(), target_logits_shard.dtype(), op_t::sum, false);
     
     // 7. Loss calculation
     OwnTensor::Tensor sample_losses = OwnTensor::log(global_sum_exp) + global_max - global_target_logits;
     OwnTensor::Tensor mean_loss = OwnTensor::reduce_mean(sample_losses);
-
     
     // 8. Autograd setup
-    // 8. Autograd setup - attach to sample_losses (shape [B*T])
-    // This ensures that reduce_mean's backward (factor 1/N) is preserved.
     if (this->requires_grad()) {
         auto grad_fn = std::make_shared<DistributedSparseCrossEntropyBackward>(
             device_mesh_, pg_, logits_shard, targets, global_max, global_sum_exp, vocab_offset, num_classes_local
         );
         
-        // Connect backward node to sample_losses
-        OwnTensor::Tensor& mutable_samples = const_cast<OwnTensor::Tensor&>(sample_losses);
-        mutable_samples.set_grad_fn(grad_fn);
-        mutable_samples.set_requires_grad(true);
+        // Connect backward node
+        OwnTensor::Tensor& mutable_loss = const_cast<OwnTensor::Tensor&>(mean_loss);
+        mutable_loss.set_grad_fn(grad_fn);
+        mutable_loss.set_requires_grad(true);
         
         // Link to logits_shard
         OwnTensor::Tensor& mutable_logits = const_cast<OwnTensor::Tensor&>(logits_shard);
-        auto edge = OwnTensor::autograd::get_grad_edge(mutable_logits);
-        grad_fn->set_next_edge(0, edge);
+        grad_fn->set_next_edge(0, OwnTensor::autograd::get_grad_edge(mutable_logits));
     }
     
     return DTensor(device_mesh_, pg_, mean_loss, Layout::replicated(*device_mesh_, {1}));

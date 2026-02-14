@@ -31,21 +31,6 @@ public:
         }
     }
 
-    // copy constructor
-    Layout(const Layout& other) 
-        : mesh_(other.mesh_), global_shape_(other.global_shape_),
-          placement_(other.placement_ ? other.placement_->clone() : nullptr) {}
-
-    // assignment operator
-    Layout& operator=(const Layout& other) {
-        if (this != &other) {
-            mesh_ = other.mesh_;
-            global_shape_ = other.global_shape_;
-            placement_ = other.placement_ ? other.placement_->clone() : nullptr;
-        }
-        return *this;
-    }
-
     // --- Accessors ---
 
     bool is_replicated() const {
