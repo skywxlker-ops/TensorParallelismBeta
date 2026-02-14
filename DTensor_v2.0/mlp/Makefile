@@ -14,7 +14,7 @@ NVCC_LINKER = /usr/local/cuda/bin/nvcc
 
 # --- Build Flags ---
 CXXFLAGS = -std=c++17 -O3 -fPIC -g -DWITH_CUDA
-NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++ -arch=sm_86 -Xlinker -z -Xlinker muldefs
+NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++
 
 # --- Paths ---
 CUDA_HOME := /usr/local/cuda
@@ -54,8 +54,7 @@ MLPS = \
     test_4layer_mlp \
     gpt_train_dtensor \
     test_customdnn_mlp \
-    test_colpar_embedding \
-    gpt2_test
+    test_colpar_embedding
 
 # =============================================================================
 # Build Rules
@@ -117,9 +116,7 @@ clean:
 define MLP_RULE
 $(1): $(1).o $(UNPARALLELED_A) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] $$@"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $$@ $(1).o \
-		-Xlinker --whole-archive $(UNPARALLELED_A) -Xlinker --no-whole-archive \
-		$(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o $$@ $(1).o $(UNPARALLELED_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] $$@ built"
 	@echo "Run: mpirun -np 2 ./$$@\n"
 endef

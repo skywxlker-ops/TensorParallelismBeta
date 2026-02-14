@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/benchmark_tf32.dir/examples/benchmark_tf32.cpp.o -o benchmark_tf32  -Wl,-rpath,/home/blu-bridge013/Desktop/BLAS/MyBlas/build:/usr/local/cuda/lib64 libmyblas.so /usr/local/cuda/lib64/libcudart.so /usr/local/cuda/lib64/libcublas.so 

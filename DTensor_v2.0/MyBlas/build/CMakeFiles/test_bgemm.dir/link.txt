@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/test_bgemm.dir/examples/test_bgemm.cpp.o -o test_bgemm  -Wl,-rpath,/home/blu-bridge013/Desktop/BLAS/MyBlas/build:/usr/local/cuda/lib64 libmyblas.so /usr/local/cuda/lib64/libcudart.so /usr/local/cuda/lib64/libcublas.so 

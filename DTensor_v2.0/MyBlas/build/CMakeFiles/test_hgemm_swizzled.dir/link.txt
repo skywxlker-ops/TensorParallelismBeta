@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/test_hgemm_swizzled.dir/examples/test_hgemm_swizzled.cpp.o -o test_hgemm_swizzled  -Wl,-rpath,/home/blu-bridge013/Desktop/BLAS/MyBlas/build:/usr/local/cuda/lib64 libmyblas.so /usr/local/cuda/lib64/libcudart.so /usr/local/cuda/lib64/libcublas.so 

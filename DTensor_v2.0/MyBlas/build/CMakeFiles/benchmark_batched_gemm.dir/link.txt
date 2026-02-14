@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/benchmark_batched_gemm.dir/examples/benchmark_batched_gemm.cpp.o -o benchmark_batched_gemm  -Wl,-rpath,/home/blu-bridge013/Desktop/BLAS/MyBlas/build:/usr/local/cuda/lib64 libmyblas.so /usr/local/cuda/lib64/libcudart.so /usr/local/cuda/lib64/libcublas.so 
