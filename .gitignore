@@ -4,22 +4,42 @@
 *.so
 *.out
 *.exe
+**/a.out
+**/deviceQuery
+
+# Global compiled/binary patterns
+**/*.o
+**/*.a
+**/*.so
+**/*.out
+**/*.bin
+**/*.npy
 
 # Build directories
 lib/objects/
-lib/unparalleled.a
-lib/unparalleled.so
+**/build/
 
-# Executables
-benchmarks/shard_benchmarking
-benchmarks/shard_benchmarking2
-benchmarks/shard_benchmarking_vary
-nn/examples/hooks_example
-mlp/test_customdnn_mlp
+# Executables and Large Binaries
+DTensor_v2.0/mlp/gpt2_test
+DTensor_v2.0/mlp/gpt_train_dtensor
+DTensor_v2.0/mlp/test_dtensor_mlp
+DTensor_v2.0/mlp/test_4layer_mlp
+DTensor_v2.0/mlp/test_colpar_embedding
+DTensor_v2.0/mlp/test_customdnn_mlp
+DTensor_v2.0/bluwerp/gpt_train_bluwerp
+DTensor_v2.0/tests/test_memory_pool_efficiency
+DTensor_v2.0/tests/test_mlp_forward
+DTensor_v2.0/tests/mlp_testing/test_mlp_interconnect_bandwidth
+
+# Data and Shards (redundant with **/*.bin but specific)
+DTensor_v2.0/data/
+DTensor_v2.0/checkpoints/
+DTensor_v2.0/bluwerp/*.bin
 
 # Python cache
 __pycache__/
 *.pyc
+**/core.*
 
 # IDEs
 .vscode/

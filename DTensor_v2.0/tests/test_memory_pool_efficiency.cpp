@@ -7,8 +7,6 @@
 #include <chrono>
 #include <iomanip>
 
-extern CachingAllocator gAllocator;
-
 using Clock = std::chrono::high_resolution_clock;
 using Ms = std::chrono::duration<double, std::milli>;
 
@@ -48,10 +46,11 @@ int main(int argc, char** argv) {
     auto end2 = Clock::now();
     
     if (rank == 0) {
+        auto stats = OwnTensor::CachingCUDAAllocator::instance().get_stats();
         std::cout << "Memory Pool: create=" << std::fixed << std::setprecision(1) 
                   << Ms(end - start).count() << "ms, arith=" 
                   << Ms(end2 - start2).count() << "ms, "
-                  << "pool=" << gAllocator.memoryFree() / (1024*1024) << "MB" << std::endl;
+                  << "pool=" << stats.cached / (1024*1024) << "MB" << std::endl;
     }
     
     MPI_Finalize();
