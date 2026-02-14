@@ -12,7 +12,7 @@
 #include "tensor/dtensor.h"
 #include "process_group/ProcessGroupNCCL.h"
 #include "tensor/device_mesh.h"
-#include "memory/cachingAllocator.hpp"
+#include "device/CachingCudaAllocator.h"
 
 using namespace OwnTensor;
 

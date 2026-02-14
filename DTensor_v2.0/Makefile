@@ -6,8 +6,8 @@
 CXX = mpic++
 NVCC_LINKER = /usr/local/cuda/bin/nvcc
 
-CXXFLAGS = -std=c++17 -O3 -fPIC -g -DWITH_CUDA
-NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++
+CXXFLAGS = -std=c++17 -O3 -fPIC -g -DWITH_CUDA 
+NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -ccbin=mpic++ -DWITH_CUDA -arch=sm_86 -Xlinker -z -Xlinker muldefs
 
 CUDA_HOME      := /usr/local/cuda
 TENSOR_LIB_DIR := ./Tensor-Implementations
@@ -200,15 +200,6 @@ hooks_example: $(LIB_A) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o nn/examples/hooks_example nn/examples/hooks_example.o $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
 	@echo "[SUCCESS] Example built: nn/examples/hooks_example"
 	@echo "\nRun: mpirun -np 2 ./nn/examples/hooks_example\n"
-
-gpt2_test: $(LIB_A) $(TENSOR_LIB_A)
-	@mkdir -p script/script11
-	@echo "\n[COMPILE] script/script11/gpt2_test.cpp"
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c script/script11/gpt2_test.cpp -o script/script11/gpt2_test.o
-	@echo "[LINKING] gpt2_test"
-	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) -o script/script11/gpt2_test script/script11/gpt2_test.o $(LIB_A) $(TENSOR_LIB_A) $(LIB_PATHS) $(LIBS)
-	@echo "[SUCCESS] GPT-2 Test built: script/script11/gpt2_test"
-	@echo "\nRun: mpirun -np 2 --allow-run-as-root ./script/script11/gpt2_test\n"
 
 # =============================================================================
 # CLEANUP

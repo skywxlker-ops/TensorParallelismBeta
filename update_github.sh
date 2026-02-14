@@ -25,9 +25,13 @@ echo "--------------------------------------------------"
 # We use 'git config' to read .gitmodules directly to ensure we get the paths
 if [ -f .gitmodules ]; then
     git config --file .gitmodules --get-regexp path | awk '{ print $2 }' | while read submodule_path; do
-        # Skip cgadimpl as we don't have write access
-        if [ "$submodule_path" = "cgadimpl" ]; then
-            echo "Skipping submodule $submodule_path (third-party dependency)"
+        # Skip submodules where we don't have write access
+        if [ "$submodule_path" = "cgadimpl" ] || [ "$submodule_path" = "DTensor_v2.0/Tensor-Implementations" ]; then
+            echo "Skipping push for submodule $submodule_path (read-only or third-party)"
+            # For these, we still might want to pull latest if we're tracking them
+            if [ -d "$submodule_path" ]; then
+                (cd "$submodule_path" && git pull --rebase origin $(git rev-parse --abbrev-ref HEAD) || true)
+            fi
             continue
         fi
 

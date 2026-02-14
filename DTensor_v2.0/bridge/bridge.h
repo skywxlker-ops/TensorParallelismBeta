@@ -99,6 +99,12 @@ OwnTensor::Tensor embedding(const OwnTensor::Tensor& indices, const OwnTensor::T
 OwnTensor::Tensor layer_norm(const OwnTensor::Tensor& input, const OwnTensor::Tensor& weight, const OwnTensor::Tensor& bias, int normalized_shape, float eps = 1e-5);
 
 /**
+ * Autograd-aware view operations.
+ */
+OwnTensor::Tensor transpose(const OwnTensor::Tensor& input, int dim0, int dim1);
+OwnTensor::Tensor reshape(const OwnTensor::Tensor& input, const std::vector<int64_t>& new_shape);
+
+/**
  * Execute backward pass on a tensor.
  */
 void backward(OwnTensor::Tensor& output, const OwnTensor::Tensor* grad_output = nullptr);

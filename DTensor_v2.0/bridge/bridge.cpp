@@ -165,6 +165,16 @@ Tensor layer_norm(const Tensor& input, const Tensor& weight, const Tensor& bias,
     return OwnTensor::autograd::layer_norm(input, weight, bias, normalized_shape, eps);
 }
 
+Tensor transpose(const Tensor& input, int dim0, int dim1) {
+    return OwnTensor::autograd::transpose(input, dim0, dim1);
+}
+
+Tensor reshape(const Tensor& input, const std::vector<int64_t>& new_shape) {
+    Shape shape;
+    shape.dims = new_shape;
+    return OwnTensor::autograd::reshape(input, shape);
+}
+
 void backward(Tensor& output, const Tensor* grad_output) {
     OwnTensor::autograd::backward(output, grad_output);
 }

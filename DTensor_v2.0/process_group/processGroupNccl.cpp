@@ -411,6 +411,7 @@ ProcessGroupNCCL::launch_work_collectives(
     work_collectives->begin();
 
     // Enqueue NCCL operation
+    cudaSetDevice(local_rank_);
     ncclResult_t nccl_status = nccl_op();
     work_collectives->setNcclStatus(nccl_status);
 

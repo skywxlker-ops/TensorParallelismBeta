@@ -5,7 +5,7 @@
 #include <string>
 #include <cuda_runtime.h>
 #include "ProcessGroupNCCL.h"
-#include "memory/cachingAllocator.hpp"
+#include "device/CachingCudaAllocator.h"
 
 
 #include "bridge/bridge.h"
@@ -21,7 +21,7 @@
 using namespace OwnTensor;
 
 
-// gAllocator is now OwnTensor::gAllocator (declared in memory/cachingAllocator.hpp)
+// gAllocator is now OwnTensor::CachingCUDAAllocator::instance() (declared in device/CachingCudaAllocator.h)
 
 class DTensor {
 public:
@@ -65,6 +65,12 @@ public:
      * Backward: dX = all_reduce_sum(dY)
      */
     void sync_w_autograd();
+    
+    /**
+     * Identity in forward, All-Reduce Sum in backward.
+     * Used for column-parallel matmuls with replicated inputs.
+     */
+    DTensor reduce_grad() const;
     
     /**
      * Wait for any pending async collective to complete.
@@ -208,6 +214,12 @@ public:
     void scale(float factor);
     
     /**
+     * Scale gradient values by a factor (in-place).
+     * Multiplies all elements of the gradient by the given scalar.
+     */
+    void scale_grad(float factor);
+
+    /**
      * Rotate a 3D tensor around the specified axis (in-place).
      * Also updates the shard dimension to follow the transpose.
      * @param dim Rotation axis (0=X, 1=Y, 2=Z)
@@ -334,6 +346,13 @@ public:
                          std::shared_ptr<ProcessGroupNCCL> pg,
                          const Layout& layout);
     
+    static DTensor randn(const std::vector<int64_t>& global_shape,
+                         std::shared_ptr<DeviceMesh> mesh,
+                         std::shared_ptr<ProcessGroupNCCL> pg,
+                         const Layout& layout,
+                         uint64_t seed,
+                         float stddev = 1.0f);
+    
     /**
      * Create a DTensor with random integers in [low, high).
      */
@@ -342,6 +361,13 @@ public:
                            std::shared_ptr<DeviceMesh> mesh,
                            std::shared_ptr<ProcessGroupNCCL> pg,
                            const Layout& layout);
+
+    static DTensor randint(int64_t low, int64_t high,
+                           const std::vector<int64_t>& global_shape,
+                           std::shared_ptr<DeviceMesh> mesh,
+                           std::shared_ptr<ProcessGroupNCCL> pg,
+                           const Layout& layout,
+                           uint64_t seed);
     
     /**
      * Create a DTensor from an existing local tensor shard.
