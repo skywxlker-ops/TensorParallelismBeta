@@ -385,8 +385,8 @@
             std::string data_root = "/home/blu-bridge005/Desktop/Anuj@BluBridge/Parallelism/Tensor Parallelism/beta/DTensor_v2.0/bluwerp/";
             // For TP, all ranks must receive the same data (rank=0, world=1).
             // But each rank allocates tensors on its own CUDA device (device_rank=rank).
-            DataLoaderLite train_loader(B, T, 0, 1, "train", data_root, rank == 0, 400000000, rank);
-            DataLoaderLite val_loader(B, T, 0, 1, "val", data_root, rank == 0, 400000000, rank);
+            DataLoaderLite train_loader(B, T, 0, 1, "train", data_root, rank == 0, 400000000);
+            DataLoaderLite val_loader(B, T, 0, 1, "val", data_root, rank == 0, 400000000);
             
             // Distributed Cross Entropy    
             CrossEntropyLoss criterion(mesh, pg);
@@ -495,7 +495,7 @@
                         auto g = p->grad();
                         pg->all_reduce_async(g.data<float>(), g.data<float>(), g.numel(), OwnTensor::Dtype::Float32, sum, false)->wait();
                         // Average across ranks
-                        p->scale_grad(1.0f / pg->get_worldsize());
+                        p->grad() *= (1.0f / pg->get_worldsize());
                     }
                 }
                 
