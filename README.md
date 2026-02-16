@@ -1,6 +1,6 @@
 # DTensor v2.0 - Distributed Tensor Framework
 
-A high-performance C++ framework for tensor parallelism in distributed deep learning. DTensor implements efficient sharding strategies and distributed operations using MPI and NCCL for multi-GPU training, with a focus on asynchronous execution and communication overlap.
+A high-performance C++ framework for tensor parallelism in distributed deep learning. DTensor implements efficient sharding strategies and distributed operations using MPI and NCCL for multi-GPU training.
 
 ## Features
 
@@ -8,25 +8,23 @@ A high-performance C++ framework for tensor parallelism in distributed deep lear
 
 - **Tensor Parallelism**: Column-parallel and row-parallel matrix multiplication
 - **Distributed Collectives**: AllReduce, AllGather, ReduceScatter, Broadcast via NCCL
-- **Async Execution**: Multi-stream architecture for overlapping computation and communication
-- **Memory Management**: Custom caching allocator for efficient GPU memory reuse (~100x speedup) and lazy allocation
-- **Flexible Sharding**: Support for replicated and sharded tensor layouts (Row/Column)
-- **Attention Layer**: Tensor-parallel Multi-Head Attention implementation
+- **GPU Acceleration**: cuBLAS-optimized matrix operations
+- **Memory Management**: Custom caching allocator for efficient GPU memory reuse (~100x speedup)
+- **Flexible Sharding**: Support for replicated and sharded tensor layouts
 
 ### Distributed Operations
 
 - **Column-Parallel MatMul**: Split weight columns across GPUs (no communication)
 - **Row-Parallel MatMul**: Split weight rows with AllReduce synchronization
-- **Lazy Partial Reductions**: Defer reductions in row-parallel operations for better performance
-- **Layout Management**: Automatic tracking of global/local tensor shapes and transitions
-- **GPU-Native Initialization**: Efficient scatter/broadcast from root rank
+- **Layout Management**: Automatic tracking of global/local tensor shapes
+- **Stream-based Execution**: Asynchronous GPU operations with CUDA streams
 
 ## Architecture
 
 ```
 DTensor (Distributed Tensor Layer)
     ├── Layout Management (Sharding strategies)
-    ├── Distributed Collectives (ProcessGroupNCCL)
+    ├── Distributed Collectives (NCCL)
     └── Local Tensor Operations
             ↓
     TensorOpsBridge (Abstraction Layer)
@@ -42,14 +40,13 @@ DTensor (Distributed Tensor Layer)
 
 - Manages global and local tensor shapes
 - Coordinates communication across GPUs
-- Implements tensor parallel strategies (MatMul, Attention)
-- Handles layout transitions (Redistribute, Shard, Replicate)
+- Implements tensor parallel strategies
 
-**ProcessGroupNCCL** - NCCL communication manager
+**ProcessGroup** - MPI/NCCL communication manager
 
-- Handles collective operations (AllReduce, AllGather, etc.)
-- Manages CUDA streams (Compute, Comm, Data streams)
-- Provides asynchronous work tracking and event synchronization
+- Handles collective operations
+- Manages CUDA streams
+- Provides asynchronous work tracking
 
 **CachingAllocator** - GPU memory pool
 
@@ -80,42 +77,18 @@ DTensor (Distributed Tensor Layer)
 git clone https://github.com/skywxlker-ops/TensorParallelismBeta.git
 cd DTensor_v2.0
 
-# Build TensorLib (required dependency)
-cd Tensor-Implementations
+# Build TensorLib (required)
+cd /home/blu-bridge25/Study/Code/Tensor_Parallelism_impl/tenosr_parallelism/TensorParallelismBeta/DTensor_v2.0/Tensor-Implementations
 make
 cd ..
 
-# Build Unparalleled library (static + shared)
-make lib
+# Build DTensor
+make
 
-# Output:
-#   lib/unparalleled.a   (8.7 MB static library)
-#   lib/unparalleled.so  (28 MB shared library)
+# Run tests
+make test_mlp_forward
+mpirun -np 2 ./test_mlp_forward
 ```
-
-### Building Tests
-
-```bash
-# Build a specific test (links against unparalleled.a)
-make test_dtensor_factories
-
-# Run with MPI
-mpirun -np 2 ./tests/test_dtensor_factories
-```
-
-### Available Targets
-
-| Target | Description |
-|--------|-------------|
-| `make lib` | Build both `unparalleled.a` and `unparalleled.so` |
-| `make lib-static` | Build only static library |
-| `make lib-shared` | Build only shared library |
-| `make test_device_mesh` | Build device mesh test |
-| `make test_matmul` | Build matmul test |
-| `make test_dtensor_factories` | Build DTensor factory test |
-| `make test_mlp_benchmark` | Build MLP benchmark |
-| `make tensor_parallel_mlp` | Build tensor parallel MLP example |
-| `make clean` | Remove all build artifacts |
 
 ## Usage
 
@@ -123,7 +96,7 @@ mpirun -np 2 ./tests/test_dtensor_factories
 
 ```cpp
 #include "tensor/dtensor.h"
-#include "process_group/ProcessGroupNCCL.h"
+#include "process_group/process_group.h"
 
 // Initialize MPI and NCCL
 MPI_Init(&argc, &argv);
@@ -132,8 +105,8 @@ MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
 // Create process group and mesh
-auto mesh = std::make_shared<DeviceMesh>(world_size);
-auto pg = std::make_shared<ProcessGroupNCCL>(rank, world_size, nccl_id);
+auto mesh = std::make_shared<Mesh>(world_size);
+auto pg = std::make_shared<ProcessGroup>(rank, world_size, rank, nccl_id);
 
 // Layer 1: Column-Parallel (X @ W1)
 // Input: Replicated [batch, hidden]
@@ -163,29 +136,33 @@ DTensor Y2 = Y1.matmul(W2);  // AllReduce inside
 mpirun -np 2 ./test_mlp_forward
 ```
 
-### Run Attention Layer Test
+**Expected Output:**
 
-```bash
-mpirun -np 2 ./test_attention_parallel
 ```
+Layer 1 Output (Column-Sharded):
+  Rank 0: [2, 2, 2, 2]  # Different on each rank
+  Rank 1: [4, 4, 4, 4]
 
-### Run Async Timing Analysis
-
-```bash
-mpirun -np 2 ./mlp_testing/test_mlp_async_timing
+Layer 2 Output (Replicated):
+  Both ranks: [24, 24, 24, 24]  # Identical after AllReduce
 ```
 
 ## Performance
 
-### Optimizations
+### MLP Forward Pass (2 layers, batch=2, hidden=4)
 
-- **Multi-Stream Execution**: Overlaps compute (MatMul) with communication (AllReduce).
-- **Lazy Allocation**: Temporary buffers are allocated only when needed and reused.
-- **Async Collectives**: Non-blocking NCCL calls allow CPU to look ahead.
+- **Sequential**: Each rank computes full forward pass independently
+- **Tensor Parallel**: Split computation across 2 GPUs
 
-### Memory Allocator
+**Results:**
 
-- **Without caching**: ~200μs per allocation cycle
+- ✅ Column-parallel: No communication overhead
+- ✅ Row-parallel: Single AllReduce per layer
+- ✅ Memory savings: Model parameters split across GPUs
+
+### Memory Allocator Performance
+
+- **Without caching**: ~200μs per allocation cycle (cudaMalloc + cudaFree)
 - **With caching**: ~2μs per allocation cycle (cache hit)
 - **Speedup**: ~100x faster memory operations
 
@@ -207,25 +184,36 @@ Layout(mesh, {M, N}, ShardingType::SHARDED, dim)
 // dim=1: Column-sharded
 ```
 
+### Tensor Parallel Patterns
+
+**Column-Parallel**: `Y[M, N/P] = X[M, K] @ W[K, N/P]`
+
+- No communication needed
+- Preferred for first MLP layer
+
+**Row-Parallel**: `Y[M, N] = X[M, K/P] @ W[K/P, N] + AllReduce`
+
+- Requires AllReduce for final result
+- Preferred for second MLP layer
+
 ## Roadmap
 
 ### Current Status
 
 - ✅ Tensor parallelism (column/row parallel)
-- ✅ Distributed collectives (NCCL)
+- ✅ Basic distributed operations
 - ✅ MLP forward pass
-- ✅ Attention layer (Forward)
-- ✅ GPU memory management & Caching Allocator
-- ✅ Async execution & Stream overlap
-- ✅ Lazy Partial Matmul
-- 🚧 Backward pass & Autograd (In Progress)
+- ✅ GPU memory management
+- ✅ cuBLAS acceleration
 
 ### Planned Features
 
+- [ ] Backward pass & gradients (autograd integration)
+- [ ] Additional operations (ReLU, Softmax, LayerNorm)
 - [ ] Pipeline parallelism
 - [ ] Sequence parallelism
 - [ ] Model checkpointing
-- [ ] Python bindings (PyBind11)
+- [ ] Python bindings
 
 ## Contributing
 
@@ -234,7 +222,7 @@ This is an active research project. Contributions welcome!
 ### Team
 
 - **DTensor Team**: Distributed tensor framework
-- **Autograd Team**: Automatic differentiation
+- **Autograd Team**: Automatic differentiation (integration pending)
 - **TensorLib Team**: Core tensor operations
 
 ## Acknowledgments
@@ -245,4 +233,4 @@ This is an active research project. Contributions welcome!
 
 ---
 
-**Status**: Active Development | **Version**: 2.0 | **Last Updated**: January 2026
+**Status**: Active Development | **Version**: 2.0 | **Last Updated**: November 2025

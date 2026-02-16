@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/benchmark_sgemm.dir/examples/benchmark_sgemm.cpp.o -o benchmark_sgemm  -Wl,-rpath,/home/blu-bridge013/Desktop/BLAS/MyBlas/build:/usr/local/cuda/lib64 libmyblas.so /usr/local/cuda/lib64/libcudart.so /usr/local/cuda/lib64/libcublas.so 
