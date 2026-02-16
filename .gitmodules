@@ -1,3 +1,4 @@
 [submodule "DTensor/Tensor-Implementations"]
 	path = DTensor/Tensor-Implementations
 	url = https://github.com/kathir-23s/Tensor-Implementations.git
+	branch = Tensor-Parallel
