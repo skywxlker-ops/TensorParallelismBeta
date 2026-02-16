@@ -28,37 +28,58 @@ Layout sharded_layout(mesh, {Batch, SeqLen, Hidden}, 2);
 ```
 
 ### 3. DTensor (Distributed Tensor)
-`DTensor` is a high-level wrapper around a local GPU `Tensor`. It manages:
-- **Metadata**: Global shape and current layout.
-- **Collectives**: Handles `all-reduce`, `all-gather`, and `shard` operations.
-- **Autograd**: Automatically registers backward hooks for gradient synchronization.
+`DTensor` is a high-level wrapper around a local GPU `Tensor`.
+
+**Constructor Parameters:**
+- `name`: A string identifier for the tensor, useful for debugging and tracking memory allocations.
+- `sd`: Standard deviation for random initialization (default: `0.02f`).
+- `seed`: Random seed for initialization (default: `42`). Using the same seed across ranks ensures identical initialization for replicated parameters.
+
+```cpp
+DTensor h(mesh, pg, in_layout, "Input_Tensor", 0.02f, 42);
+```
 
 ## How to use Tensor Parallelism in a Script
 
 To implement Tensor Parallelism (Megatron-LM style), follow these steps:
 
-### 1. Define Layouts
-For a linear layer $Y = XW + b$:
-- **Column Parallel**: Shard $W$ along columns (dim 1). $Y$ will be sharded along dim 2.
-- **Row Parallel**: Shard $W$ along rows (dim 0). $Y$ needs an `all-reduce` to become replicated.
+### 1. Layer Configuration
 
-### 2. Wrap Tensors in DTensor
-Initialize your weights as `DTensor` with the appropriate sharding.
+#### Column Parallel (`DColumnLinear`)
+Shards the output dimension across GPUs.
+- `use_bias`: Boolean (`true`/`false`) to enable/disable bias.
+- `sd` & `seed`: Control weight initialization.
 
 ```cpp
-// Column Linear: Shards on columns
-dnn::DColumnLinear fc1(mesh, pg, B, T, C, F);
-
-// Row Linear: Shards on rows, syncs output
-dnn::DRowLinear fc4(mesh, pg, B, T, F, C);
+dnn::DColumnLinear fc1(mesh, pg, B, T, C, F, {}, true, 0.02f, 42);
 ```
 
-### 3. Automatic Synchronization
+#### Row Parallel (`DRowLinear`)
+Shards the input dimension across GPUs and typically synchronizes the output.
+- `use_bias`: Boolean to enable/disable bias.
+- `sync_output`: Boolean (`true`/`false`). If `true`, performs an `all-reduce` on the output to make it replicated/consistent across ranks. By default, it is often `true` for final layers of a block.
+
+```cpp
+dnn::DRowLinear fc4(mesh, pg, B, T, F, C, {}, true, 0.02f, 42, true);
+```
+
+#### Language Model Head (`DLMHead`)
+- `use_tied_weights`: Boolean (`true`/`false`). If `true`, the layer shares weights with an embedding layer (typically the token embedding).
+
+```cpp
+// Using tied weights
+dnn::DLMHead lm_head(mesh, pg, B, T, C, V, true, wte.weight.get());
+
+// Without tied weights
+dnn::DLMHead lm_head(mesh, pg, B, T, C, V, false);
+```
+
+### 2. Automatic Synchronization
 When using `dnn::` blocks, the library handles the complexity:
 - `DColumnLinear` performs a local matmul.
-- `DRowLinear` performs a local matmul followed by an `all-reduce` (`sync_w_autograd`).
+- `DRowLinear` performs a local matmul followed by an `all-reduce` if `sync_output` is `true`.
 
-### 4. Training Loop Integration
+### 3. Training Loop Integration
 ```cpp
 // 1. Zero Gradients
 optimizer.zero_grad();
@@ -73,8 +94,8 @@ Tensor loss = parallel_cross_entropy(logits, targets);
 loss.backward(&grad_scale);
 
 // 5. Gradient Synchronization
-// Handled automatically by sync_w_autograd hooks in DTensor
-// For replicated params, manual sync is needed:
+// Handled automatically by backward hooks in DTensor for sharded params.
+// For replicated params (like LayerNorm), manual sync is needed:
 pg->all_reduce_async(grad_ptr, grad_ptr, count, Dtype::Float32, sum)->wait();
 
 // 6. Step
