@@ -499,9 +499,10 @@ int main(int argc, char** argv) {
         std::ofstream log_file;
 
         if (rank == 0) {
+            std::filesystem::create_directories("TP_MLP_Training_logs");
             int log_idx = 1;
             while (true) {
-                log_filename = "TP_MLP_Training_log" + std::to_string(log_idx) + ".csv";
+                log_filename = "TP_MLP_Training_logs/TP_MLP_Training_log" + std::to_string(log_idx) + ".csv";
                 std::ifstream check(log_filename);
                 if (!check.good()) break;
                 log_idx++;
@@ -510,7 +511,7 @@ int main(int argc, char** argv) {
             std::cout << "Saving logs to: " << log_filename << std::endl;
             
             // Save configuration
-            std::string config_filename = "TP_MLP_Training_log" + std::to_string(log_idx) + "_config.txt";
+            std::string config_filename = "TP_MLP_Training_logs/TP_MLP_Training_log" + std::to_string(log_idx) + "_config.txt";
             std::ofstream config_file(config_filename);
             config_file << "Configuration:\n";
             config_file << "  Batch_size: " << B << "\n";
