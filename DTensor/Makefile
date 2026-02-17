@@ -18,6 +18,7 @@ INCLUDES = \
     -I. \
     -I./tensor \
     -I./process_group \
+    -I./dnn \
     -I./memory \
     -I./bridge \
     -I$(TENSOR_LIB_DIR)/include \
@@ -44,7 +45,7 @@ SRCS = main.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
 
-OBJS = $(SRCS:.cpp=.o) $(CUDA_OBJS)
+OBJS = $(SRCS:.cpp=.o) $(CUDA_OBJS) 
 
 .PHONY: all clean test test_mlp_forward
 
@@ -220,7 +221,7 @@ clean:
 
 # Tensor Parallel MLP Example
 
-CUDA_SRCS =  process_group/fused_transpose_kernel.cu process_group/shard_fused_transpose_kernel.cu
+CUDA_SRCS =  process_group/fused_transpose_kernel.cu process_group/shard_fused_transpose_kernel.cu dnn/dist_grad_norm_kernels.cu
 CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
 
 TP_MLP_SRCS = \
@@ -554,9 +555,13 @@ GPT2_TP_MLP_TEST_SRCS = \
     process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
-    tensor/placement.cpp
+    tensor/placement.cpp \
+    
+# GPT2_CUDA_SRCS = dnn/dist_grad_norm_kernels.cu
+# CUDA_OBJS = $(GPT2_CUDA_SRCS:.cu = .o)
 
 GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
 
 gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: gpt2_tp_mlp_test_exec"
@@ -564,6 +569,12 @@ gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 TP MLP Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_mlp_test_exec \n"
 
+    # Example target for the failing test
+# gpt2_tp_mlp_test: gpt2_tp_test/gpt2_tp_mlp_test.o $(CUDA_OBJS) $(OBJS) $(TENSOR_LIB_A)
+# 	@echo "\n[LINKING] Creating example executable: $@"
+# 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_tp_mlp_test_exec $(GPT2_TP_MLP_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+#     @echo "[SUCCESS] GPT2 TP MLP Test build complete." 
+# 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_mlp_test_exec \n"
 
 # GPT2_TP_MLP_TEST_SRCS = \
 #     gpt2_tp_test/gpt2_tp_mlp_test.cpp \

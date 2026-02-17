@@ -30,7 +30,7 @@
 #include "mlp/activation.h"
 #include "autograd/operations/EmbeddingOps.h"
 #include "nn/NN.h"
-#include "nn/DistributedNN.h"
+#include "dnn/DistributedNN.h"
 
 
 // Dataloader
@@ -101,6 +101,8 @@ public:
         // Use autograd-aware embedding function for proper gradient flow
         return autograd::embedding(weight, indices);
     }
+
+    void clear_own_params() { params_.clear(); }
     
 private:
     int64_t vocab_size_;
@@ -160,6 +162,7 @@ public:
     }
 
     using dnn::DModule::register_module;
+    
     void register_module(nn::LayerNorm& m) {
         register_parameter(&m.weight);
         if(m.bias.is_valid()) register_parameter(&m.bias);
@@ -198,6 +201,7 @@ public:
     Embedding wpe;  // Position embedding
     dnn::DSequential mlps;
     nn::LayerNorm ln_f; // Final LayerNorm
+    nn::Linear lm_head;  // Output projection [n_embd, vocab_size], bias=False
     // Tensor& W_out;
     Tensor pos;
     Tensor logits;
@@ -212,9 +216,11 @@ public:
           mesh(mesh),
           wte(cfg.vocab_size, cfg.n_embd, device, seed = 1234),
           wpe(cfg.context_length, cfg.n_embd, device),
-          ln_f(cfg.n_embd)
+          ln_f(cfg.n_embd),
+          lm_head(cfg.n_embd, cfg.vocab_size, false)
     {
         ln_f.to(device);
+        lm_head.to(device);
         
         Layout Input_layout(mesh,{config.batch_size,config.context_length,config.n_embd});
 
@@ -224,6 +230,11 @@ public:
         for (int i = 0; i < cfg.n_layers; ++i) {
             mlps.add(std::make_shared<MLP>(config, mesh, pg, device, 1234));
         }
+
+        // Weight sharing scheme (same as PyTorch: self.transformer.wte.weight = self.lm_head.weight)
+        // Note: transposed because our Linear stores [in, out] vs PyTorch's [out, in]
+        wte.weight = lm_head.weight.t();
+        wte.clear_own_params();  // lm_head owns the weight; avoid double-counting in parameters()
         
         // Separate output projection weight (no weight tying)
         // Shape: [n_embd, vocab_size] to compute: hidden @ W_out = logits
@@ -249,10 +260,12 @@ public:
 
  
 
-        register_module(wte);
+        // Don't register wte - its weight is a view of lm_head.weight (weight tying).
+        // lm_head owns and registers the shared weight; registering wte would double-count it.
         register_module(wpe);
         register_module(mlps);
         register_module(ln_f);
+        register_module(lm_head);
 
         // Initialize W_out
         // TensorOptions opts = TensorOptions().with_dtype(Dtype::Float32)
@@ -263,13 +276,28 @@ public:
         // register_parameter(&W_out);
     }
 
+    // using dnn::DModule::register_module;
+    // void register_module(nn::LayerNorm& m) {
+    //     register_parameter(&m.weight);
+    //     if(m.bias.is_valid()) register_parameter(&m.bias);
+    // void register_module(Embedding& m) {
+    //     register_parameter(&m.weight);
+    // }
+    
     using dnn::DModule::register_module;
+
+    void register_module(Embedding& m) {
+        register_parameter(&m.weight);
+    }
+
     void register_module(nn::LayerNorm& m) {
         register_parameter(&m.weight);
         if(m.bias.is_valid()) register_parameter(&m.bias);
     }
-    void register_module(Embedding& m) {
+
+    void register_module(nn::Linear& m) {
         register_parameter(&m.weight);
+        if(m.bias.is_valid()) register_parameter(&m.bias);
     }
     
     void reset_timing() {
@@ -561,7 +589,11 @@ int main(int argc, char** argv) {
                 timer_loss.start_timer();
                 // Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
                 Tensor loss = autograd::sparse_cross_entropy_loss(logits,y);
-                loss = loss / grad_accum_steps;
+                // Use autograd::div (has DivBackward) instead of scalar operator/
+                // which strips grad_fn and breaks the autograd graph
+                Tensor divisor = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 
+                                              static_cast<float>(grad_accum_steps));
+                loss = autograd::div(loss, divisor);
                 loss_accum_gpu = loss_accum_gpu + loss;
         
                 time_loss += timer_loss.get_elapsed_seconds();
@@ -617,7 +649,14 @@ int main(int argc, char** argv) {
             // Compute throughput
             int64_t tokens_processed = static_cast<int64_t>(B) * T * grad_accum_steps;
             double tokens_per_sec = static_cast<double>(tokens_processed) / dt;
-            
+            long long total_sec = static_cast<long long>((max_steps - step) * dt);
+
+           int h = total_sec / 3600;
+           int m = (total_sec % 3600) / 60;
+           int s = total_sec % 60;
+
+
+
             // Print training info
         if(rank == 0){
             std::cout << "step " << std::setw(5) << step 
@@ -626,7 +665,9 @@ int main(int argc, char** argv) {
                         << " | norm: " << std::fixed << std::setprecision(4) << norm 
                         << " | dt: " << std::fixed << std::setprecision(2) << (dt * 1000.0) << "ms"
                         << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec 
+                        << " |       Time Left: " << std::setfill('0') << std::setprecision(2) << h << " hrs : "<< m <<" mins "
                         << std::endl;
+            
             
             // Component timing breakdown (in ms)
             std::cout << "  [TIMING] data: " << std::fixed << std::setprecision(1) << (time_data * 1000.0) << "ms"

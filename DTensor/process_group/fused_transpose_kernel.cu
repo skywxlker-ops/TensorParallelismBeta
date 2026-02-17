@@ -1,7 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <cuda_runtime.h>
-#include "fused_rotate_kernel.cuh"
+#include "fused_transpose_kernel.cuh"
 
 // =============================================================================
 // CUDA Kernels (use raw int64_t — std::vector is host-only)

@@ -1,0 +1,47 @@
+=== GPT-2 Tensor Parallel Training Script ===
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+
+Initializing model on CUDA device 1...
+
+Initializing model on CUDA device 0...
+lm_head.weight shape: [384, 50304]
+lm_head.weight strides: [50304, 1]
+wte.weight shape: [50304, 384]
+wte.weight strides: [1, 50304]
+wte.weight is_contiguous: 0
+lm_head.weight data ptr: 0x9dcc00c00
+wte.weight data ptr: 0x9dcc00c00
+Number of parameters: 40799232
+Number of steps: 3112
+Number of warmup_steps: 311
+found 3 shards for split train
+found 1 shards for split val
+
+Starting training...
+Saving logs to: TP_MLP_Training_log63.csv
+lm_head.weight shape: [384, 50304]
+lm_head.weight strides: [50304, 1]
+wte.weight shape: [50304, 384]
+wte.weight strides: [1, 50304]
+wte.weight is_contiguous: 0
+lm_head.weight data ptr: 0x9dac00c00
+wte.weight data ptr: 0x9dac00c00
+found 3 shards for split train
+found 1 shards for split val
+validation loss: 11.2776
+validation loss: 11.3392
