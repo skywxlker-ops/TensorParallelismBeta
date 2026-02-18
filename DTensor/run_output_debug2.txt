@@ -1,0 +1,251 @@
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+=== GPT-2 Tensor Parallel Training Script ===
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+
+Initializing model on CUDA device 0...
+
+Initializing model on CUDA device 1...
+lm_head.weight shape: [384, 50304]
+lm_head.weight strides: [50304, 1]
+wte.weight shape: [50304, 384]
+wte.weight strides: [1, 50304]
+wte.weight is_contiguous: 0
+lm_head.weight data ptr: 0x9dcc00c00
+wte.weight data ptr: 0x9dcc00c00
+Number of parameters: 40799232
+Number of steps: 3112
+Number of warmup_steps: 311
+found 3 shards for split train
+found 1 shards for split val
+
+DEBUG: Autograd Status Check:
+wte.weight.is_leaf(): NO
+wte.weight.requires_grad(): YES
+wte.weight.grad_fn(): YES
+lm_head.weight.is_leaf(): YES
+lm_head.weight.requires_grad(): YES
+lm_head.weight.grad_fn(): NO
+--------------------------------
+
+Starting training...
+Saving logs to: TP_MLP_Training_log76.csv
+lm_head.weight shape: [384, 50304]
+lm_head.weight strides: [50304, 1]
+wte.weight shape: [50304, 384]
+wte.weight strides: [1, 50304]
+wte.weight is_contiguous: 0
+lm_head.weight data ptr: 0x9dac00c00
+wte.weight data ptr: 0x9dac00c00
+found 3 shards for split train
+found 1 shards for split val
+validation loss: 11.3392
+validation loss: 11.2776
+step     0 | loss: 11.331563 | lr 3.2154e-07 | norm: 0.0000 | dt: 1771.21ms | tok/sec: 37000.66 |                 Time Left: 01 hrs :31 mins :52 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00001 | loss: 11.334970 | lr 6.4309e-07 | norm: 0.0000 | dt: 453.29ms | tok/sec: 144578.78 |                 Time Left: 00 hrs :23 mins :30 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00002 | loss: 11.351428 | lr 9.6463e-07 | norm: 0.0000 | dt: 427.11ms | tok/sec: 153441.04 |                 Time Left: 00 hrs :22 mins :08 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00003 | loss: 11.332356 | lr 1.2862e-06 | norm: 0.0000 | dt: 423.11ms | tok/sec: 154891.59 |                 Time Left: 00 hrs :21 mins :55 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00004 | loss: 11.336000 | lr 1.6077e-06 | norm: 0.0000 | dt: 430.58ms | tok/sec: 152203.29 |                 Time Left: 00 hrs :22 mins :18 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00005 | loss: 11.320686 | lr 1.9293e-06 | norm: 0.0000 | dt: 426.30ms | tok/sec: 153732.22 |                 Time Left: 00 hrs :22 mins :04 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00006 | loss: 11.330315 | lr 2.2508e-06 | norm: 0.0000 | dt: 424.36ms | tok/sec: 154436.46 |                 Time Left: 00 hrs :21 mins :58 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00007 | loss: 11.325886 | lr 2.5723e-06 | norm: 0.0000 | dt: 425.19ms | tok/sec: 154133.41 |                 Time Left: 00 hrs :22 mins :00 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00008 | loss: 11.333736 | lr 2.8939e-06 | norm: 0.0000 | dt: 425.15ms | tok/sec: 154147.33 |                 Time Left: 00 hrs :21 mins :59 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00009 | loss: 11.333915 | lr 3.2154e-06 | norm: 0.0000 | dt: 426.85ms | tok/sec: 153535.50 |                 Time Left: 00 hrs :22 mins :04 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00010 | loss: 11.332462 | lr 3.5370e-06 | norm: 0.0000 | dt: 427.53ms | tok/sec: 153289.74 |                 Time Left: 00 hrs :22 mins :06 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00011 | loss: 11.334146 | lr 3.8585e-06 | norm: 0.0000 | dt: 423.68ms | tok/sec: 154682.49 |                 Time Left: 00 hrs :21 mins :53 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00012 | loss: 11.348228 | lr 4.1801e-06 | norm: 0.0000 | dt: 425.20ms | tok/sec: 154128.11 |                 Time Left: 00 hrs :21 mins :58 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00013 | loss: 11.336936 | lr 4.5016e-06 | norm: 0.0000 | dt: 423.15ms | tok/sec: 154878.24 |                 Time Left: 00 hrs :21 mins :51 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00014 | loss: 11.353680 | lr 4.8232e-06 | norm: 0.0000 | dt: 427.75ms | tok/sec: 153209.69 |                 Time Left: 00 hrs :22 mins :05 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00015 | loss: 11.333070 | lr 5.1447e-06 | norm: 0.0000 | dt: 423.16ms | tok/sec: 154872.85 |                 Time Left: 00 hrs :21 mins :50 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00016 | loss: 11.336749 | lr 5.4662e-06 | norm: 0.0000 | dt: 422.97ms | tok/sec: 154943.07 |                 Time Left: 00 hrs :21 mins :49 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00017 | loss: 11.327654 | lr 5.7878e-06 | norm: 0.0000 | dt: 422.71ms | tok/sec: 155038.24 |                 Time Left: 00 hrs :21 mins :48 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00018 | loss: 11.339237 | lr 6.1093e-06 | norm: 0.0000 | dt: 424.94ms | tok/sec: 154225.56 |                 Time Left: 00 hrs :21 mins :54 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00019 | loss: 11.354294 | lr 6.4309e-06 | norm: 0.0000 | dt: 426.03ms | tok/sec: 153830.66 |                 Time Left: 00 hrs :21 mins :57 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00020 | loss: 11.323661 | lr 6.7524e-06 | norm: 0.0000 | dt: 426.22ms | tok/sec: 153762.21 |                 Time Left: 00 hrs :21 mins :57 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00021 | loss: 11.336609 | lr 7.0740e-06 | norm: 0.0000 | dt: 423.22ms | tok/sec: 154850.07 |                 Time Left: 00 hrs :21 mins :48 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00022 | loss: 11.324711 | lr 7.3955e-06 | norm: 0.0000 | dt: 424.18ms | tok/sec: 154501.50 |                 Time Left: 00 hrs :21 mins :50 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00023 | loss: 11.341400 | lr 7.7170e-06 | norm: 0.0000 | dt: 424.25ms | tok/sec: 154473.38 |                 Time Left: 00 hrs :21 mins :50 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00024 | loss: 11.347054 | lr 8.0386e-06 | norm: 0.0000 | dt: 426.93ms | tok/sec: 153503.53 |                 Time Left: 00 hrs :21 mins :58 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00025 | loss: 11.329993 | lr 8.3601e-06 | norm: 0.0000 | dt: 432.43ms | tok/sec: 151552.23 |                 Time Left: 00 hrs :22 mins :14 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00026 | loss: 11.330832 | lr 8.6817e-06 | norm: 0.0000 | dt: 429.08ms | tok/sec: 152735.12 |                 Time Left: 00 hrs :22 mins :04 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00027 | loss: 11.355810 | lr 9.0032e-06 | norm: 0.0000 | dt: 432.90ms | tok/sec: 151387.89 |                 Time Left: 00 hrs :22 mins :15 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00028 | loss: 11.345697 | lr 9.3248e-06 | norm: 0.0000 | dt: 426.49ms | tok/sec: 153663.62 |                 Time Left: 00 hrs :21 mins :55 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00029 | loss: 11.332287 | lr 9.6463e-06 | norm: 0.0000 | dt: 425.53ms | tok/sec: 154010.07 |                 Time Left: 00 hrs :21 mins :51 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00030 | loss: 11.341769 | lr 9.9678e-06 | norm: 0.0000 | dt: 424.93ms | tok/sec: 154227.31 |                 Time Left: 00 hrs :21 mins :49 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00031 | loss: 11.342286 | lr 1.0289e-05 | norm: 0.0000 | dt: 429.57ms | tok/sec: 152562.39 |                 Time Left: 00 hrs :22 mins :03 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00032 | loss: 11.331063 | lr 1.0611e-05 | norm: 0.0000 | dt: 432.70ms | tok/sec: 151456.82 |                 Time Left: 00 hrs :22 mins :12 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00033 | loss: 11.335545 | lr 1.0932e-05 | norm: 0.0000 | dt: 435.50ms | tok/sec: 150485.15 |                 Time Left: 00 hrs :22 mins :20 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00034 | loss: 11.335156 | lr 1.1254e-05 | norm: 0.0000 | dt: 425.08ms | tok/sec: 154172.45 |                 Time Left: 00 hrs :21 mins :48 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00035 | loss: 11.341296 | lr 1.1576e-05 | norm: 0.0000 | dt: 424.33ms | tok/sec: 154446.13 |                 Time Left: 00 hrs :21 mins :45 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00036 | loss: 11.333311 | lr 1.1897e-05 | norm: 0.0000 | dt: 423.97ms | tok/sec: 154577.76 |                 Time Left: 00 hrs :21 mins :44 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00037 | loss: 11.339498 | lr 1.2219e-05 | norm: 0.0000 | dt: 425.81ms | tok/sec: 153907.42 |                 Time Left: 00 hrs :21 mins :49 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00038 | loss: 11.314651 | lr 1.2540e-05 | norm: 0.0000 | dt: 425.60ms | tok/sec: 153986.31 |                 Time Left: 00 hrs :21 mins :48 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00039 | loss: 11.328866 | lr 1.2862e-05 | norm: 0.0000 | dt: 422.88ms | tok/sec: 154976.45 |                 Time Left: 00 hrs :21 mins :39 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00040 | loss: 11.330939 | lr 1.3183e-05 | norm: 0.0000 | dt: 423.59ms | tok/sec: 154715.07 |                 Time Left: 00 hrs :21 mins :41 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00041 | loss: 11.323320 | lr 1.3505e-05 | norm: 0.0000 | dt: 423.92ms | tok/sec: 154593.77 |                 Time Left: 00 hrs :21 mins :41 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00042 | loss: 11.343450 | lr 1.3826e-05 | norm: 0.0000 | dt: 426.47ms | tok/sec: 153669.73 |                 Time Left: 00 hrs :21 mins :49 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00043 | loss: 11.323171 | lr 1.4148e-05 | norm: 0.0000 | dt: 423.32ms | tok/sec: 154815.07 |                 Time Left: 00 hrs :21 mins :39 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00044 | loss: 11.336511 | lr 1.4469e-05 | norm: 0.0000 | dt: 425.50ms | tok/sec: 154020.42 |                 Time Left: 00 hrs :21 mins :45 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00045 | loss: 11.323606 | lr 1.4791e-05 | norm: 0.0000 | dt: 423.83ms | tok/sec: 154629.39 |                 Time Left: 00 hrs :21 mins :39 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00046 | loss: 11.326925 | lr 1.5113e-05 | norm: 0.0000 | dt: 425.69ms | tok/sec: 153951.38 |                 Time Left: 00 hrs :21 mins :45 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00047 | loss: 11.322789 | lr 1.5434e-05 | norm: 0.0000 | dt: 425.47ms | tok/sec: 154030.62 |                 Time Left: 00 hrs :21 mins :44 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00048 | loss: 11.354567 | lr 1.5756e-05 | norm: 0.0000 | dt: 425.78ms | tok/sec: 153921.61 |                 Time Left: 00 hrs :21 mins :44 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00049 | loss: 11.312439 | lr 1.6077e-05 | norm: 0.0000 | dt: 425.50ms | tok/sec: 154020.96 |                 Time Left: 00 hrs :21 mins :43 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00050 | loss: 11.337984 | lr 1.6399e-05 | norm: 0.0000 | dt: 425.67ms | tok/sec: 153960.44 |                 Time Left: 00 hrs :21 mins :43 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00051 | loss: 11.347257 | lr 1.6720e-05 | norm: 0.0000 | dt: 427.18ms | tok/sec: 153413.71 |                 Time Left: 00 hrs :21 mins :47 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00052 | loss: 11.333713 | lr 1.7042e-05 | norm: 0.0000 | dt: 428.37ms | tok/sec: 152990.71 |                 Time Left: 00 hrs :21 mins :50 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00053 | loss: 11.334668 | lr 1.7363e-05 | norm: 0.0000 | dt: 425.56ms | tok/sec: 153998.00 |                 Time Left: 00 hrs :21 mins :41 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00054 | loss: 11.332937 | lr 1.7685e-05 | norm: 0.0000 | dt: 425.74ms | tok/sec: 153933.94 |                 Time Left: 00 hrs :21 mins :41 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00055 | loss: 11.330515 | lr 1.8006e-05 | norm: 0.0000 | dt: 425.64ms | tok/sec: 153970.83 |                 Time Left: 00 hrs :21 mins :41 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00056 | loss: 11.337706 | lr 1.8328e-05 | norm: 0.0000 | dt: 429.40ms | tok/sec: 152621.54 |                 Time Left: 00 hrs :21 mins :52 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00057 | loss: 11.326714 | lr 1.8650e-05 | norm: 0.0000 | dt: 424.16ms | tok/sec: 154506.79 |                 Time Left: 00 hrs :21 mins :35 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00058 | loss: 11.336319 | lr 1.8971e-05 | norm: 0.0000 | dt: 438.58ms | tok/sec: 149428.48 |                 Time Left: 00 hrs :22 mins :19 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00059 | loss: 11.333822 | lr 1.9293e-05 | norm: 0.0000 | dt: 434.14ms | tok/sec: 150956.76 |                 Time Left: 00 hrs :22 mins :05 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00060 | loss: 11.322867 | lr 1.9614e-05 | norm: 0.0000 | dt: 429.76ms | tok/sec: 152496.05 |                 Time Left: 00 hrs :21 mins :51 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00061 | loss: 11.342351 | lr 1.9936e-05 | norm: 0.0000 | dt: 431.70ms | tok/sec: 151808.52 |                 Time Left: 00 hrs :21 mins :57 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00062 | loss: 11.346336 | lr 2.0257e-05 | norm: 0.0000 | dt: 436.51ms | tok/sec: 150135.63 |                 Time Left: 00 hrs :22 mins :11 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00063 | loss: 11.335051 | lr 2.0579e-05 | norm: 0.0000 | dt: 438.12ms | tok/sec: 149583.54 |                 Time Left: 00 hrs :22 mins :15 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms
+step 00064 | loss: 11.321708 | lr 2.0900e-05 | norm: 0.0000 | dt: 445.12ms | tok/sec: 147231.34 |                 Time Left: 00 hrs :22 mins :36 secs 
+  [TIMING] data: 0.0ms | fwd: 0.0ms | loss: 0.0ms | bwd: 0.0ms | clip: 0.0ms | optim: 0.0ms
+  [LAYER] tok_emb: 0.0ms | pos_emb: 0.0ms | mlps: 0.0ms | ln_f: 0.0ms | lm_head: 0.0ms

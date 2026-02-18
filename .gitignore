@@ -1,47 +1,39 @@
-# Ignore everything by default
-*
+# Compiled Object files
+*.o
+*.obj
 
-# Un-ignore directories so we can recurse
-!*/
+# Static Libraries
+*.a
+*.lib
 
-# Un-ignore source files and configuration
-!**/*.cpp
-!**/*.h
-!**/*.cu
-!**/*.cuh
-!**/*.hpp
-!**/*.py
-!**/*.ipynb
-!**/*.md
-!**/*.txt
-!**/*.sh
-!**/*.csv
-!**/Makefile
-!**/Makefile.*
-!**/.gitignore
-!**/.gitattributes
-!**/.gitmodules
-!**/README*
-!**/LICENSE*
+# Shared Libraries
+*.so
+*.dylib
+*.dll
 
-# Re-ignore compiled versions of source types (if they exist)
-**/*.o
-**/*.a
-**/*.so
-**/*.bin
-**/*.npy
-**/*.sqlite
-**/*.nsys-rep
-**/build/
-**/checkpoints/
-**/data/
-**/lib/objects/
+# Executables
+*.exe
+*.out
+*.app
 
-# Ignore Python artifacts
-__pycache__/
-*.pyc
-**/core.*
+# Specific Binaries
+DTensor_v2.0/examples/tensor_parallel_mlp
+DTensor_v2.0/benchmarks/rotate_benchmarking
+DTensor_v2.0/benchmarks/shard_benchmarking
 
-# IDEs
+# Build directories
+build/
+
+# VSCode
 .vscode/
-.idea/
+
+
+
+*.o
+*.log
+*.csv
+DTensor/examples/gpt2_tensor_parallel_test
+DTensor/examples/gpt2_mlp_parallel_test
+DTensor/examples/gpt2_entropy_parallel_test
+DTensor/tests/summa
+*.nvcudmp

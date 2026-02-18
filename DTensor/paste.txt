@@ -1,0 +1,55 @@
+ //cuBLAS is column-major.
+ // (A[M,K] * B[K,N]) = C[M,N]
+ // In Col-major: C_col[N,M] = B_col[N,K] * A_col[K,M]
+ // We are passing in row-major pointers, so we reverse the order
+ // and swap M/N.
+
+
+    // WARNING: This checkpointing method does not save the global layout.
+    // We are forced to assume the loaded tensor is REPLICATED,
+    // with its global shape being equal to the local shape we just read.
+
+
+ dtensor_custom.cpp
+
+dtensor
+ // Allocate blocks for potential data movement/access
+    // (Note: tensor_ already holds the data pointer from TensorLib, 
+    //  but we keep data_block_ for manual memory management if needed later)
+
+setdata
+    // Note: device_mesh is already embedded in layout, no need to sync separately
+
+100 line
+    // Re-allocate temp tensor buffer for new shape
+
+103 line
+// Re-allocate managed blocks
+
+126 line
+ // Swap buffers so tensor_ now holds the local shard
+
+139 line
+    // Gathers local tensors (tensor_) from all ranks into temp_tensor_
+    // Assumes temp_tensor_ is large enough (global size)
+
+checkpointing 
+    // WARNING: This checkpointing method does not save the global layout.
+    // We are forced to assume the loaded tensor is REPLICATED,
+    // with its global shape being equal to the local shape we just read.
+
+
+
+// =========================================================
+// Process Group Management
+// =========================================================
+
+ // Create MPI sub-communicator for this mesh dimension
+ // Color calculation: Convert mesh coordinates (excluding mesh_dim) to a unique integer
+ // Example: [2, 4] mesh, mesh_dim=1, rank 5 has coord [1, 1]
+ //   -> color based on coord[0]=1 (all ranks in same column share this)
+// All ranks that differ only in mesh_dim coordinate
+ // Example: 2D mesh [2, 2], rank 0 at [0, 0], mesh_dim=0
+ // -> group ranks are [0, 2] (coords [0,0] and [1,0])
+
+heres  
