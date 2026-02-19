@@ -371,10 +371,11 @@ public:
                   std::vector<float> weight_data = {},
                   bool use_bias = true,
                   float sd = 0.02f,
-                  int seed = 42
+                  int seed = 42,
+                  bool sync_input = false
                 )
         : mesh_(&mesh), pg_(pg), in_features_(in_features), out_features_(out_features),
-          batch_size_(batch_size), seq_len_(seq_len), use_bias_(use_bias)
+          batch_size_(batch_size), seq_len_(seq_len), use_bias_(use_bias), sync_input_(sync_input)
     {
         int world_size = pg->get_worldsize();
         int rank = pg->get_rank();
@@ -420,6 +421,11 @@ public:
     }
     
     DTensor forward(DTensor& input)   {
+        // CRITICAL FIX: Column Parallel Backward requires All-Reduce on Input Gradient (Partial -> Full)
+        // sync_w_autograd(avg): Forward = Identity (Avg of identical replicas), Backward = Sum (AllReduceSumBackward)
+        if (sync_input_) {
+             input.sync_w_autograd(avg); 
+        }
 
         Layout out_layout(*mesh_, {seq_len_, out_local_});
         DTensor output(*mesh_, pg_, out_layout, "DColumnLinear_output");
@@ -442,6 +448,7 @@ private:
     int64_t batch_size_;
     int64_t seq_len_;
     bool use_bias_;
+    bool sync_input_;
 };
 
 class DRowLinear : public DModule {
@@ -886,8 +893,9 @@ public:
 
         // 2. State Management (Momentum Initialization)
         if (m_.find(param) == m_.end()) {
-            m_[param] = OwnTensor::Tensor::zeros(param->mutable_tensor().shape(), param->mutable_tensor().opts());
-            v_[param] = OwnTensor::Tensor::zeros(param->mutable_tensor().shape(), param->mutable_tensor().opts());
+            TensorOptions opts_f32 = param->mutable_tensor().opts().with_dtype(Dtype::Float32);
+            m_[param] = OwnTensor::Tensor::zeros(param->mutable_tensor().shape(), opts_f32);
+            v_[param] = OwnTensor::Tensor::zeros(param->mutable_tensor().shape(), opts_f32);
         }
 
         // 3. Cached Weight Decay Filtering
@@ -898,6 +906,12 @@ public:
                                p_name.find("ln") == std::string::npos);
         }
         
+        // Skip if gradient is not Float32 (kernel expects float*)
+        if (grad_tensor.dtype() != Dtype::Float32) {
+            std::cerr << "[AdamW] Warning: Skipping non-Float32 gradient for " << param->name() << std::endl;
+            continue;
+        }
+
         TensorGroup& target = wd_cache[param] ? with_wd : no_wd;
 
         // 4. Batch Metadata for GPU
@@ -916,7 +930,7 @@ public:
         OwnTensor::cuda::multi_tensor_adam_cuda(
             g.gpu_params, g.gpu_grads, g.gpu_m, g.gpu_v,
             lr_, beta1_, beta2_, eps_, g.wd,
-            bias_corr1, bias_corr2
+            bias_corr1, bias_corr2, true
         );
     };
 

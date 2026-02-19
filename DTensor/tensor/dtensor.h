@@ -4,17 +4,17 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "process_group/ProcessGroupNCCL.h"
-#include "memory/cachingAllocator.hpp"
+#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/process_group/ProcessGroupNCCL.h"
+// #include "memory/cachingAllocator.hpp"
 
 
-#include "bridge/tensor_ops_bridge.h"
+// #include "bridge/tensor_ops_bridge.h"
 #include "device/Device.h"
 #include "dtype/Dtype.h"
 
-#include "tensor/device_mesh.h"
-#include "tensor/layout.h"
-#include "tensor/placement.h"
+#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/device_mesh.h"
+#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/layout.h"
+#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/placement.h"
 #include "autograd/AutogradOps.h"
 #include "autograd/Engine.h"
 // #include "reverse.cuh"
@@ -24,7 +24,6 @@
 using namespace OwnTensor;
 
 
-extern CachingAllocator gAllocator;
 
 class DTensor {
 public:
@@ -142,8 +141,7 @@ private:
     int size_;
     std::vector<int64_t> shape_; 
     std::string dtype_ = "float32";
-    Block* data_block_;
-    Block* temp_block_;
+
     std::string name_;
     
     // Async collective tracking

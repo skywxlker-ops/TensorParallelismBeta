@@ -346,8 +346,8 @@ SHARD_BENCH_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
+#     memory/cachingAllocator.cpp \
+#     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 SHARD_BENCH_OBJS = $(SHARD_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -364,8 +364,8 @@ INTERCONNECT_BENCH_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
+#     memory/cachingAllocator.cpp \
+#     bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 INTERCONNECT_BENCH_OBJS = $(INTERCONNECT_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -446,8 +446,6 @@ EMBEDDING_EXAMPLE_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 EMBEDDING_EXAMPLE_OBJS = $(EMBEDDING_EXAMPLE_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -464,8 +462,6 @@ DMLP_EMBEDDING_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 DMLP_EMBEDDING_OBJS = $(DMLP_EMBEDDING_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -482,8 +478,6 @@ DMLP_FULL_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 DMLP_FULL_OBJS = $(DMLP_FULL_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -500,8 +494,6 @@ GPT2_PARALLEL_TEST_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 GPT2_PARALLEL_TEST_OBJS = $(GPT2_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -518,8 +510,6 @@ GPT2_ENTROPY_PARALLEL_TEST_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
@@ -536,8 +526,6 @@ GPT2_TP_TEST_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
@@ -558,7 +546,7 @@ GPT2_TP_MLP_TEST_SRCS = \
 # GPT2_CUDA_SRCS = dnn/dist_grad_norm_kernels.cu
 # CUDA_OBJS = $(GPT2_CUDA_SRCS:.cu = .o)
 
-GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o  Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
 
 
 gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
@@ -597,8 +585,6 @@ GPT2_SYNC_VERIFY_TEST_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 GPT2_SYNC_VERIFY_TEST_OBJS = $(GPT2_SYNC_VERIFY_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/MaskOps.o
@@ -615,8 +601,6 @@ GPT2_MLP_PARALLEL_TEST_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 GPT2_MLP_PARALLEL_TEST_OBJS = $(GPT2_MLP_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -634,8 +618,6 @@ GPT2_TENSOR_PARALLEL_TEST_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 GPT2_TENSOR_PARALLEL_TEST_OBJS = $(GPT2_TENSOR_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -656,8 +638,6 @@ DTENSOR_LEAK_TESTS_SRCS = \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNccl.cpp \
-    memory/cachingAllocator.cpp \
-    bridge/tensor_ops_bridge.cpp \
     tensor/placement.cpp
 
 DTENSOR_LEAK_TESTS_OBJS = $(DTENSOR_LEAK_TESTS_SRCS:.cpp=.o) $(CUDA_OBJS)

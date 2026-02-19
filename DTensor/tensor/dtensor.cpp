@@ -1664,7 +1664,7 @@ void DTensor::matmul( DTensor& A,  DTensor& B)  {
     
     // std:: cout<< "["<<shape_[0]<<", "<<shape_[1]<<", "<<shape_[2]<<"] "<<std::endl;
     
-    tensor_ = TensorOpsBridge::matmul(A.tensor_, B.tensor_);
+    tensor_ = autograd::matmul(A.tensor_, B.tensor_);
 }
 
 void DTensor::Linear(  DTensor& Input,  DTensor& Weights,  DTensor& Bias) {
@@ -1682,8 +1682,10 @@ void DTensor::linear_w_autograd(DTensor& Input, DTensor& Weights, DTensor& Bias)
     //   - 2D Linear: input [batch, in_features] @ weight.t() [out_features, in_features].T
     //   - 3D DTensor: input [B, T, C] @ weight [B, C, F] (no transpose needed)
     
-    OwnTensor::Tensor out = OwnTensor::autograd::matmul(Input.tensor_, Weights.tensor_);
-    tensor_ = OwnTensor::autograd::add(out, Bias.tensor_);
+    // OwnTensor::Tensor out = OwnTensor::autograd::matmul(Input.tensor_, Weights.tensor_);
+    // tensor_ = OwnTensor::autograd::add(out, Bias.tensor_);
+    tensor_ = OwnTensor::autograd::addmm(Bias.tensor_, Input.tensor_, Weights.tensor_);
+
 }
 
 void DTensor::linear_w_autograd(DTensor& Input, DTensor& Weights) {

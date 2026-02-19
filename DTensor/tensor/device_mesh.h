@@ -6,7 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <numeric>
-#include "process_group/ProcessGroupNCCL.h"
+#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/process_group/ProcessGroupNCCL.h"
 #include <mpi.h>
 #include <nccl.h>
 
