@@ -6,8 +6,10 @@
 DTensor/main filter=lfs diff=lfs merge=lfs -text
 DTensor/gpt2_tp_test_exec filter=lfs diff=lfs merge=lfs -text
 DTensor/tests/dtensor_leak_tests/dtensor_leak_tests filter=lfs diff=lfs merge=lfs -text
+DTensor_v2.0.zip filter=lfs diff=lfs merge=lfs -text
+*_exec filter=lfs diff=lfs merge=lfs -text
+gpt_train_* filter=lfs diff=lfs merge=lfs -text
 *.nsys-rep filter=lfs diff=lfs merge=lfs -text
 *.sqlite filter=lfs diff=lfs merge=lfs -text
-*_exec filter=lfs diff=lfs merge=lfs -text
 DTensor/TP_MLP_Training_logs/** filter=lfs diff=lfs merge=lfs -text
 DTensor/gpt2_tp_test/TP_MLP_Torch_Logs/** filter=lfs diff=lfs merge=lfs -text
