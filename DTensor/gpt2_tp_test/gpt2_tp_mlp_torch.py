@@ -220,8 +220,9 @@ if __name__ == "__main__":
     model = GPT(config).cuda()
     
     # Count params before TP
+    # Since we need this for max_steps, count on all ranks (before TP model is distributed)
+    num_params = sum(p.numel() for p in model.parameters())
     if rank == 0:
-        num_params = sum(p.numel() for p in model.parameters())
         print(f"Original Parameter Count: {num_params}")
     
     # --- Apply Tensor Parallelism ---
@@ -259,10 +260,10 @@ if __name__ == "__main__":
     opt_t = torch.optim.AdamW(tensor_params, lr=1e-4, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.1, fused=True)
     
     # Training Setup
-    max_steps = 20 # Short run for benchmark
     
     B, T = config.batch_size, config.context_length
     global_batch = 65536
+    max_steps = int(num_params * 5 / global_batch) # Short run for benchmark
     grad_accum_steps = global_batch // (B * T)
 
     # Adjust grad_accum_steps

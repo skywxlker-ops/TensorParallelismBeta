@@ -1502,6 +1502,20 @@ void DTensor::wait() {
     }
 }
 
+void DTensor::register_backward_all_reduce_hook(op_t op) {
+
+    std::shared_ptr<ProcessGroupNCCL> pg = pg_;
+    int size = size_;
+    std::string name = name_;
+    
+    tensor_.register_post_acc_hook(std::make_unique<LambdaPostAccHook>(
+        [pg, size, op, name](const Tensor& grad) {
+
+            pg->all_reduce_async(grad.data(), const_cast<void*>(grad.data()), size, OwnTensor::Dtype::Float32, op, false)->wait();
+        }
+    ));
+}
+
 // void DTensor::sync_async_backward_hook() {
 //     tensor_.register_sync_hook(std::make_unique<LambdaPostAccHook>([this](const Tensor& grad){
 //         pending_work_ = pg_->all_reduce_async(grad.data(), const_cast<void*>(grad.data()), grad.numel(),grad.dtype(), sum, false);

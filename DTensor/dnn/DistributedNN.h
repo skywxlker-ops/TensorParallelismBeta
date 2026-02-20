@@ -372,10 +372,11 @@ public:
                   bool use_bias = true,
                   float sd = 0.02f,
                   int seed = 42,
-                  bool sync_input = false
+                  bool sync_input = false,
+                  bool use_backward_hook = false
                 )
         : mesh_(&mesh), pg_(pg), in_features_(in_features), out_features_(out_features),
-          batch_size_(batch_size), seq_len_(seq_len), use_bias_(use_bias), sync_input_(sync_input)
+          batch_size_(batch_size), seq_len_(seq_len), use_bias_(use_bias), sync_input_(sync_input), use_backward_hook_(use_backward_hook)
     {
         int world_size = pg->get_worldsize();
         int rank = pg->get_rank();
@@ -421,10 +422,10 @@ public:
     }
     
     DTensor forward(DTensor& input)   {
-        // CRITICAL FIX: Column Parallel Backward requires All-Reduce on Input Gradient (Partial -> Full)
-        // sync_w_autograd(avg): Forward = Identity (Avg of identical replicas), Backward = Sum (AllReduceSumBackward)
-        if (sync_input_) {
+      if (sync_input_ && !use_backward_hook_) {
              input.sync_w_autograd(avg); 
+        } else if (use_backward_hook_) {
+             input.register_backward_all_reduce_hook(sum);
         }
 
         Layout out_layout(*mesh_, {seq_len_, out_local_});
@@ -449,6 +450,7 @@ private:
     int64_t seq_len_;
     bool use_bias_;
     bool sync_input_;
+    bool use_backward_hook_;
 };
 
 class DRowLinear : public DModule {
@@ -466,9 +468,11 @@ public:
                 bool use_bias = true,
                 float sd = 0.02f,
                 int seed = 42,
-               bool sync_output = true)
+               bool sync_output = true,
+               bool with_autograd = false
+            )
         : mesh_(&mesh), pg_(pg), in_features_(in_features), out_features_(out_features),
-          batch_size_(batch_size), seq_len_(seq_len), use_bias_(use_bias), sync_output_(sync_output)
+          batch_size_(batch_size), seq_len_(seq_len), use_bias_(use_bias), sync_output_(sync_output), with_autograd_(with_autograd)
     {
         int world_size = pg->get_worldsize();
         int rank = pg->get_rank();
@@ -519,8 +523,12 @@ public:
         output.linear_w_autograd(input, *weight);
         }
         
-        if (sync_output_) {
+        if (sync_output_ && with_autograd_) {
             output.sync_w_autograd();
+            output.wait();
+        }
+        else if (sync_output_ && !with_autograd_) {
+            output.sync();
             output.wait();
         }
         return output;
@@ -549,6 +557,7 @@ private:
     int64_t seq_len_;
     bool use_bias_;
     bool sync_output_;
+    bool with_autograd_;
 };
 
 

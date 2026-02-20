@@ -140,8 +140,11 @@ public:
     
     MLP(GPTConfig config, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg,  DeviceIndex device, uint64_t seed = 1234)
         : ln(config.n_embd),
-          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd,{}, true, seed),
-          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, true, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed)
+          // Correct Arguments: weight_data, use_bias, sd, seed, sync_input, use_backward_hook
+          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd, {}, true, 0.02f, seed, true, true), 
+          
+          // DRowLinear: weight_data, use_bias, sd, seed, sync_output, with_autograd
+          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, true, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed, true, false)
 
     {
         // GPT-2 style initialization - create tensors directly on target device
@@ -170,6 +173,9 @@ public:
     
     // Forward: x [B, T, C] -> [B, T, C]
     DTensor forward( DTensor& x) {
+        
+        // Backward-only sync via Hook is now handled by fc_up (use_backward_hook=true)
+
         // Pre-Norm: ln(x)
         DTensor h(x.get_device_mesh(), x.get_pg(), x.get_layout(), "h_intermediate");
         h.mutable_tensor() = ln.forward(x.mutable_tensor());
