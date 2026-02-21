@@ -71,8 +71,8 @@ struct GPTConfig {
     int64_t batch_size = 8;
     int64_t context_length = 1024;
     int64_t vocab_size = 50304;  // GPT-2 vocab size
-    int64_t n_embd = 384;
-    int64_t n_layers = 3;
+    int64_t n_embd = 768;
+    int64_t n_layers = 6;
 };
 
 // =============================================================================
@@ -141,10 +141,10 @@ public:
     MLP(GPTConfig config, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg,  DeviceIndex device, uint64_t seed = 1234)
         : ln(config.n_embd),
           // Correct Arguments: weight_data, use_bias, sd, seed, sync_input, use_backward_hook
-          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd, {}, true, 0.02f, seed, true, true), 
+          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd, {}, true, 0.02f, seed, false, false), 
           
           // DRowLinear: weight_data, use_bias, sd, seed, sync_output, with_autograd
-          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, true, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed, true, false)
+          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, true, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed, false, false)
 
     {
         // GPT-2 style initialization - create tensors directly on target device
@@ -232,10 +232,13 @@ public:
 
         x = DTensor(mesh, pg, Input_layout, "x_combined");
 
+
         // Create MLP blocks and add to Sequential
         for (int i = 0; i < cfg.n_layers; ++i) {
             mlps.add(std::make_shared<MLP>(config, mesh, pg, device, 1234));
         }
+
+
 
         // Weight sharing scheme (same as PyTorch: self.transformer.wte.weight = self.lm_head.weight)
         // Note: transposed because our Linear stores [in, out] vs PyTorch's [out, in]
@@ -363,11 +366,15 @@ public:
         // Add embeddings
         x.mutable_tensor() = autograd::add(tok_emb, pos_emb);
         
+        x.register_backward_all_reduce_hook(sum);
+
         // --- MLP Blocks ---
         timer_mlp.start_timer();
         x = mlps.forward(x);
 
         t_mlp += timer_mlp.get_elapsed_seconds();
+        
+        x.sync();
         
         // --- Final LayerNorm ---
         timer_ln_f.start_timer();
@@ -427,8 +434,8 @@ int main(int argc, char** argv) {
         config.batch_size = 8;
         config.context_length = 1024;
         config.vocab_size = 50304;
-        config.n_embd = 384;
-        config.n_layers = 3;
+        config.n_embd = 768;
+        config.n_layers = 6;
         
         // Training hyperparameters
         const int B = 8;           // Batch size
@@ -558,6 +565,7 @@ int main(int argc, char** argv) {
         
 
         for (int step = 0; step < max_steps; ++step) {
+            try {
             timer_step.start_timer();
             
             // Validation every 100 steps
@@ -728,6 +736,10 @@ int main(int argc, char** argv) {
             model.reset_timing();
         }
         val_loss_accum_log = -1.0f;  // Reset for next iteration
+            } catch (const std::exception& e) {
+                std::cerr << "EXCEPTION IN RANK " << rank << " AT STEP " << step << ": " << e.what() << std::endl;
+                std::exit(1);
+            }
     }
     if(rank == 0){
             log_file.close();

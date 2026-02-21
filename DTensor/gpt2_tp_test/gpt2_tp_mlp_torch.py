@@ -25,8 +25,8 @@ class GPTConfig:
         self.batch_size = 8
         self.context_length = 1024
         self.vocab_size = 50304
-        self.n_embd = 384
-        self.n_layers = 3
+        self.n_embd = 768
+        self.n_layers = 6
         self.dropout = 0.0 # No dropout in C++ impl usually
 
 # =============================================================================
@@ -294,17 +294,54 @@ if __name__ == "__main__":
     log_file = None
     if rank == 0:
         os.makedirs("TP_MLP_Torch_Logs", exist_ok=True)
-        log_path = f"TP_MLP_Torch_Logs/log_{int(time.time())}.csv"
-        log_file = open(log_path, "w")
-        log_file.write("step,loss,lr,norm,dt_ms,tok_per_sec,time_data,time_fwd,time_loss,time_bwd,time_clip,time_optim,t_tok_emb,t_pos_emb,t_mlp,t_ln_f,t_lm_head\n")
-        print(f"Logging to {log_path}")
+        log_idx = 1
+        while True:
+            log_filename = f"TP_MLP_Torch_Logs/TP_MLP_Training_log{log_idx}.csv"
+            if not os.path.exists(log_filename):
+                print(f"[DEBUG] Selected new log file: {log_filename}")
+                break
+            log_idx += 1
+            
+        print(f"Saving logs to: {log_filename}")
+        log_file = open(log_filename, "w")
+        log_file.write("step,loss,val_loss,lr,norm,dt_ms,tok_per_sec, timer_data, timer_fwd, timer_loss, timer_bwd, timer_clip, timer_optim, timer_tok_emb, timer_pos_emb, timer_mlp, timer_ln_f, timer_lm_head \n")
 
+    val_loss_accum_log = -1.0
+    
     # Training Loop
     t_start = time.time()
+    total_dt_ms = 0.0
     
     for step in range(max_steps):
         t0 = time.time()
         
+        # Validation
+        if step % 100 == 0 or step == max_steps - 1:
+            val_loader.reset()
+            val_loss_accum = 0.0
+            val_loss_steps = 20
+            
+            model.eval()
+            with torch.no_grad():
+                for _ in range(val_loss_steps):
+                    if rank == 0:
+                        x_val, y_val = val_loader.next_batch()
+                    else:
+                        x_val = torch.empty((B, T), dtype=torch.long, device="cuda")
+                        y_val = torch.empty((B, T), dtype=torch.long, device="cuda")
+                    
+                    dist.broadcast(x_val, src=0)
+                    dist.broadcast(y_val, src=0)
+                    
+                    logits_val = model(x_val)
+                    loss_val = F.cross_entropy(logits_val.view(-1, config.vocab_size), y_val.view(-1))
+                    val_loss_accum += loss_val.item() / val_loss_steps
+            model.train()
+            
+            if rank == 0:
+                print(f"validation loss: {val_loss_accum:.4f}")
+                val_loss_accum_log = val_loss_accum
+                
         opt_dt.zero_grad()
         opt_t.zero_grad()
         loss_accum = 0.0
@@ -410,17 +447,27 @@ if __name__ == "__main__":
         
         t1 = time.time()
         dt = t1 - t0
-        tokens_per_sec = (B * T * grad_accum_steps) / dt
+        dt_ms = dt * 1000.0
+        total_dt_ms += dt_ms
+        avg_dt_ms = total_dt_ms / (step + 1)
+        
+        tokens_per_sec = (B * T * grad_accum_steps) / (dt_ms / 1000.0)
+        
+        steps_left = max_steps - step - 1
+        time_left_ms = steps_left * avg_dt_ms
+        time_left_hrs = int(time_left_ms / (1000 * 60 * 60))
+        time_left_mins = int((time_left_ms % (1000 * 60 * 60)) / (1000 * 60))
         
         if rank == 0:
-            print(f"step {step:5d} | loss: {loss_accum:.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
+            print(f"step {step:05d} | loss: {loss_accum:.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt_ms:.2f}ms | tok/sec: {tokens_per_sec:.2f} |       Time Left: {time_left_hrs} hrs : {time_left_mins:02d} mins ")
             print(f"  [TIMING] data: {c_data*1000:.1f}ms | fwd: {c_fwd*1000:.1f}ms | loss: {c_loss*1000:.1f}ms | bwd: {c_bwd*1000:.1f}ms | clip: {c_clip*1000:.1f}ms | optim: {c_optim*1000:.1f}ms")
             # Model Layer Timings
             print(f"  [LAYER] tok_emb: {model.t_tok_emb*1000:.1f}ms | pos_emb: {model.t_pos_emb*1000:.1f}ms | mlps: {model.t_mlp*1000:.1f}ms | ln_f: {model.t_ln_f*1000:.1f}ms | lm_head: {model.t_lm_head*1000:.1f}ms")
 
-            log_file.write(f"{step},{loss_accum},{lr},{norm},{dt*1000},{tokens_per_sec},{c_data*1000},{c_fwd*1000},{c_loss*1000},{c_bwd*1000},{c_clip*1000},{c_optim*1000},"
+            log_file.write(f"{step},{loss_accum},{val_loss_accum_log},{lr},{norm},{dt_ms},{tokens_per_sec},{c_data*1000},{c_fwd*1000},{c_loss*1000},{c_bwd*1000},{c_clip*1000},{c_optim*1000},"
                            f"{model.t_tok_emb*1000},{model.t_pos_emb*1000},{model.t_mlp*1000},{model.t_ln_f*1000},{model.t_lm_head*1000}\n")
             log_file.flush()
+            val_loss_accum_log = -1.0
         
         # Reset Layer Timings
         model.reset_timing()

@@ -540,7 +540,7 @@ GPT2_TP_MLP_TEST_SRCS = \
     gpt2_tp_test/gpt2_tp_mlp_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl.cpp \
+    process_group/processGroupNCCL.cpp \
     tensor/placement.cpp \
     
 # GPT2_CUDA_SRCS = dnn/dist_grad_norm_kernels.cu

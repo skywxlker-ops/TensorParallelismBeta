@@ -1,0 +1,115 @@
+Catchpoint 1 (throw)
+Catchpoint 1 (throw)
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+[New Thread 0x7fffb39ff000 (LWP 16858)]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+[New Thread 0x7fffb39ff000 (LWP 16861)]
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+=== GPT-2 Tensor Parallel Training Script ===
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+[New Thread 0x7fffb0dff000 (LWP 16862)]
+[New Thread 0x7fffb0dff000 (LWP 16863)]
+[New Thread 0x7fffa8dde000 (LWP 16878)]
+[New Thread 0x7fff9cdde000 (LWP 16879)]
+[New Thread 0x7fffa8dde000 (LWP 16880)]
+[New Thread 0x7fff9cdde000 (LWP 16881)]
+[New Thread 0x7fff96dde000 (LWP 16882)]
+[Thread 0x7fff96dde000 (LWP 16882) exited]
+[New Thread 0x7fff96dde000 (LWP 16883)]
+[New Thread 0x7fff96dde000 (LWP 16884)]
+[New Thread 0x7fff7c9ff000 (LWP 16885)]
+[New Thread 0x7fff7c9ff000 (LWP 16886)]
+[New Thread 0x7fff760e0000 (LWP 16888)]
+[New Thread 0x7fff760e0000 (LWP 16887)]
+
+Initializing model on CUDA device 0...
+
+Initializing model on CUDA device 1...
+Number of parameters: 21485952
+Number of steps: 1639
+Number of warmup_steps: 163
+found 3 shards for split train
+found 1 shards for split val
+
+Starting training...
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log1.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log1.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log2.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log2.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log3.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log3.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log4.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log4.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log5.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log5.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log6.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log6.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log7.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log7.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log8.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log8.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log9.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log9.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log10.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log10.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log11.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log11.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log12.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log12.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log13.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log13.csv") -> Exists: YES
+[DEBUG] Checking log file: TP_MLP_Training_logs/TP_MLP_Training_log14.csv (Absolute: "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/TP_MLP_Training_logs/TP_MLP_Training_log14.csv") -> Exists: NO
+[DEBUG] Selected new log file: TP_MLP_Training_logs/TP_MLP_Training_log14.csv
+Saving logs to: TP_MLP_Training_logs/TP_MLP_Training_log14.csv
+found 3 shards for split train
+[New Thread 0x7fff74ebe000 (LWP 16898)]
+[New Thread 0x7fff6ffff000 (LWP 16899)]
+found 1 shards for split val
+
+Thread 1 "gpt2_tp_mlp_tes" hit Catchpoint 1 (exception thrown), 0x00007fffe00ae4a1 in __cxa_throw () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#0  0x00007fffe00ae4a1 in __cxa_throw () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#1  0x0000555555777cce in OwnTensor::convert_type_cuda<long, unsigned short> (input=<optimized out>, output=<optimized out>, n=1024, stream=stream@entry=0x5555586224a0) at /usr/include/c++/11/bits/allocator.h:174
+#2  0x000055555576d5ea in operator()<short unsigned int> (dst_type_placeholder=0, __closure=<optimized out>) at src/Kernels/cuda/ConversionKernels.cu:192
+#3  0x0000555555612143 in OwnTensor::Tensor::as_type (this=<optimized out>, new_dtype=new_dtype@entry=OwnTensor::Dtype::UInt16) at src/core/AsTypeTensor.cpp:37
+#4  0x0000555555635764 in OwnTensor::autograd::embedding (weight=..., indices=...) at src/autograd/operations/EmbeddingOps.cpp:103
+#5  0x00005555555d81da in Embedding::forward (indices=..., this=0x7fffffffcb90) at gpt2_tp_test/gpt2_tp_mlp_test.cpp:102
+#6  GPT::forward (this=this@entry=0x7fffffffca00, idx=...) at gpt2_tp_test/gpt2_tp_mlp_test.cpp:357
+#7  0x00005555555b2733 in main (argc=<optimized out>, argv=<optimized out>) at gpt2_tp_test/gpt2_tp_mlp_test.cpp:574
+A debugging session is active.
+
+	Inferior 1 [process 16855] will be killed.
+
+Quit anyway? (y or n) [answered Y; input not from terminal]
+Exception ignored in: <gdb._GdbOutputFile object at 0x714bf84a1180>
+Traceback (most recent call last):
+  File "/usr/share/gdb/python/gdb/__init__.py", line 47, in flush
+    def flush(self):
+KeyboardInterrupt: 
+--------------------------------------------------------------------------
+prterun has exited due to process rank 1 with PID 16784 on node blubridge25-MS-7E06 exiting
+improperly. There are three reasons this could occur:
+
+1. this process did not call "init" before exiting, but others in the
+job did. This can cause a job to hang indefinitely while it waits for
+all processes to call "init". By rule, if one process calls "init",
+then ALL processes must call "init" prior to termination.
+
+2. this process called "init", but exited without calling "finalize".
+By rule, all processes that call "init" MUST call "finalize" prior to
+exiting or it will be considered an "abnormal termination"
+
+3. this process called "MPI_Abort" or "prte_abort" and the mca
+parameter prte_create_session_dirs is set to false. In this case, the
+run-time cannot detect that the abort call was an abnormal
+termination. Hence, the only error message you will receive is this
+one.
+
+This may have caused other processes in the application to be
+terminated by signals sent by prterun (as reported here).
+
+You can avoid this message by specifying -quiet on the prterun command
+line.
+--------------------------------------------------------------------------
