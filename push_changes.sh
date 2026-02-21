@@ -9,36 +9,43 @@ fi
 
 COMMIT_MESSAGE="$1"
 
-# Step 1: Push changes in the submodule
+# --- Step 1: Submodule Processing ---
 echo ">>> Processing submodule: DTensor/Tensor-Implementations"
-cd DTensor/Tensor-Implementations || { echo "Error: Could not enter DTensor/Tensor-Implementations"; exit 1; }
+cd DTensor/Tensor-Implementations || { echo "Error: Could not enter submodule"; exit 1; }
 
-# Check for changes in the submodule
 if [[ -n $(git status --porcelain) ]]; then
     echo "Staging and committing submodule changes..."
     git add .
     git commit -m "$COMMIT_MESSAGE"
-    echo "Pushing submodule changes to branch _adhi_merge_..."
     git push origin _adhi_merge_
 else
     echo "No changes detected in submodule."
 fi
 
-# Step 2: Push changes in the parent repository
-echo ""
-echo ">>> Processing parent repository"
+# --- Step 2: Parent Repository Processing ---
+echo -e "\n>>> Processing parent repository"
 cd ../.. || { echo "Error: Could not return to parent directory"; exit 1; }
 
-# Check for changes in the parent repository (including submodule pointer update)
+# ENSURE LFS TRACKING (Pre-emptive)
+echo "Ensuring LFS tracking for large binaries and logs..."
+git lfs track "*.nsys-rep" "*.sqlite" "*.bin" "*.pt" "*_exec" \
+             "DTensor/TP_MLP_Training_logs/**" \
+             "DTensor/gpt2_tp_test/TP_MLP_Torch_Logs/**" > /dev/null
+git add .gitattributes
 if [[ -n $(git status --porcelain) ]]; then
     echo "Staging and committing parent repository changes..."
     git add .
     git commit -m "$COMMIT_MESSAGE"
+
+    # CRITICAL: Migrate the commit just made to ensure binaries are LFS pointers
+    echo "Migrating large files to LFS pointers..."
+    git lfs migrate import --include-ref=_adhi_ --include="*.nsys-rep,*.sqlite,*.bin,*.pt,*_exec,DTensor/TP_MLP_Training_logs/**,DTensor/gpt2_tp_test/TP_MLP_Torch_Logs/**" --yes
+
     echo "Pushing parent repository changes to branch _adhi_..."
-    git push origin _adhi_
+    # Use --force because migrate rewrites the local commit history
+    git push origin _adhi_ --force
 else
     echo "No changes detected in parent repository."
 fi
 
-echo ""
-echo ">>> All done!"
+echo -e "\n>>> All done!"
