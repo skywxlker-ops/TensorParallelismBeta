@@ -118,6 +118,7 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
         OwnTensor::TensorOptions opts;
         opts.dtype = OwnTensor::Dtype::Float32;
         opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, local_gpu);
+        opts.pinten = OwnTensor::Pinned_Flag(Pinned_Flag::Portable);
         OwnTensor::Shape shape{shape_};
         // tensor_ = OwnTensor::Tensor(shape, opts);
         // opts.with_req_grad(true);    

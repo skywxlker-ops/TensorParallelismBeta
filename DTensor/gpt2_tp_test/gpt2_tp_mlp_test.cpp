@@ -71,8 +71,8 @@ struct GPTConfig {
     int64_t batch_size = 8;
     int64_t context_length = 1024;
     int64_t vocab_size = 50304;  // GPT-2 vocab size
-    int64_t n_embd = 768;
-    int64_t n_layers = 6;
+    int64_t n_embd = 384;
+    int64_t n_layers = 3;
 };
 
 // =============================================================================
@@ -229,17 +229,19 @@ public:
         lm_head.to(device);
         
         Layout Input_layout(mesh,{config.batch_size,config.context_length,config.n_embd});
-
+        
+        std::cout << "  Before X DTensor" << std::endl;
         x = DTensor(mesh, pg, Input_layout, "x_combined");
+        std::cout << "  After X DTensor" << std::endl;
 
 
         // Create MLP blocks and add to Sequential
         for (int i = 0; i < cfg.n_layers; ++i) {
             mlps.add(std::make_shared<MLP>(config, mesh, pg, device, 1234));
         }
-
-
-
+        
+        
+        
         // Weight sharing scheme (same as PyTorch: self.transformer.wte.weight = self.lm_head.weight)
         // Note: transposed because our Linear stores [in, out] vs PyTorch's [out, in]
         wte.weight = lm_head.weight.t();
@@ -434,8 +436,8 @@ int main(int argc, char** argv) {
         config.batch_size = 8;
         config.context_length = 1024;
         config.vocab_size = 50304;
-        config.n_embd = 768;
-        config.n_layers = 6;
+        config.n_embd = 384;
+        config.n_layers = 3;
         
         // Training hyperparameters
         const int B = 8;           // Batch size
@@ -456,7 +458,6 @@ int main(int argc, char** argv) {
         std::cout << "  B=" << B << ", T=" << T << std::endl;
         std::cout << "  global_batch: " << global_batch << std::endl;
         std::cout << "  grad_accum_steps: " << grad_accum_steps << std::endl;
-        // std::cout << "  Weight Tying: DISABLED" << std::endl;
         
         // Set device - GPU-0 for training
         // int gpu_device = 0;  // Use GPU-0
@@ -500,7 +501,7 @@ int main(int argc, char** argv) {
         dnn::AdamW optimizer(max_lr, 0.9f, 0.95f, 1e-8f, 0.1f);
         
         // Create data loaders
-        std::string data_root = "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Data_Loader/Data/";
+        std::string data_root = "/home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Data_Loader/Data/";
         DataLoaderLite train_loader(B, T, 0, 1, "train", data_root, true, 100000000);
         DataLoaderLite val_loader(B, T, 0, 1, "val", data_root, true, 100000000);
         

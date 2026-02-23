@@ -30,7 +30,7 @@
 #include "mlp/activation.h"
 #include "autograd/operations/EmbeddingOps.h"
 #include "nn/NN.h"
-#include "nn/DistributedNN.h"
+#include "dnn/DistributedNN.h"
 
 
 // Dataloader
@@ -101,6 +101,8 @@ public:
         // Use autograd-aware embedding function for proper gradient flow
         return autograd::embedding(weight, indices);
     }
+
+    void clear_own_params() { params_.clear(); }
     
 private:
     int64_t vocab_size_;
@@ -131,15 +133,18 @@ private:
 
 class MLP : public dnn::DModule {
 public:
-    dnn::DLayerNorm ln;       // LayerNorm before MLP
+    nn::LayerNorm ln;       // LayerNorm before MLP
     dnn::DColumnLinear fc_up;       // Linear(n_embd, 4*n_embd)
     dnn::DRowLinear fc_down;     // Linear(4*n_embd, n_embd)
     dnn::DGeLU gelu;
     
     MLP(GPTConfig config, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg,  DeviceIndex device, uint64_t seed = 1234)
         : ln(config.n_embd),
-          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd,{}, false, seed),
-          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, false, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed + 5)
+          // Correct Arguments: weight_data, use_bias, sd, seed, sync_input, use_backward_hook
+          fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd, 4 * config.n_embd, {}, true, 0.02f, seed, false, false), 
+          
+          // DRowLinear: weight_data, use_bias, sd, seed, sync_output, with_autograd
+          fc_down(mesh, pg, config.batch_size, config.context_length,  4 * config.n_embd, config.n_embd, {}, true, 0.02f * (1.0f / std::sqrt(2.0f * static_cast<float>(config.n_layers))), seed, false, false)
 
     {
         // GPT-2 style initialization - create tensors directly on target device
@@ -158,11 +163,22 @@ public:
         register_module(fc_up);
         register_module(fc_down);
     }
+
+    using dnn::DModule::register_module;
+    
+    void register_module(nn::LayerNorm& m) {
+        register_parameter(&m.weight);
+        if(m.bias.is_valid()) register_parameter(&m.bias);
+    }
     
     // Forward: x [B, T, C] -> [B, T, C]
     DTensor forward( DTensor& x) {
+        
+        // Backward-only sync via Hook is now handled by fc_up (use_backward_hook=true)
+
         // Pre-Norm: ln(x)
-        DTensor h = ln.forward(x);
+        DTensor h(x.get_device_mesh(), x.get_pg(), x.get_layout(), "h_intermediate");
+        h.mutable_tensor() = ln.forward(x.mutable_tensor());
         
         // Up projection + GELU + Down projection
         h = fc_up.forward(h);
@@ -185,14 +201,17 @@ private:
 class GPT : public dnn::DModule {
 public:
     GPTConfig config;
-    dnn::DEmbedding wte;  // Token embedding
-    dnn::DEmbedding wpe;  // Position embedding
+    DeviceMesh &mesh;
+    DTensor x;
+    dnn::DEmbeddingVParallel wte;  // Token embedding
+    Embedding wpe;  // Position embedding
     dnn::DSequential mlps;
-    dnn::DLayerNorm ln_f; // Final LayerNorm
-    dnn::DLMHead lm;
-    DTensor pos;
+    nn::LayerNorm ln_f; // Final LayerNorm
+    nn::Linear lm_head;  // Output projection [n_embd, vocab_size], bias=False
+    // Tensor& W_out;
+    Tensor pos;
     DTensor logits;
-    DTensor Didx;  // Input token indices
+    // DTensor Didx;  // Input token indices
 
     // Component timing (accumulated per step, reset after printing)
     double t_tok_emb = 0, t_pos_emb = 0, t_mlp = 0, t_ln_f = 0, t_lm_head = 0;
@@ -200,17 +219,31 @@ public:
 
     GPT(GPTConfig cfg, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg, DeviceIndex device, uint64_t seed = 1234)
         : config(cfg), 
-          wte(mesh, pg, cfg.vocab_size, cfg.n_embd),
-          wpe(mesh, pg, cfg.context_length, cfg.n_embd, seed + 100),
-          lm(mesh, pg, cfg.batch_size, cfg.context_length, cfg.n_embd, cfg.vocab_size, true, wte.weight.get()),
-          ln_f(cfg.n_embd)
+          mesh(mesh),
+          wte(cfg.vocab_size, cfg.n_embd, device, seed = 1234),
+          wpe(cfg.context_length, cfg.n_embd, device),
+          ln_f(cfg.n_embd),
+          lm_head(cfg.n_embd, cfg.vocab_size, false)
     {
         ln_f.to(device);
+        lm_head.to(device);
         
+        Layout Input_layout(mesh,{config.batch_size,config.context_length,config.n_embd});
+
+        x = DTensor(mesh, pg, Input_layout, "x_combined");
+
+
         // Create MLP blocks and add to Sequential
         for (int i = 0; i < cfg.n_layers; ++i) {
-            mlps.add(std::make_shared<MLP>(config, mesh, pg, device, seed + 200 + i * 10));
+            mlps.add(std::make_shared<MLP>(config, mesh, pg, device, 1234));
         }
+
+
+
+        // Weight sharing scheme (same as PyTorch: self.transformer.wte.weight = self.lm_head.weight)
+        // Note: transposed because our Linear stores [in, out] vs PyTorch's [out, in]
+        wte.weight = lm_head.weight.t();
+        wte.clear_own_params();  // lm_head owns the weight; avoid double-counting in parameters()
         
         // Separate output projection weight (no weight tying)
         // Shape: [n_embd, vocab_size] to compute: hidden @ W_out = logits
@@ -219,28 +252,61 @@ public:
         //                                   .with_req_grad(true);
         // // Use same initialization as token embeddings (std=0.02)
 
-        Layout pos_layout (mesh,{1, config.context_length});
-        pos = DTensor(mesh, pg, pos_layout, "Pos DTensor");
+        // Layout pos_layout (mesh,{1, config.context_length});
+        // pos = DTensor(mesh, pg, pos_layout, "Pos DTensor");
 
         std::vector<float> pos_data(config.context_length);
         for (int64_t i = 0; i < config.context_length; ++i) {
                 pos_data[i] = static_cast<float>(i);
         }
-        pos.setData(pos_data);
+        // pos.setData(pos_data);
 
         // Initialize input indices DTensor
-        Layout idx_layout(mesh, {cfg.batch_size, cfg.context_length});
-        Didx = DTensor(mesh, pg, idx_layout, "InputIndices");
+        // Layout idx_layout(mesh, {cfg.batch_size, cfg.context_length});
+        // Didx = DTensor(mesh, pg, idx_layout, "InputIndices");
 
 
 
  
 
-        register_module(wte);
+        // Don't register wte - its weight is a view of lm_head.weight (weight tying).
+        // lm_head owns and registers the shared weight; registering wte would double-count it.
         register_module(wpe);
         register_module(mlps);
         register_module(ln_f);
-        register_module(lm);
+        register_module(lm_head);
+
+        // Initialize W_out
+        // TensorOptions opts = TensorOptions().with_dtype(Dtype::Float32)
+        //                                   .with_device(device)
+        //                                   .with_req_grad(true);
+        // W_out = Tensor::randn<float>(Shape{{config.n_embd, config.vocab_size}}, opts, seed + 500, 0.02f);
+        // W_out = wte.weight.t();
+        // register_parameter(&W_out);
+    }
+
+    // using dnn::DModule::register_module;
+    // void register_module(nn::LayerNorm& m) {
+    //     register_parameter(&m.weight);
+    //     if(m.bias.is_valid()) register_parameter(&m.bias);
+    // void register_module(Embedding& m) {
+    //     register_parameter(&m.weight);
+    // }
+    
+    using dnn::DModule::register_module;
+
+    void register_module(Embedding& m) {
+        register_parameter(&m.weight);
+    }
+
+    void register_module(nn::LayerNorm& m) {
+        register_parameter(&m.weight);
+        if(m.bias.is_valid()) register_parameter(&m.bias);
+    }
+
+    void register_module(nn::Linear& m) {
+        register_parameter(&m.weight);
+        if(m.bias.is_valid()) register_parameter(&m.bias);
     }
     
     void reset_timing() {
@@ -259,58 +325,66 @@ public:
     }
 
     // Forward: indices [B, T] -> logits [B, T, vocab_size]
-    DTensor forward(DTensor& idx) {
-        // auto shape = idx.shape().dims;
-        // int64_t B = shape[0];
-        // int64_t T = shape[1];
+    DTensor forward(Tensor& idx) {
+        auto shape = idx.shape().dims;
+        int64_t B = shape[0];
+        int64_t T = shape[1];
         
         // Create position indices [T]
-        //  = Tensor(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64).with_device(idx.device()));
-        // {
-        //     Tensor pos_cpu(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64));
+        pos = Tensor(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64).with_device(idx.device()));
+        {
+            Tensor pos_cpu(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64));
+            int64_t* data = pos_cpu.data<int64_t>();
+            for(int i=0; i<T; ++i) {
+                data[i] = i;
+            }
             
-        //     if (idx.device().is_cuda()) {
-        //         pos = pos_cpu.to(idx.device());
-        //     } else {
-        //         pos = pos_cpu;
-        //     }
-        // }
+            if (idx.device().is_cuda()) {
+                pos = pos_cpu.to(idx.device());
+            } else {
+                pos = pos_cpu;
+            }
+        }
         
         // --- Token Embedding ---
 
         // --- Token Embedding ---
 
         timer_tok_emb.start_timer();
-        DTensor tok_emb = wte.forward(idx);  // [B, T, C]
+        Tensor tok_emb = wte.forward(idx);  // [B, T, C]
 
         t_tok_emb += timer_tok_emb.get_elapsed_seconds();
 
         // --- Position Embedding ---
         timer_pos_emb.start_timer();
-        DTensor pos_emb = wpe.forward(pos);  // [1, T, C] - broadcasts
+        Tensor pos_emb = wpe.forward(pos);  // [1, T, C] - broadcasts
 
         t_pos_emb += timer_pos_emb.get_elapsed_seconds();
         
         // Properly construct x with mesh/pg/layout from embedding output
-        DTensor x(tok_emb.get_device_mesh(), tok_emb.get_pg(), tok_emb.get_layout(), "x_combined");
+ 
         // Add embeddings
-        x.mutable_tensor() = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
+        x.mutable_tensor() = autograd::add(tok_emb, pos_emb);
         
+        x.register_backward_all_reduce_hook(sum);
+
         // --- MLP Blocks ---
         timer_mlp.start_timer();
         x = mlps.forward(x);
 
         t_mlp += timer_mlp.get_elapsed_seconds();
         
+        x.sync();
+        
         // --- Final LayerNorm ---
         timer_ln_f.start_timer();
-        x = ln_f.forward(x);
+        x.mutable_tensor() = ln_f.forward(x.mutable_tensor());
 
         t_ln_f += timer_ln_f.get_elapsed_seconds();
 
         // --- LM Head ---
         timer_lm_head.start_timer();
-        logits = lm.forward(x);
+        logits.mutable_tensor() = autograd::matmul(x.mutable_tensor(), wte.weight.t());
 
         t_lm_head += timer_lm_head.get_elapsed_seconds();
         
@@ -371,10 +445,8 @@ int main(int argc, char** argv) {
         
         const float max_lr = 1e-4f;  
         const float min_lr = max_lr * 0.1f;
-        const int warmup_steps = 259;
-        const int max_steps = 2584;
-
-
+        
+        
         
         std::cout << "Configuration:" << std::endl;
         std::cout << "  vocab_size: " << config.vocab_size << std::endl;
@@ -399,7 +471,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < world_size; i++) ranks_vec[i] = i;
         DeviceMesh mesh({world_size}, ranks_vec);
         auto pg = mesh.get_process_group(0);
-
+        
         std::cout << "\nInitializing model on CUDA device "<< device.index << "..." << std::endl;
         
         // Create model
@@ -409,10 +481,16 @@ int main(int argc, char** argv) {
         std::vector<DTensor*> params = model.parameters();
         int64_t num_params = 0;
         for(auto& p : params) num_params += p->mutable_tensor().numel();
-
+        
+                const int max_steps = num_params * 5 / global_batch;
+                const int warmup_steps = max_steps / 10;
+        
         if(rank == 0){
             std::cout << "Number of parameters: " << num_params << std::endl;
+            std::cout << "Number of steps: " << max_steps << std::endl;
+            std::cout << "Number of warmup_steps: " << warmup_steps << std::endl;
         }
+        
         // std::cout << "(Note: More params than weight-tied version due to separate W_out)" << std::endl;
         
         // Get all parameters
@@ -426,6 +504,8 @@ int main(int argc, char** argv) {
         DataLoaderLite train_loader(B, T, 0, 1, "train", data_root, true, 100000000);
         DataLoaderLite val_loader(B, T, 0, 1, "val", data_root, true, 100000000);
         
+        CudaTimer timer_step, timer_data, timer_fwd, timer_loss, timer_bwd, timer_clip, timer_optim;
+        
         if(rank == 0){
             std::cout << "\nStarting training..." << std::endl;
         }
@@ -436,41 +516,56 @@ int main(int argc, char** argv) {
         std::ofstream log_file;
 
         if (rank == 0) {
+            std::filesystem::create_directories("TP_MLP_Training_logs");
             int log_idx = 1;
             while (true) {
-                log_filename = "TP_Training_log" + std::to_string(log_idx) + ".csv";
-                std::ifstream check(log_filename);
-                if (!check.good()) break;
+                log_filename = "TP_MLP_Training_logs/TP_MLP_Training_log" + std::to_string(log_idx) + ".csv";
+                bool exists = std::filesystem::exists(log_filename);
+                std::cout << "[DEBUG] Checking log file: " << log_filename 
+                          << " (Absolute: " << std::filesystem::absolute(log_filename) << ")"
+                          << " -> Exists: " << (exists ? "YES" : "NO") << std::endl;
+                
+                if (!exists) {
+                    std::cout << "[DEBUG] Selected new log file: " << log_filename << std::endl;
+                    break;
+                }
                 log_idx++;
             }
-        
+            
             std::cout << "Saving logs to: " << log_filename << std::endl;
             
             // Save configuration
-            std::string config_filename = "CPP_Training__log" + std::to_string(log_idx) + "_config.txt";
+            std::string config_filename = "TP_MLP_Training_logs/TP_MLP_Training_log" + std::to_string(log_idx) + "_config.txt";
             std::ofstream config_file(config_filename);
             config_file << "Configuration:\n";
-            config_file << "  vocab_size: " << config.vocab_size << "\n";
+            config_file << "  Batch_size: " << B << "\n";
             config_file << "  context_length: " << config.context_length << "\n";
             config_file << "  n_embd: " << config.n_embd << "\n";
+            config_file << "  vocab_size: " << config.vocab_size << "\n";
             config_file << "  n_layers: " << config.n_layers << "\n";
-            config_file << "  B: " << B << "\n";
-            config_file << "  T: " << T << "\n";
             config_file << "  global_batch: " << global_batch << "\n";
             config_file << "  grad_accum_steps: " << grad_accum_steps << "\n";
             config_file << "  Number of parameters: " << num_params << "\n";
+            config_file << "  Max Learning Rate: " << max_lr << "\n";
+            config_file << "  Min Learning Rate: " << min_lr << "\n";
+            config_file << "  Number of steps: " << max_steps << "\n";
+            config_file << "  Number of warmup_steps: " << warmup_steps << "\n";
             config_file.close();
 
             log_file.open(log_filename);
-            log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
+            if (!log_file.is_open()) {
+                std::cerr << "ERROR: Could not open log file " << log_filename << " for writing!" << std::endl;
+                std::exit(1);
+            }
+            log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec, timer_data, timer_fwd, timer_loss, timer_bwd, timer_clip, timer_optim, timer_tok_emb, timer_pos_emb, timer_mlp, timer_ln_f, timer_lm_head \n";
             log_file << std::fixed << std::setprecision(6);
         }
         
         float val_loss_accum_log = -1.0f;  // -1 indicates no validation this step
         
-        CudaTimer timer_step, timer_data, timer_fwd, timer_loss, timer_bwd, timer_clip, timer_optim;
 
         for (int step = 0; step < max_steps; ++step) {
+            try {
             timer_step.start_timer();
             
             // Validation every 100 steps
@@ -481,20 +576,17 @@ int main(int argc, char** argv) {
                 
                 for (int val_step = 0; val_step < val_loss_steps; ++val_step) {
                     Batch batch = val_loader.next_batch();
-                    
-                    model.Didx.mutable_tensor() = batch.input.to(device).as_type(Dtype::Float32);
+                    Tensor x = batch.input.to(device);
                     Tensor y = batch.target.to(device);
                     
-                    DTensor logits = model.forward(model.Didx);
-                    Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
+                    Tensor logits = model.forward(x);
+                    Tensor loss = autograd::sparse_cross_entropy_loss(logits, y);
                     
                     Tensor loss_cpu = loss.to_cpu();
                     val_loss_accum += loss_cpu.data<float>()[0] / static_cast<float>(val_loss_steps);
                 }
                 
-                if(rank == 0){
-                    std::cout << "validation loss: " << std::fixed << std::setprecision(4) << val_loss_accum << std::endl;
-                }
+                std::cout << "validation loss: " << std::fixed << std::setprecision(4) << val_loss_accum << std::endl;
                 val_loss_accum_log = val_loss_accum;
             }
             
@@ -512,22 +604,26 @@ int main(int argc, char** argv) {
                 // --- Data Loading ---
                 timer_data.start_timer();
                 Batch batch = train_loader.next_batch();
-                model.Didx.mutable_tensor() = batch.input.to(device).as_type(Dtype::Float32);
-                Tensor y = batch.target.to(device);
+                Tensor x = batch.input.to(device).as_type(Dtype::Int64);
+                Tensor y = batch.target.to(device).as_type(Dtype::Int64);
         
                 time_data += timer_data.get_elapsed_seconds();
                 
                 // --- Forward Pass ---
                 timer_fwd.start_timer();
-                DTensor logits = model.forward(model.Didx);
+                Tensor logits = model.forward(x);
         
                 time_forward += timer_fwd.get_elapsed_seconds();
                 
                 // --- Loss Computation ---
                 timer_loss.start_timer();
                 // Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
-                Tensor loss = autograd::sparse_cross_entropy_loss(logits.mutable_tensor(),y);
-                loss = loss / grad_accum_steps;
+                Tensor loss = dnn::vocab_parallel_cross_entropy(logits,y);
+                // Use autograd::div (has DivBackward) instead of scalar operator/
+                // which strips grad_fn and breaks the autograd graph
+                Tensor divisor = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 
+                                              static_cast<float>(grad_accum_steps));
+                loss = autograd::div(loss, divisor);
                 loss_accum_gpu = loss_accum_gpu + loss;
         
                 time_loss += timer_loss.get_elapsed_seconds();
@@ -583,7 +679,14 @@ int main(int argc, char** argv) {
             // Compute throughput
             int64_t tokens_processed = static_cast<int64_t>(B) * T * grad_accum_steps;
             double tokens_per_sec = static_cast<double>(tokens_processed) / dt;
-            
+            long long total_sec = static_cast<long long>((max_steps - step) * dt);
+
+           int h = total_sec / 3600;
+           int m = (total_sec % 3600) / 60;
+           int s = total_sec % 60;
+
+
+
             // Print training info
         if(rank == 0){
             std::cout << "step " << std::setw(5) << step 
@@ -592,7 +695,9 @@ int main(int argc, char** argv) {
                         << " | norm: " << std::fixed << std::setprecision(4) << norm 
                         << " | dt: " << std::fixed << std::setprecision(2) << (dt * 1000.0) << "ms"
                         << " | tok/sec: " << std::fixed << std::setprecision(2) << tokens_per_sec 
+                        << " |       Time Left: " << std::setfill('0') << std::setprecision(2) << h << " hrs : "<< m <<" mins "
                         << std::endl;
+            
             
             // Component timing breakdown (in ms)
             std::cout << "  [TIMING] data: " << std::fixed << std::setprecision(1) << (time_data * 1000.0) << "ms"
@@ -606,21 +711,37 @@ int main(int argc, char** argv) {
             
             // Layer-level timing breakdown
             model.print_timing(rank);
-            model.reset_timing();
             
             // Log metrics to CSV
             log_file << step << "," 
-                        << loss_accum << ","
-                        << val_loss_accum_log << ","
-                        << lr << ","
-                        << norm << ","
-                        << (dt * 1000.0) << ","
-                        << tokens_per_sec << "\n";
+            << loss_accum << ","
+            << val_loss_accum_log << ","
+            << lr << ","
+            << norm << ","
+            << (dt * 1000.0) << ","
+            << tokens_per_sec << ","
+            << (time_data * 1000.0) << ","
+            << (time_forward * 1000.0) << ","
+            << (time_loss * 1000.0) << ","
+            << (time_backward * 1000.0) << ","
+            << (time_clip * 1000.0) << ","
+            << (time_optim * 1000.0) << ","
+            << (model.t_tok_emb * 1000.0) << ","
+            << (model.t_pos_emb * 1000.0) << ","
+            << (model.t_mlp * 1000.0) << ","
+            << (model.t_ln_f * 1000.0) << ","
+            << (model.t_lm_head * 1000.0) << "\n";
+
             log_file.flush();
+            model.reset_timing();
         }
-            val_loss_accum_log = -1.0f;  // Reset for next iteration
-        }
-        if(rank == 0){
+        val_loss_accum_log = -1.0f;  // Reset for next iteration
+            } catch (const std::exception& e) {
+                std::cerr << "EXCEPTION IN RANK " << rank << " AT STEP " << step << ": " << e.what() << std::endl;
+                std::exit(1);
+            }
+    }
+    if(rank == 0){
             log_file.close();
             std::cout << "\nTraining log saved to: " << log_filename << std::endl;
         

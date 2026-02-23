@@ -11,8 +11,8 @@ NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -G -arch=sm_86 -ccbin=/home
 TARGET = main
 
 CUDA_HOME      := /usr/local/cuda
-TENSOR_LIB_DIR := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Tensor-Implementations
-TENSOR_LIB_A   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Tensor-Implementations/lib/libtensor.a
+TENSOR_LIB_DIR := /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Tensor-Implementations
+TENSOR_LIB_A   := /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Tensor-Implementations/lib/libtensor.a
 
 INCLUDES = \
     -I. \
@@ -27,7 +27,7 @@ INCLUDES = \
     $(AUTOGRAD_INCLUDES)
 
 LIB_PATHS = \
-    -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/Tensor-Implementations/lib \
+    -L/home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Tensor-Implementations/lib \
 #     -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib \

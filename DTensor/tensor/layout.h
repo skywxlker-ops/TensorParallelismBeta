@@ -6,8 +6,8 @@
 #include <numeric>
 #include <stdexcept>
 #include <memory>
-#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/device_mesh.h"
-#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/placement.h"
+#include "tensor/device_mesh.h"
+#include "tensor/placement.h"
 
 
 // enum class ShardingType {

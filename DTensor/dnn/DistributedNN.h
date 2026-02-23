@@ -569,10 +569,10 @@ public:
     
     DEmbedding(const DeviceMesh& mesh, 
                std::shared_ptr<ProcessGroupNCCL> pg,
-               int64_t num_embeddings, 
+               int64_t vocab_size, 
                int64_t embedding_dim,
                int padding_idx = -1)
-        : mesh_(&mesh), pg_(pg), num_embeddings_(num_embeddings), 
+        : mesh_(&mesh), pg_(pg), num_embeddings_(vocab_size), 
           embedding_dim_(embedding_dim), padding_idx_(padding_idx)
     {
         int world_size = pg->get_worldsize();
@@ -586,15 +586,15 @@ public:
         // REPLICATED STRATEGY: Each rank has the FULL embedding table
         // Simpler, no sharding, no masking needed
         vocab_start_ = 0;
-        vocab_end_ = num_embeddings;
+        vocab_end_ = vocab_size;
         
         // Create full embedding table on each rank
-        Layout weight_layout(mesh, {num_embeddings, embedding_dim  });
+        Layout weight_layout(mesh, {vocab_size, embedding_dim  });
         weight = std::make_unique<DTensor>(mesh, pg, weight_layout, "DEmbedding_weight");
         weight->mutable_tensor().set_requires_grad(true);
         
         // Handle padding index if specified
-        if (padding_idx >= 0 && padding_idx < num_embeddings) {
+        if (padding_idx >= 0 && padding_idx < vocab_size) {
             Tensor cpu_w = weight->mutable_tensor().to_cpu();
             float* data = cpu_w.data<float>();
             std::fill(data + padding_idx * embedding_dim , 
@@ -658,7 +658,7 @@ private:
 
 class DEmbeddingVParallel : public DModule {
 public:
-    int64_t num_embeddings;
+    int64_t vocab_size_;
     int64_t embedding_dim_;
     std::unique_ptr<DTensor> weight;
     
@@ -668,19 +668,19 @@ public:
 
     DEmbeddingVParallel(const DeviceMesh& mesh, 
                        std::shared_ptr<ProcessGroupNCCL> pg,
-                       int64_t num_embeddings, 
+                       int64_t vocab_size, 
                        int64_t embedding_dim)
-        : mesh_(&mesh), pg_(pg), num_embeddings(num_embeddings), embedding_dim_(embedding_dim) {
+        : mesh_(&mesh), pg_(pg), vocab_size_(vocab_size), embedding_dim_(embedding_dim) {
         
         int rank = pg->get_rank();
         int world_size = pg->get_worldsize();
         
-        local_v_ = num_embeddings / world_size;
+        local_v_ = vocab_size / world_size;
         vocab_start_ = rank * local_v_;
         vocab_end_ = (rank + 1) * local_v_;
 
         if (rank == world_size - 1) {
-            vocab_end_ = num_embeddings;
+            vocab_end_ = vocab_size;
             local_v_ = vocab_end_ - vocab_start_;
         }
 
@@ -689,7 +689,7 @@ public:
 
         weight->mutable_tensor().set_requires_grad(true);
 
-        int64_t actual_padding_idx = num_embeddings - 1;
+        int64_t actual_padding_idx = vocab_size - 1;
 
         if (actual_padding_idx >= vocab_start_ && actual_padding_idx < vocab_end_) {
             int64_t local_pad_idx = actual_padding_idx - vocab_start_;

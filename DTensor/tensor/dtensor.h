@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 #include <cuda_runtime.h>
-#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/process_group/ProcessGroupNCCL.h"
+#include "process_group/ProcessGroupNCCL.h"
 // #include "memory/cachingAllocator.hpp"
 
 
@@ -12,9 +12,9 @@
 #include "device/Device.h"
 #include "dtype/Dtype.h"
 
-#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/device_mesh.h"
-#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/layout.h"
-#include "/home/blu-bridge25/Study/Code/TensorParallelismBeta/DTensor/tensor/placement.h"
+#include "tensor/device_mesh.h"
+#include "tensor/layout.h"
+#include "tensor/placement.h"
 #include "autograd/AutogradOps.h"
 #include "autograd/Engine.h"
 // #include "reverse.cuh"
