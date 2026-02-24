@@ -525,10 +525,10 @@ GPT2_TP_TEST_SRCS = \
     gpt2_tp_test/gpt2_tp_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
-    process_group/processGroupNccl.cpp \
+    process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
 
 gpt2_tp_test: $(GPT2_TP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: gpt2_tp_test_exec"

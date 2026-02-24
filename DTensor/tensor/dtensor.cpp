@@ -1927,7 +1927,9 @@ void DTensor::display(){
     tensor_.display();
 }
 
-
+// void DTensor::Setops(OwnTensor){
+//     Tensor_.
+// }
 
 
 

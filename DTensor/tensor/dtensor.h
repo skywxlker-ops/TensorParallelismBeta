@@ -7,7 +7,7 @@
 #include "process_group/ProcessGroupNCCL.h"
 // #include "memory/cachingAllocator.hpp"
 
-
+#include "core/Tensor.h"
 // #include "bridge/tensor_ops_bridge.h"
 #include "device/Device.h"
 #include "dtype/Dtype.h"
@@ -22,8 +22,6 @@
 // #include "ad/ag_all.hpp"  
 
 using namespace OwnTensor;
-
-
 
 class DTensor {
 public:
@@ -123,7 +121,7 @@ private:
 
     // DTensor _column_parallel_matmul(const DTensor& other) const;
     // DTensor _row_parallel_matmul(const DTensor& other) const;
-
+    
 
     int rank_;
     int world_size_;

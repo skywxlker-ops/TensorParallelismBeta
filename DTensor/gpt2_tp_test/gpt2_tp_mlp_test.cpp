@@ -73,6 +73,7 @@ struct GPTConfig {
     int64_t vocab_size = 50304;  // GPT-2 vocab size
     int64_t n_embd = 384;
     int64_t n_layers = 3;
+    bool weight_tying = false; // Added
 };
 
 // =============================================================================
@@ -202,16 +203,16 @@ class GPT : public dnn::DModule {
 public:
     GPTConfig config;
     DeviceMesh &mesh;
-    DTensor x;
+    std::shared_ptr<ProcessGroupNCCL> pg_ptr; // Store pg for forward layout
     Embedding wte;  // Token embedding
     Embedding wpe;  // Position embedding
     dnn::DSequential mlps;
     nn::LayerNorm ln_f; // Final LayerNorm
-    nn::Linear lm_head;  // Output projection [n_embd, vocab_size], bias=False
+    std::shared_ptr<nn::Linear> lm_head;  // Output projection [n_embd, vocab_size], bias=False
     // Tensor& W_out;
-    Tensor pos;
+    // Tensor pos;
     Tensor logits;
-    // DTensor Didx;  // Input token indices
+    Tensor cached_pos_; // Position indices cached on GPU
 
     // Component timing (accumulated per step, reset after printing)
     double t_tok_emb = 0, t_pos_emb = 0, t_mlp = 0, t_ln_f = 0, t_lm_head = 0;
@@ -220,62 +221,40 @@ public:
     GPT(GPTConfig cfg, DeviceMesh& mesh, std::shared_ptr<ProcessGroupNCCL>& pg, DeviceIndex device, uint64_t seed = 1234)
         : config(cfg), 
           mesh(mesh),
+          pg_ptr(pg),
           wte(cfg.vocab_size, cfg.n_embd, device, seed = 1234),
           wpe(cfg.context_length, cfg.n_embd, device),
-          ln_f(cfg.n_embd),
-          lm_head(cfg.n_embd, cfg.vocab_size, false)
+          ln_f(cfg.n_embd)
     {
         ln_f.to(device);
-        lm_head.to(device);
-        
-        Layout Input_layout(mesh,{config.batch_size,config.context_length,config.n_embd});
-        
-        std::cout << "  Before X DTensor" << std::endl;
-        x = DTensor(mesh, pg, Input_layout, "x_combined");
-        std::cout << "  After X DTensor" << std::endl;
 
 
         // Create MLP blocks and add to Sequential
         for (int i = 0; i < cfg.n_layers; ++i) {
             mlps.add(std::make_shared<MLP>(config, mesh, pg, device, 1234));
         }
-        
-        
-        
-        // Weight sharing scheme (same as PyTorch: self.transformer.wte.weight = self.lm_head.weight)
-        // Note: transposed because our Linear stores [in, out] vs PyTorch's [out, in]
-        wte.weight = lm_head.weight.t();
-        wte.clear_own_params();  // lm_head owns the weight; avoid double-counting in parameters()
-        
-        // Separate output projection weight (no weight tying)
-        // Shape: [n_embd, vocab_size] to compute: hidden @ W_out = logits
-        // TensorOptions opts = TensorOptions().with_dtype(Dtype::Float32)
-        //                                   .with_device(device)
-        //                                   .with_req_grad(true);
-        // // Use same initialization as token embeddings (std=0.02)
 
-        // Layout pos_layout (mesh,{1, config.context_length});
-        // pos = DTensor(mesh, pg, pos_layout, "Pos DTensor");
+        Layout input_layout(mesh, {B, T, config.n_embd});
+        DTensor current_x(mesh, pg_ptr, input_layout, "x_combined");
 
-        std::vector<float> pos_data(config.context_length);
-        for (int64_t i = 0; i < config.context_length; ++i) {
-                pos_data[i] = static_cast<float>(i);
+        if (!config.weight_tying) {
+            lm_head = std::make_shared<nn::Linear>(cfg.n_embd, cfg.vocab_size, false);
+            lm_head->to(device);
         }
-        // pos.setData(pos_data);
 
-        // Initialize input indices DTensor
-        // Layout idx_layout(mesh, {cfg.batch_size, cfg.context_length});
-        // Didx = DTensor(mesh, pg, idx_layout, "InputIndices");
-
-
-
- 
-
-        // Don't register wte - its weight is a view of lm_head.weight (weight tying).
-        // lm_head owns and registers the shared weight; registering wte would double-count it.
+        // Optimization: cache position tensor once (avoids re-creating + H2D transfer every forward)
+        Tensor pos_cpu(Shape{{1, cfg.context_length}}, TensorOptions().with_dtype(Dtype::Int64));
+        int64_t* pos_data = pos_cpu.data<int64_t>();
+        for (int64_t i = 0; i < cfg.context_length; ++i) {
+            pos_data[i] = i;
+        }
+        cached_pos_ = pos_cpu.to(device);
+        
+        register_module(wte);
         register_module(wpe);
         register_module(mlps);
         register_module(ln_f);
+        if 
         register_module(lm_head);
 
         // Initialize W_out
@@ -290,7 +269,7 @@ public:
     // using dnn::DModule::register_module;
     // void register_module(nn::LayerNorm& m) {
     //     register_parameter(&m.weight);
-    //     if(m.bias.is_valid()) register_parameter(&m.bias);
+    //     if(m.bias.is_valid()) register_parameter(&m.bias);zz
     // void register_module(Embedding& m) {
     //     register_parameter(&m.weight);
     // }
@@ -332,26 +311,7 @@ public:
         int64_t B = shape[0];
         int64_t T = shape[1];
         
-        // Create position indices [T]
-        pos = Tensor(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64).with_device(idx.device()));
-        {
-            Tensor pos_cpu(Shape{{1, T}}, TensorOptions().with_dtype(Dtype::Int64));
-            int64_t* data = pos_cpu.data<int64_t>();
-            for(int i=0; i<T; ++i) {
-                data[i] = i;
-            }
-            
-            if (idx.device().is_cuda()) {
-                pos = pos_cpu.to(idx.device());
-            } else {
-                pos = pos_cpu;
-            }
-        }
-        
         // --- Token Embedding ---
-
-        // --- Token Embedding ---
-
         timer_tok_emb.start_timer();
         Tensor tok_emb = wte.forward(idx);  // [B, T, C]
 
@@ -359,41 +319,40 @@ public:
 
         // --- Position Embedding ---
         timer_pos_emb.start_timer();
-        Tensor pos_emb = wpe.forward(pos);  // [1, T, C] - broadcasts
+        Tensor pos_flat = autograd::reshape(cached_pos_, Shape({{config.context_length}}));
+        Tensor pos_sliced = pos_flat.slice(0, T);
+        Tensor pos_indices = autograd::reshape(pos_sliced, Shape({{1, T}}));
+
+        Tensor pos_emb = wpe.forward(pos_indices);  // [1, T, C] - broadcasts
 
         t_pos_emb += timer_pos_emb.get_elapsed_seconds();
         
-        // Properly construct x with mesh/pg/layout from embedding output
- 
         // Add embeddings
-        x.mutable_tensor() = autograd::add(tok_emb, pos_emb);
+
+        current_x.mutable_tensor() = autograd::add(tok_emb, pos_emb);
         
-        x.register_backward_all_reduce_hook(sum);
+        current_x.register_backward_all_reduce_hook(sum);
 
         // --- MLP Blocks ---
         timer_mlp.start_timer();
-        x = mlps.forward(x);
+        current_x = mlps.forward(current_x);
 
         t_mlp += timer_mlp.get_elapsed_seconds();
         
-        x.sync();
+        current_x.sync();
         
         // --- Final LayerNorm ---
         timer_ln_f.start_timer();
-        x.mutable_tensor() = ln_f.forward(x.mutable_tensor());
+        current_x.mutable_tensor() = ln_f.forward(current_x.mutable_tensor());
 
         t_ln_f += timer_ln_f.get_elapsed_seconds();
 
         // --- LM Head ---
         timer_lm_head.start_timer();
-        logits = autograd::matmul(x.mutable_tensor(), wte.weight.t());
+   
+        logits = lm_head->forward(current_x.mutable_tensor());
 
         t_lm_head += timer_lm_head.get_elapsed_seconds();
-        
-        // Final projection to vocab size [B, T, vocab_size]
-        // Uses separate W_out instead of wte.weight.t()
-
-        // Tensor logits = autograd::matmul(x, W_out);
         
         return logits;
     }
@@ -438,6 +397,7 @@ int main(int argc, char** argv) {
         config.vocab_size = 50304;
         config.n_embd = 384;
         config.n_layers = 3;
+        config.weight_tying = true;
         
         // Training hyperparameters
         const int B = 8;           // Batch size
@@ -447,8 +407,8 @@ int main(int argc, char** argv) {
         
         const float max_lr = 1e-4f;  
         const float min_lr = max_lr * 0.1f;
-        
-        
+        const int VAL_FREQ = 100;
+        const int TOK_GEN_FREQ = 1000;
         
         std::cout << "Configuration:" << std::endl;
         std::cout << "  vocab_size: " << config.vocab_size << std::endl;
@@ -458,6 +418,7 @@ int main(int argc, char** argv) {
         std::cout << "  B=" << B << ", T=" << T << std::endl;
         std::cout << "  global_batch: " << global_batch << std::endl;
         std::cout << "  grad_accum_steps: " << grad_accum_steps << std::endl;
+        std::cout << "  Weight Tying: " << (config.weight_tying ? "ENABLED" : "DISABLED") << std::endl;
         
         // Set device - GPU-0 for training
         // int gpu_device = 0;  // Use GPU-0
@@ -569,8 +530,8 @@ int main(int argc, char** argv) {
             try {
             timer_step.start_timer();
             
-            // Validation every 100 steps
-            if (step % 100 == 0 || step == max_steps - 1) {
+            // Validation every VAL_FREQ steps
+            if (step % VAL_FREQ == 0 || step == max_steps - 1) {
                 val_loader.reset();
                 float val_loss_accum = 0.0f;
                 int val_loss_steps = 20;
@@ -591,6 +552,72 @@ int main(int argc, char** argv) {
                 val_loss_accum_log = val_loss_accum;
             }
             
+            // token generation
+            if(step % TOK_GEN_FREQ == 0 || step == max_steps - 1) {
+                if (rank == 0) std::cout << "--- Generating tokens at step " << step << " ---" << std::endl;
+                int num_return_sequence = 4;
+                int max_length = 60;
+                
+                Tensor xgen = Tensor(Shape({{num_return_sequence, 8}}), 
+                                           TensorOptions().with_dtype(Dtype::Int64).with_device(device));
+                std::vector<int64_t> xgen_tokens = {15496, 11, 314, 1101, 281, 9552, 2746, 11,15496, 11, 314, 1101, 281, 9552, 2746, 11,15496, 11, 314, 1101, 281, 9552, 2746, 11,15496, 11, 314, 1101, 281, 9552, 2746, 11};
+                xgen.set_data(xgen_tokens);
+                                          
+                while (xgen.shape().dims[1] < max_length) {
+                    Tensor logits = model.forward(xgen); 
+                    
+                    int64_t Bg = logits.shape().dims[0];
+                    int64_t Tg = logits.shape().dims[1];
+                    int64_t Vg = logits.shape().dims[2];
+                    
+                    Tensor gather_idx = Tensor::full(Shape({{Bg, 1, Vg}}), 
+                                                     TensorOptions().with_dtype(Dtype::Int64).with_device(device), 
+                                                     static_cast<float>(Tg - 1));
+                    
+                    Tensor last_logits_3d = OwnTensor::gather(logits, 1, gather_idx);
+                    Tensor probs = OwnTensor::autograd::softmax(last_logits_3d, -1);
+                    
+                    auto topk_res = probs.topk(50, -1);
+                    Tensor topk_probs = topk_res.first;
+                    Tensor topk_indices = topk_res.second;
+                    
+                    Tensor topk_probs_2d = OwnTensor::autograd::reshape(topk_probs, Shape({{Bg, 50}}));
+                    Tensor ix;
+                    if (rank == 0) {
+                        ix = Tensor::multinomial(topk_probs_2d, 1);
+                    } else {
+                        // allocate ix on other ranks for broadcast
+                        ix = Tensor::zeros(Shape({{Bg, 1}}), TensorOptions().with_dtype(Dtype::Int64).with_device(device));
+                    }
+
+                    // Sync index to avoid divergence in MP environment
+                    if (world_size > 1) {
+                        ix = ix.contiguous();
+                        pg->broadcast(ix.data<int64_t>(), ix.data<int64_t>(), ix.numel(), OwnTensor::Dtype::Int64, 0, true);
+                    }
+                    
+                    Tensor topk_indices_2d = OwnTensor::autograd::reshape(topk_indices, Shape({{Bg, 50}}));
+                    Tensor next_token = OwnTensor::gather(topk_indices_2d, 1, ix);
+                    
+                    xgen = Tensor::cat({xgen, next_token}, 1);
+                }
+                
+                if (rank == 0) {
+                    Tensor xgen_cpu = xgen.to_cpu();
+                    int64_t* data = xgen_cpu.data<int64_t>();
+                    int64_t Bg = xgen.shape().dims[0];
+                    int64_t Tg = xgen.shape().dims[1];
+                    
+                    for (int i = 0; i < Bg; ++i) {
+                        std::cout << "Sample " << i << ": ";
+                        for (int j = 0; j < Tg; ++j) {
+                            std::cout << data[i * Tg + j] << " ";
+                        }
+                        std::cout << std::endl;
+                    }
+                }
+            }
+
             // Training step with component timing
             double time_data = 0, time_forward = 0, time_loss = 0, time_backward = 0, time_allreduce = 0, time_clip = 0, time_optim = 0;
 
@@ -600,6 +627,9 @@ int main(int argc, char** argv) {
             // Optimized: Accumulate loss on GPU to avoid CPU syncs
             Tensor loss_accum_gpu = Tensor::zeros(Shape{{1}}, TensorOptions().with_device(device));
             
+            static Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(device), 
+                                                     1.0f / static_cast<float>(grad_accum_steps));
+
             for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
                 
                 // --- Data Loading ---
@@ -618,40 +648,21 @@ int main(int argc, char** argv) {
                 
                 // --- Loss Computation ---
                 timer_loss.start_timer();
-                // Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
                 Tensor loss = autograd::sparse_cross_entropy_loss(logits,y);
-                // Use autograd::div (has DivBackward) instead of scalar operator/
-                // which strips grad_fn and breaks the autograd graph
-                Tensor divisor = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 
-                                              static_cast<float>(grad_accum_steps));
-                loss = autograd::div(loss, divisor);
-                loss_accum_gpu = loss_accum_gpu + loss;
+                
+                loss_accum_gpu = loss_accum_gpu + loss.detach();
         
                 time_loss += timer_loss.get_elapsed_seconds();
                 
                 // --- Backward Pass ---
                 timer_bwd.start_timer();
-                Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(loss.device()), 1.0f);
                 loss.backward(&grad_scale);
                 time_backward += timer_bwd.get_elapsed_seconds();
             }
             
-            // --- All-reduce gradients for replicated parameters ---
-            // auto t_ar_start = std::chrono::high_resolution_clock::now();
-            // model.all_reduce_gradients(pg.get());
-    
-            // auto t_ar_end = std::chrono::high_resolution_clock::now();
-            // time_allreduce = std::chrono::duration<double>(t_ar_end - t_ar_start).count();
-
-        //    std::cout<< "Token embedding: " << std::endl;
-        //     model.wte.weight.grad_view().display() ;
-        //     std::cout<< "Position embedding: " << std::endl;
-        //     model.wpe.weight.grad_view().display();
-        //     model.mlps[0].fc_up.weight.grad_view().display();
-            
             // Transfer accumulated loss to CPU once per step
             Tensor loss_cpu = loss_accum_gpu.to_cpu();
-            loss_accum = loss_cpu.data<float>()[0];
+            loss_accum = loss_cpu.data<float>()[0] / static_cast<float>(grad_accum_steps);
             
             // NaN detection - early exit if training goes unstable
             if (std::isnan(loss_accum) || std::isinf(loss_accum)) {

@@ -234,7 +234,8 @@ public:
     virtual Tensor forward(Tensor& input) {
          throw std::runtime_error("DModule::forward not implemented");
     }
-    
+
+  
     virtual std::vector<DTensor*> parameters() {
         std::vector<DTensor*> all_params = params_;
         for (auto* child : children_) {
@@ -428,7 +429,11 @@ public:
              input.register_backward_all_reduce_hook(sum);
         }
 
-        Layout out_layout(*mesh_, {seq_len_, out_local_});
+        auto in_shape = input.get_layout().get_global_shape();
+        std::vector<int64_t> out_shape = in_shape;
+        out_shape.back() = out_local_;
+
+        Layout out_layout(*mesh_, out_shape);
         DTensor output(*mesh_, pg_, out_layout, "DColumnLinear_output");
         if (use_bias_ && bias) {
             output.linear_w_autograd(input, *weight, *bias);
@@ -515,7 +520,11 @@ public:
     
     DTensor forward(DTensor& input)   {
 
-        Layout out_layout(*mesh_, {batch_size_, seq_len_, out_features_});
+        auto in_shape = input.get_layout().get_global_shape();
+        std::vector<int64_t> out_shape = in_shape;
+        out_shape.back() = out_features_;
+
+        Layout out_layout(*mesh_, out_shape);
         DTensor output(*mesh_, pg_, out_layout, "DRowLinear_output");
         if (use_bias_ && bias) {
             output.linear_w_autograd(input, *weight, *bias);
@@ -631,7 +640,7 @@ public:
         
         // No all-reduce needed - all ranks have identical results
         // But we keep sync for gradient synchronization in backward
-        // output.sync_w_autograd();
+        output.sync_w_autograd();
         output.wait();
         
         return output;
@@ -669,7 +678,10 @@ public:
     DEmbeddingVParallel(const DeviceMesh& mesh, 
                        std::shared_ptr<ProcessGroupNCCL> pg,
                        int64_t vocab_size, 
-                       int64_t embedding_dim)
+                       int64_t embedding_dim,
+                       int64_t sd = 0.02f,
+                       int64_t seed = 42
+                    )
         : mesh_(&mesh), pg_(pg), vocab_size_(vocab_size), embedding_dim_(embedding_dim) {
         
         int rank = pg->get_rank();
@@ -685,8 +697,8 @@ public:
         }
 
         Layout weight_layout(mesh, {local_v_, embedding_dim});
-        weight = std::make_unique<DTensor>(mesh, pg, weight_layout, "DEmbeddingVParallel_weight");
-
+        weight = std::make_unique<DTensor>(mesh, pg, weight_layout, "DEmbeddingVParallel_weight", sd, seed );
+        
         weight->mutable_tensor().set_requires_grad(true);
 
         int64_t actual_padding_idx = vocab_size - 1;
@@ -704,26 +716,26 @@ public:
         register_parameter(&weight->mutable_tensor());
     }
 
-    DTensor forward(DTensor& input)   {
-        Tensor indices = input.mutable_tensor();
+    Tensor forward(Tensor& input)   {
+        
         
         // 1. Convert to signed type for safe math
-        Tensor indices_i32 = indices.as_type(Dtype::Int32);
+        Tensor input_i32 = input.as_type(Dtype::Int32);
         
-        // 2. Identify indices in this shard manually to avoid logical_AND CUDA issues
-        Tensor mask_ge = (indices_i32 >= (int32_t)vocab_start_).as_type(Dtype::Float32);
-        Tensor mask_lt = (indices_i32 < (int32_t)vocab_end_).as_type(Dtype::Float32);
+        // 2. Identify input in this shard manually to avoid logical_AND CUDA issues
+        Tensor mask_ge = (input_i32 >= (int32_t)vocab_start_).as_type(Dtype::Float32);
+        Tensor mask_lt = (input_i32 < (int32_t)vocab_end_).as_type(Dtype::Float32);
         Tensor mask_f = autograd::mul(mask_ge, mask_lt);
         
-        // 3. Map to local indices [0, local_v)
-        // We use the float mask to zero out out-of-shard indices before converting to UInt16
-        Tensor local_indices_i32 = (indices_i32 - (int32_t)vocab_start_);
-        Tensor local_indices = (local_indices_i32.as_type(Dtype::Float32) * mask_f).as_type(Dtype::UInt16);
+        // 3. Map to local input [0, local_v)
+        // We use the float mask to zero out out-of-shard input before converting to UInt16
+        Tensor local_input_i32 = (input_i32 - (int32_t)vocab_start_);
+        Tensor local_input = (local_input_i32.as_type(Dtype::Float32) * mask_f).as_type(Dtype::UInt16);
         
         // 4. Local lookup
-        Tensor local_embeds = autograd::embedding(weight->mutable_tensor(), local_indices);
+        Tensor local_embeds = autograd::embedding(weight->mutable_tensor(), local_input);
         
-        // 5. Zero out embeddings for indices not in this shard
+        // 5. Zero out embeddings for input not in this shard
         std::vector<int64_t> mask_dims = mask_f.shape().dims;
         mask_dims.push_back(1);
         Tensor mask_reshaped = autograd::reshape(mask_f, Shape{mask_dims});
@@ -731,14 +743,14 @@ public:
         Tensor partial_embeds = autograd::mul(local_embeds, mask_reshaped);
         
         // 6. Aggregate from all shards using explicit All-Reduce (Autograd-aware)
-        std::vector<int64_t> input_shape = input.get_layout().get_global_shape();
-        Layout out_layout(*mesh_, {input_shape[0], input_shape[1], embedding_dim_});
-        DTensor output(*mesh_, pg_, out_layout, "DEmbeddingVParallel_output");
-        output.mutable_tensor() = partial_embeds;
-        output.sync_w_autograd(); 
-        output.wait();
+        // std::vector<int64_t> input_shape = input.shape();
+        // Layout out_layout(*mesh_, {input.shape().dims[0], input.shape().dims[1], embedding_dim_});
+        // DTensor output(*mesh_, pg_, out_layout, "DEmbeddingVParallel_output");
+        // output.mutable_tensor() = partial_embeds;
+        // output.sync_w_autograd(); 
+        // output.wait();
         
-        return output;
+        return partial_embeds;
     }
 
 private:
