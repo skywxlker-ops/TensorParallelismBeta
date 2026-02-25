@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/test_hgemm_ultra.dir/examples/test_hgemm_ultra.cpp.o -o test_hgemm_ultra  -Wl,-rpath,/home/blu-bridge013/Desktop/BLAS/MyBlas/build:/usr/local/cuda/lib64 libmyblas.so /usr/local/cuda/lib64/libcudart.so /usr/local/cuda/lib64/libcublas.so 
