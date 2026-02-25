@@ -4,3 +4,6 @@
 [submodule "DTensor_v2.0/Tensor-Implementations"]
         path = DTensor_v2.0/Tensor-Implementations
         url = https://github.com/skywxlker-ops/Tensor-Implementations.git
+[submodule "DTensor/Tensor-Implementations"]
+	path = DTensor/Tensor-Implementations
+	url = https://github.com/kathir-23s/Tensor-Implementations
