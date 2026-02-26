@@ -640,7 +640,7 @@ public:
         
         // No all-reduce needed - all ranks have identical results
         // But we keep sync for gradient synchronization in backward
-        output.sync_w_autograd();
+        // output.sync_w_autograd();
         output.wait();
         
         return output;
@@ -663,6 +663,45 @@ private:
     int padding_idx_;
     int64_t vocab_start_;
     int64_t vocab_end_;
+    DTensor output;
+};
+
+// Custom backward node for fused vocab-parallel embedding
+class VocabParallelEmbeddingBackward : public Node {
+    Tensor saved_input_;   // [B, T] int64 token indices
+    Tensor weight_ref_;    // reference to weight tensor (for grad accumulation)
+    int64_t B_, T_, D_;
+    int64_t start_v_, end_v_;
+public:
+    VocabParallelEmbeddingBackward(const Tensor& input, Tensor& weight,
+                                   int64_t B, int64_t T, int64_t D,
+                                   int64_t start_v, int64_t end_v)
+        : Node(1), saved_input_(input), weight_ref_(weight),
+          B_(B), T_(T), D_(D), start_v_(start_v), end_v_(end_v) {}
+
+    const char* name() const override { return "VocabParallelEmbeddingBackward"; }
+
+    variable_list apply(variable_list&& grads) override {
+        Tensor grad_output = grads[0]; // [B, T, D]
+
+        // Allocate grad_weight (same shape as weight) — zeros for atomic accumulation
+        Tensor grad_weight = Tensor::zeros(weight_ref_.shape(), weight_ref_.opts());
+
+        // Single fused kernel: scatter-add upstream grads into weight grad
+        OwnTensor::cuda::launch_vocab_parallel_embedding_bwd(
+            saved_input_.data<int64_t>(),
+            grad_output.data<float>(),
+            grad_weight.data<float>(),
+            B_, T_, D_,
+            start_v_, end_v_, 0
+        );
+
+        return {grad_weight};
+    }
+
+    void release_saved_variables() override {
+        saved_input_ = Tensor();
+    }
 };
 
 class DEmbeddingVParallel : public DModule {
@@ -713,6 +752,7 @@ public:
             weight->mutable_tensor() = cpu_w.to_cuda(device_idx);
             weight->mutable_tensor().set_requires_grad(true);
         }
+
         register_parameter(&weight->mutable_tensor());
     }
 
@@ -742,13 +782,10 @@ public:
         
         Tensor partial_embeds = autograd::mul(local_embeds, mask_reshaped);
         
-        // 6. Aggregate from all shards using explicit All-Reduce (Autograd-aware)
-        // std::vector<int64_t> input_shape = input.shape();
-        // Layout out_layout(*mesh_, {input.shape().dims[0], input.shape().dims[1], embedding_dim_});
-        // DTensor output(*mesh_, pg_, out_layout, "DEmbeddingVParallel_output");
-        // output.mutable_tensor() = partial_embeds;
-        // output.sync_w_autograd(); 
-        // output.wait();
+        // 6. Aggregate from all shards using raw all-reduce (forward-only).
+        // Backward gradient sync is handled by register_backward_all_reduce_hook in GPT::forward().
+        pg_->all_reduce(partial_embeds.data<float>(), partial_embeds.data<float>(),
+                       partial_embeds.numel(), Dtype::Float32, (op_t)0);  // SUM, in-place
         
         return partial_embeds;
     }
@@ -758,6 +795,111 @@ private:
     std::shared_ptr<ProcessGroupNCCL> pg_;
 };
 
+/**
+ * Fused version of DEmbeddingVParallel:
+ *  - Single CUDA kernel for forward (replaces 9 eager ops)
+ *  - Single CUDA kernel for backward (fused scatter-add)
+ *  - Accepts int64 input directly (no type casting chain)
+ */
+class DEmbeddingVParallelFused : public DModule {
+public:
+    int64_t vocab_size_;
+    int64_t embedding_dim_;
+    std::unique_ptr<DTensor> weight;
+    
+    int64_t local_v_;
+    int64_t vocab_start_;
+    int64_t vocab_end_;
+
+    DEmbeddingVParallelFused(const DeviceMesh& mesh, 
+                       std::shared_ptr<ProcessGroupNCCL> pg,
+                       int64_t vocab_size, 
+                       int64_t embedding_dim,
+                       int64_t sd = 0.02f,
+                       int64_t seed = 42
+                    )
+        : mesh_(&mesh), pg_(pg), vocab_size_(vocab_size), embedding_dim_(embedding_dim) {
+        
+        int rank = pg->get_rank();
+        int world_size = pg->get_worldsize();
+        
+        local_v_ = vocab_size / world_size;
+        vocab_start_ = rank * local_v_;
+        vocab_end_ = (rank + 1) * local_v_;
+
+        if (rank == world_size - 1) {
+            vocab_end_ = vocab_size;
+            local_v_ = vocab_end_ - vocab_start_;
+        }
+
+        Layout weight_layout(mesh, {local_v_, embedding_dim});
+        weight = std::make_unique<DTensor>(mesh, pg, weight_layout, "DEmbeddingVParallelFused_weight", sd, seed );
+        
+        weight->mutable_tensor().set_requires_grad(true);
+
+        int64_t actual_padding_idx = vocab_size - 1;
+
+        if (actual_padding_idx >= vocab_start_ && actual_padding_idx < vocab_end_) {
+            int64_t local_pad_idx = actual_padding_idx - vocab_start_;
+            Tensor cpu_w = weight->mutable_tensor().to_cpu();
+            float* data = cpu_w.data<float>();
+            std::fill(data + local_pad_idx * embedding_dim, 
+                      data + (local_pad_idx + 1) * embedding_dim, 0.0f);
+            int device_idx = weight->mutable_tensor().device().index;
+            weight->mutable_tensor() = cpu_w.to_cuda(device_idx);
+            weight->mutable_tensor().set_requires_grad(true);
+        }
+
+        register_parameter(&weight->mutable_tensor());
+    }
+
+    Tensor forward(Tensor& input) {
+        int64_t B = input.shape().dims[0];
+        int64_t T = input.shape().dims[1];
+        
+        // Ensure input is int64 for the fused kernel
+        Tensor input_i64 = input;
+        if (input.dtype() != Dtype::Int64) {
+            input_i64 = input.as_type(Dtype::Int64);
+        }
+
+        // Allocate output: [B, T, D]
+        Tensor output = Tensor::zeros(
+            Shape{{B, T, embedding_dim_}},
+            TensorOptions().with_dtype(Dtype::Float32).with_device(input.device())
+        );
+
+        // Single fused kernel: shard-check + lookup + zero-fill
+        OwnTensor::cuda::launch_vocab_parallel_embedding_fwd(
+            input_i64.data<int64_t>(),
+            weight->mutable_tensor().data<float>(),
+            output.data<float>(),
+            B, T, embedding_dim_,
+            vocab_start_, vocab_end_, 0
+        );
+
+        // Custom autograd: connect output → weight gradient
+        if (weight->mutable_tensor().requires_grad()) {
+            auto grad_fn = std::make_shared<VocabParallelEmbeddingBackward>(
+                input_i64, weight->mutable_tensor(),
+                B, T, embedding_dim_, vocab_start_, vocab_end_
+            );
+            grad_fn->set_next_edge(0, autograd::get_grad_edge(weight->mutable_tensor()));
+            output.set_grad_fn(grad_fn);
+            output.set_requires_grad(true);
+        }
+
+        pg_->all_reduce(output.data<float>(), output.data<float>(),
+                       output.numel(), Dtype::Float32, (op_t)0);  // SUM, in-place
+        
+
+        return output;
+    }
+
+private:
+    const DeviceMesh* mesh_;
+    std::shared_ptr<ProcessGroupNCCL> pg_;
+};
 
 class DGeLU : public DModule {
 public:
@@ -997,7 +1139,9 @@ public:
         Tensor grad_output = grads[0]; // [1]
         float scale = 1.0f / (B_ * T_);
         
-        float g_out = grad_output.to_cpu().data<float>()[0] * scale;
+        // Keep g_out on GPU to avoid CPU sync stall
+        Tensor g_out_tensor = grad_output * scale; // [1] scalar tensor, stays on GPU
+        
         // Backward: dL/dx = (P - delta) * grad_output
         // P = exp(logits - max) / sum_exp
         // Use raw ops to avoid tracking
@@ -1008,11 +1152,14 @@ public:
             Tensor exp_logits = OwnTensor::exp(logits_minus_max);
             P = exp_logits / sum_exp_; // Softmax probs
         }
-        // grad = P * g_out
-        Tensor grad_logits = P * g_out; 
+        // grad = P * g_out (broadcasts scalar tensor)
+        Tensor grad_logits = P * g_out_tensor; 
         P.release();
         
-        // Sparse subtract: grad[target] -= g_out
+        // Sparse subtract needs host float — single D2H copy for the scalar
+        float g_out;
+        cudaMemcpy(&g_out, g_out_tensor.data<float>(), sizeof(float), cudaMemcpyDeviceToHost);
+        
         OwnTensor::cuda::launch_sparse_subtract(
             grad_logits.data<float>(),
             targets_.data<float>(),
@@ -1104,6 +1251,152 @@ Tensor vocab_parallel_cross_entropy(DTensor& logits_dt, Tensor& targets) {
 }
 
 
+/**
+ * V2 Backward Node: Fully fused backward using single CUDA kernel.
+ * - Reads grad_output directly from GPU (no cudaMemcpy D2H)
+ * - Computes softmax + gradient scaling + sparse subtraction in one pass
+ * - sum_exp and max_logits stored as flat [BT] tensors (no reshape overhead)
+ */
+class VocabParallelCrossEntropyNodeV2 : public Node {
+private:
+    Tensor logits_;        // [B, T, V_local]
+    Tensor targets_;       // [BT] as float
+    Tensor sum_exp_;       // [BT] (global)
+    Tensor max_logits_;    // [BT] (global)
+    int64_t start_v_;
+    int64_t B_, T_, V_;
+public:
+    VocabParallelCrossEntropyNodeV2(const Tensor& logits, const Tensor& targets,
+                                    const Tensor& sum_exp, const Tensor& max_logits,
+                                    int64_t start_v)
+        : Node(1), 
+          logits_(logits.detach()), targets_(targets.detach()),
+          sum_exp_(sum_exp.detach()), max_logits_(max_logits.detach()),
+          start_v_(start_v) {
+        B_ = logits.shape().dims[0];
+        T_ = logits.shape().dims[1];
+        V_ = logits.shape().dims[2];
+    }
+
+    const char* name() const override { return "VocabParallelCrossEntropyNodeV2"; }
+
+    variable_list apply(variable_list&& grads) override {
+        Tensor grad_output = grads[0]; // [1] scalar, stays on GPU
+
+        float scale = 1.0f / (B_ * T_);
+
+        // Allocate output gradient
+        Tensor grad_logits = Tensor::zeros(logits_.shape(), logits_.opts());
+
+        // Single fused kernel: softmax + scale + sparse_subtract
+        // Reads grad_output[0] from device — NO cudaMemcpy needed
+        OwnTensor::cuda::launch_vocab_parallel_ce_backward(
+            logits_.data<float>(),
+            targets_.data<float>(),
+            sum_exp_.data<float>(),
+            max_logits_.data<float>(),
+            grad_output.data<float>(),  // Device pointer!
+            grad_logits.data<float>(),
+            B_, T_, V_,
+            start_v_, scale, 0
+        );
+
+        return {grad_logits};
+    }
+
+    void release_saved_variables() override {
+        logits_ = Tensor();
+        targets_ = Tensor();
+        sum_exp_ = Tensor();
+        max_logits_ = Tensor();
+    }
+};
+
+
+/**
+ * Fully optimized vocab-parallel cross-entropy (v2):
+ *
+ * vs. original:
+ *   Forward:  3 data passes over [BT*V_local] → 1 (fused kernel)
+ *   Backward: 5 kernel launches + cudaMemcpy  → 1 fused kernel
+ *   Comms:    3 all-reduces                   → 2 (packed SUM)
+ *   Overhead: 3 DTensor constructions/step     → 0 (raw all-reduce)
+ *   Memory:   [BT*V_local] exp intermediate    → 0 (computed inline)
+ */
+Tensor vocab_parallel_cross_entropy_v2(DTensor& logits_dt, Tensor& targets) {
+    Tensor local_logits = logits_dt.mutable_tensor();
+    auto pg = logits_dt.get_pg();
+    int64_t rank = pg->get_rank();
+    int64_t V_local = local_logits.shape().dims[2];
+    int64_t start_v = rank * V_local;
+    DeviceIndex device = local_logits.device();
+
+    int64_t B = local_logits.shape().dims[0];
+    int64_t T = local_logits.shape().dims[1];
+    int64_t BT = B * T;
+
+    // Prepare targets as float on device
+    Tensor targets_device = targets;
+    if (targets.device() != device) targets_device = targets.to(device);
+    Tensor targets_float = targets_device.as_type(Dtype::Float32);
+
+    // Flatten targets from [B, T] to [BT] for fused kernels
+    Tensor targets_flat = targets_float;
+    if (targets_float.shape().dims.size() > 1) {
+        targets_flat = autograd::reshape(targets_float, Shape{{BT}});
+    }
+
+    // === Step 1: Local max (reduce_max over vocab dim) ===
+    // Result is [B, T, 1], flatten to [BT] for raw all-reduce
+    Tensor local_max = OwnTensor::reduce_max(local_logits.detach(), {2}, true);  // [B, T, 1]
+    Tensor local_max_flat = autograd::reshape(local_max, Shape{{BT}});
+
+    // === Step 2: All-reduce MAX (1 of 2 total all-reduces) ===
+    pg->all_reduce(local_max_flat.data<float>(), local_max_flat.data<float>(),
+                   BT, Dtype::Float32, (op_t)1);  // MAX
+    Tensor global_max_flat = local_max_flat;
+
+    // === Step 3: Fused sum_exp + target_logit extraction (SINGLE pass over logits) ===
+    // Packed output: first BT floats = sum_exp, next BT floats = target_logit
+    Tensor packed = Tensor::zeros(Shape{{BT * 2}},
+        TensorOptions().with_dtype(Dtype::Float32).with_device(device));
+
+    OwnTensor::cuda::launch_fused_sum_exp_target(
+        local_logits.data<float>(),
+        global_max_flat.data<float>(),
+        targets_flat.data<float>(),
+        packed.data<float>(),
+        B, T, V_local, start_v, 0
+    );
+
+    // === Step 4: All-reduce SUM for packed [sum_exp | target_logit] (2 of 2) ===
+    pg->all_reduce(packed.data<float>(), packed.data<float>(),
+                   BT * 2, Dtype::Float32, (op_t)0);  // SUM
+
+    // Unpack: create views without copying
+    // sum_exp = packed[0:BT], target_logit = packed[BT:2*BT]
+    Tensor global_sum_exp = Tensor(Shape{{BT}}, packed.opts());
+    Tensor global_target_logit = Tensor(Shape{{BT}}, packed.opts());
+    cudaMemcpyAsync(global_sum_exp.data<float>(), packed.data<float>(),
+                    BT * sizeof(float), cudaMemcpyDeviceToDevice);
+    cudaMemcpyAsync(global_target_logit.data<float>(), packed.data<float>() + BT,
+                    BT * sizeof(float), cudaMemcpyDeviceToDevice);
+
+    // === Step 5: Final loss = mean(log(sum_exp) - (target_logit - max)) ===
+    Tensor log_sum_exp = OwnTensor::log(global_sum_exp);
+    Tensor loss_per_token = log_sum_exp - (global_target_logit - global_max_flat);
+    Tensor loss = OwnTensor::reduce_mean(loss_per_token, {0}, false);
+
+    // === Step 6: Custom autograd with V2 fused backward node ===
+    auto grad_fn = std::make_shared<VocabParallelCrossEntropyNodeV2>(
+        local_logits, targets_flat, global_sum_exp, global_max_flat, start_v
+    );
+    grad_fn->set_next_edge(0, autograd::get_grad_edge(local_logits));
+    loss.set_grad_fn(grad_fn);
+    loss.set_requires_grad(true);
+
+    return loss;
+}
 
 inline DTensor dmse_loss(DTensor& pred, DTensor& target) {
     // Tensor& pred_t = pred.mutable_tensor();

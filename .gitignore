@@ -16,10 +16,6 @@
 *.out
 *.app
 
-# Specific Binaries
-DTensor_v2.0/examples/tensor_parallel_mlp
-DTensor_v2.0/benchmarks/rotate_benchmarking
-DTensor_v2.0/benchmarks/shard_benchmarking
 
 # Build directories
 build/
@@ -35,5 +31,28 @@ build/
 DTensor/examples/gpt2_tensor_parallel_test
 DTensor/examples/gpt2_mlp_parallel_test
 DTensor/examples/gpt2_entropy_parallel_test
+DTensor/gpt2_tp_mlp_test_exec
 DTensor/tests/summa
 *.nvcudmp
+*.nsys-rep
+
+*.bin
+*.npy
+*.nsys-rep
+*.sqlite
+*.pt
+*_exec
+**/log_tp/
+
+# Ignore the specific test executable
+DTensor/gpt2_tp_mlp_test_exec
+
+# Ignore all training logs
+DTensor/TP_MLP_Training_logs/
+DTensor/gpt2_tp_test/TP_MLP_Torch_LogsDTensor/tests/dtensor_leak_tests/dtensor_leak_tests
+*.bin
+*.npy
+*.txt
+*_exec
+DTensor/Data_Loader/
+DTensor/TP_MLP_Training_logs/

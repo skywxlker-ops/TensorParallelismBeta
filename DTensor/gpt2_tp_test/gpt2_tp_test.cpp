@@ -204,7 +204,7 @@ public:
     GPTConfig config;
     DeviceMesh &mesh;
     std::shared_ptr<ProcessGroupNCCL> pg_ptr; // Store pg for forward layout
-    dnn::DEmbeddingVParallel wte;  // Token embedding
+    dnn::DEmbeddingVParallelFused wte;  // Token embedding (fused kernel)
     Embedding wpe;  // Position embedding
     dnn::DSequential mlps;
     nn::LayerNorm ln_f; // Final LayerNorm
@@ -369,6 +369,31 @@ float get_lr(int step, float max_lr, float min_lr, int warmup_steps, int max_ste
 }
 
 // =============================================================================
+// Tiktoken Decoder (via Python popen)
+// =============================================================================
+
+std::string decode_tokens_tiktoken(const std::vector<int64_t>& tokens) {
+    std::string cmd = "python3 -c \"import tiktoken; enc = tiktoken.get_encoding('gpt2'); print(enc.decode([";
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (i > 0) cmd += ",";
+        cmd += std::to_string(tokens[i]);
+    }
+    cmd += "]))\" 2>/dev/null";
+
+    std::string result;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe) {
+        char buffer[512];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            result += buffer;
+        }
+        pclose(pipe);
+    }
+    if (!result.empty() && result.back() == '\n') result.pop_back();
+    return result;
+}
+
+// =============================================================================
 // Main Training Loop
 // =============================================================================
 
@@ -467,6 +492,7 @@ int main(int argc, char** argv) {
         // Create CSV log file
         // Enable dynamic log filename generation
         std::string log_filename;
+        std::string config_filename;
         std::ofstream log_file;
 
         if (rank == 0) {
@@ -489,7 +515,7 @@ int main(int argc, char** argv) {
             std::cout << "Saving logs to: " << log_filename << std::endl;
             
             // Save configuration
-            std::string config_filename = "TP_Training_logs/TP_Training_log" + std::to_string(log_idx) + "_config.txt";
+            config_filename = "TP_Training_logs/TP_Training_log" + std::to_string(log_idx) + "_config.txt";
             std::ofstream config_file(config_filename);
             config_file << "Configuration:\n";
             config_file << "  Batch_size: " << B << "\n";
@@ -535,7 +561,7 @@ int main(int argc, char** argv) {
                     Tensor y = batch.target.to(device);
                     
                     DTensor logits = model.forward(x);
-                    Tensor loss = dnn::vocab_parallel_cross_entropy(logits, y);
+                    Tensor loss = dnn::vocab_parallel_cross_entropy_v2(logits, y);
                     
                     Tensor loss_cpu = loss.to_cpu();
                     val_loss_accum += loss_cpu.data<float>()[0] / static_cast<float>(val_loss_steps);
@@ -545,8 +571,9 @@ int main(int argc, char** argv) {
                 val_loss_accum_log = val_loss_accum;
             }
             
-            // token generation
-            if(step % TOK_GEN_FREQ == 0 || step == max_steps - 1) {
+            // token generation (skip step 0 — random weights produce NaN in softmax,
+            // and a rank-0-only exception would deadlock NCCL collectives)
+            if(step > 0 && (step % TOK_GEN_FREQ == 0 || step == max_steps - 1)) {
                 if (rank == 0) std::cout << "--- Generating tokens at step " << step << " ---" << std::endl;
                 int num_return_sequence = 4;
                 int max_length = 60;
@@ -582,7 +609,12 @@ int main(int argc, char** argv) {
                     Tensor topk_probs_2d = OwnTensor::autograd::reshape(topk_probs, Shape({{Bg, 50}}));
                     Tensor ix;
                     if (rank == 0) {
-                        ix = Tensor::multinomial(topk_probs_2d, 1);
+                        try {
+                            ix = Tensor::multinomial(topk_probs_2d, 1);
+                        } catch (...) {
+                            // Fallback: pick index 0 (most probable from topk) if probs are NaN/Inf
+                            ix = Tensor::zeros(Shape({{Bg, 1}}), TensorOptions().with_dtype(Dtype::Int64).with_device(device));
+                        }
                     } else {
                         // allocate ix on other ranks for broadcast
                         ix = Tensor::zeros(Shape({{Bg, 1}}), TensorOptions().with_dtype(Dtype::Int64).with_device(device));
@@ -605,14 +637,33 @@ int main(int argc, char** argv) {
                     int64_t* data = xgen_cpu.data<int64_t>();
                     int64_t Bg = xgen.shape().dims[0];
                     int64_t Tg = xgen.shape().dims[1];
-                    
+
+                    // Append generated tokens to config file
+                    std::ofstream config_append(config_filename, std::ios::app);
+                    config_append << "\n--- Generated Tokens at Step " << step << " ---\n";
+
                     for (int i = 0; i < Bg; ++i) {
-                        std::cout << "Sample " << i << ": ";
+                        // Collect token IDs into a vector and a printable string
+                        std::vector<int64_t> sample_tokens;
+                        std::string token_str;
                         for (int j = 0; j < Tg; ++j) {
-                            std::cout << data[i * Tg + j] << " ";
+                            sample_tokens.push_back(data[i * Tg + j]);
+                            if (j > 0) token_str += " ";
+                            token_str += std::to_string(data[i * Tg + j]);
                         }
-                        std::cout << std::endl;
+
+                        // Print raw IDs
+                        std::cout << "Sample " << i << " [IDs]: " << token_str << std::endl;
+
+                        // Decode via tiktoken popen
+                        std::string decoded = decode_tokens_tiktoken(sample_tokens);
+                        std::cout << "Sample " << i << " [Text]: " << decoded << std::endl;
+
+                        // Log both to config file
+                        config_append << "Sample " << i << " [IDs]: " << token_str << "\n";
+                        config_append << "Sample " << i << " [Text]: " << decoded << "\n";
                     }
+                    config_append.close();
                 }
             }
 
@@ -646,7 +697,7 @@ int main(int argc, char** argv) {
                 
                 // --- Loss Computation ---
                 timer_loss.start_timer();
-                Tensor loss = dnn::vocab_parallel_cross_entropy(logits,y);
+                Tensor loss = dnn::vocab_parallel_cross_entropy_v2(logits,y);
                 
                 loss_accum_gpu = loss_accum_gpu + loss.detach();
         

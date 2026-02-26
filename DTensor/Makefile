@@ -652,3 +652,30 @@ dtensor_leak_tests: $(DTENSOR_LEAK_TESTS_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] DTensor Leak Tests build complete."
 	@echo "\nRun with: mpirun -np 2 ./tests/dtensor_leak_tests/dtensor_leak_tests\n"
 
+
+
+# =============================================================================
+# Distributed System Rules (Launcher & Sentinel)
+# =============================================================================
+
+# Default values if not provided via command line
+N ?= 2
+PORT ?= 29877
+
+.PHONY: launcher
+launcher: $(TENSOR_LIB_A)
+	@if [ -z "$(FILE)" ]; then \
+		echo "ERROR: Please specify the worker file."; \
+		echo "Usage: make launcher FILE=path/to/worker.cpp N=5 PORT=30000"; \
+		exit 1; \
+	fi
+	@echo "--- Step 1: Compiling Worker Snippet: $(FILE) ---"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(INCLUDES) $(FILE) -o worker_bin $(LIB_PATHS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "--- Step 2: Compiling Sentinel Launcher ---"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(INCLUDES) /home/blu-bridge25/TP/TensorParallelismBeta/launcher.cpp -o launcher_bin $(LIB_PATHS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) -lnvidia-ml $(LDFLAGS)
+	@echo "--- Step 3: Starting Distributed Cluster (N=$(N), Port=$(PORT)) ---"
+	@echo "---------------------------------------------------------"
+	./launcher_bin $(N) -- ./worker_bin
+	@echo "---------------------------------------------------------"
+	@echo "--- Cleaning up binaries ---"
+	@rm -f worker_bin launcher_bin

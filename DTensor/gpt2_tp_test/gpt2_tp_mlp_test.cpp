@@ -234,8 +234,6 @@ public:
             mlps.add(std::make_shared<MLP>(config, mesh, pg, device, 1234));
         }
 
-        Layout input_layout(mesh, {B, T, config.n_embd});
-        DTensor current_x(mesh, pg_ptr, input_layout, "x_combined");
 
         if (!config.weight_tying) {
             lm_head = std::make_shared<nn::Linear>(cfg.n_embd, cfg.vocab_size, false);
@@ -254,8 +252,8 @@ public:
         register_module(wpe);
         register_module(mlps);
         register_module(ln_f);
-        if 
-        register_module(lm_head);
+        if (lm_head)
+            register_module(*lm_head);
 
         // Initialize W_out
         // TensorOptions opts = TensorOptions().with_dtype(Dtype::Float32)
@@ -327,8 +325,9 @@ public:
 
         t_pos_emb += timer_pos_emb.get_elapsed_seconds();
         
-        // Add embeddings
-
+        // Add embeddings — create DTensor with actual B,T dimensions
+        Layout input_layout(mesh, std::vector<int64_t>{B, T, config.n_embd});
+        DTensor current_x(mesh, pg_ptr, input_layout, "x_combined");
         current_x.mutable_tensor() = autograd::add(tok_emb, pos_emb);
         
         current_x.register_backward_all_reduce_hook(sum);
@@ -349,8 +348,13 @@ public:
 
         // --- LM Head ---
         timer_lm_head.start_timer();
-   
-        logits = lm_head->forward(current_x.mutable_tensor());
+
+        if (lm_head) {
+            logits = lm_head->forward(current_x.mutable_tensor());
+        } else {
+            // Weight tying: use wte.weight^T as output projection
+            logits = autograd::matmul(current_x.mutable_tensor(), wte.weight.t());
+        }
 
         t_lm_head += timer_lm_head.get_elapsed_seconds();
         
@@ -374,6 +378,31 @@ float get_lr(int step, float max_lr, float min_lr, int warmup_steps, int max_ste
     float decay_ratio = static_cast<float>(step - warmup_steps) / static_cast<float>(max_steps - warmup_steps);
     float coeff = 0.5f * (1.0f + std::cos(M_PI * decay_ratio));
     return min_lr + coeff * (max_lr - min_lr);
+}
+
+// =============================================================================
+// Tiktoken Decoder (via Python popen)
+// =============================================================================
+
+std::string decode_tokens_tiktoken(const std::vector<int64_t>& tokens) {
+    std::string cmd = "python3 -c \"import tiktoken; enc = tiktoken.get_encoding('gpt2'); print(enc.decode([";
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (i > 0) cmd += ",";
+        cmd += std::to_string(tokens[i]);
+    }
+    cmd += "]))\" 2>/dev/null";
+
+    std::string result;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe) {
+        char buffer[512];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            result += buffer;
+        }
+        pclose(pipe);
+    }
+    if (!result.empty() && result.back() == '\n') result.pop_back();
+    return result;
 }
 
 // =============================================================================
@@ -408,7 +437,7 @@ int main(int argc, char** argv) {
         const float max_lr = 1e-4f;  
         const float min_lr = max_lr * 0.1f;
         const int VAL_FREQ = 100;
-        const int TOK_GEN_FREQ = 1000;
+        const int TOK_GEN_FREQ = 10;
         
         std::cout << "Configuration:" << std::endl;
         std::cout << "  vocab_size: " << config.vocab_size << std::endl;
@@ -475,6 +504,7 @@ int main(int argc, char** argv) {
         // Create CSV log file
         // Enable dynamic log filename generation
         std::string log_filename;
+        std::string config_filename;
         std::ofstream log_file;
 
         if (rank == 0) {
@@ -497,7 +527,7 @@ int main(int argc, char** argv) {
             std::cout << "Saving logs to: " << log_filename << std::endl;
             
             // Save configuration
-            std::string config_filename = "TP_MLP_Training_logs/TP_MLP_Training_log" + std::to_string(log_idx) + "_config.txt";
+            config_filename = "TP_MLP_Training_logs/TP_MLP_Training_log" + std::to_string(log_idx) + "_config.txt";
             std::ofstream config_file(config_filename);
             config_file << "Configuration:\n";
             config_file << "  Batch_size: " << B << "\n";
@@ -552,8 +582,9 @@ int main(int argc, char** argv) {
                 val_loss_accum_log = val_loss_accum;
             }
             
-            // token generation
-            if(step % TOK_GEN_FREQ == 0 || step == max_steps - 1) {
+            // token generation (skip step 0 — random weights produce NaN in softmax, 
+            // and a rank-0-only exception would deadlock NCCL collectives)
+            if(step > 0 && (step % TOK_GEN_FREQ == 0 || step == max_steps - 1)) {
                 if (rank == 0) std::cout << "--- Generating tokens at step " << step << " ---" << std::endl;
                 int num_return_sequence = 4;
                 int max_length = 60;
@@ -584,7 +615,12 @@ int main(int argc, char** argv) {
                     Tensor topk_probs_2d = OwnTensor::autograd::reshape(topk_probs, Shape({{Bg, 50}}));
                     Tensor ix;
                     if (rank == 0) {
-                        ix = Tensor::multinomial(topk_probs_2d, 1);
+                        try {
+                            ix = Tensor::multinomial(topk_probs_2d, 1);
+                        } catch (...) {
+                            // Fallback: pick index 0 (most probable from topk) if probs are NaN/Inf
+                            ix = Tensor::zeros(Shape({{Bg, 1}}), TensorOptions().with_dtype(Dtype::Int64).with_device(device));
+                        }
                     } else {
                         // allocate ix on other ranks for broadcast
                         ix = Tensor::zeros(Shape({{Bg, 1}}), TensorOptions().with_dtype(Dtype::Int64).with_device(device));
@@ -607,14 +643,33 @@ int main(int argc, char** argv) {
                     int64_t* data = xgen_cpu.data<int64_t>();
                     int64_t Bg = xgen.shape().dims[0];
                     int64_t Tg = xgen.shape().dims[1];
-                    
+
+                    // Append generated tokens to config file
+                    std::ofstream config_append(config_filename, std::ios::app);
+                    config_append << "\n--- Generated Tokens at Step " << step << " ---\n";
+
                     for (int i = 0; i < Bg; ++i) {
-                        std::cout << "Sample " << i << ": ";
+                        // Collect token IDs into a vector and a printable string
+                        std::vector<int64_t> sample_tokens;
+                        std::string token_str;
                         for (int j = 0; j < Tg; ++j) {
-                            std::cout << data[i * Tg + j] << " ";
+                            sample_tokens.push_back(data[i * Tg + j]);
+                            if (j > 0) token_str += " ";
+                            token_str += std::to_string(data[i * Tg + j]);
                         }
-                        std::cout << std::endl;
+
+                        // Print raw IDs
+                        std::cout << "Sample " << i << " [IDs]: " << token_str << std::endl;
+
+                        // Decode via tiktoken popen
+                        std::string decoded = decode_tokens_tiktoken(sample_tokens);
+                        std::cout << "Sample " << i << " [Text]: " << decoded << std::endl;
+
+                        // Log both to config file
+                        config_append << "Sample " << i << " [IDs]: " << token_str << "\n";
+                        config_append << "Sample " << i << " [Text]: " << decoded << "\n";
                     }
+                    config_append.close();
                 }
             }
 
