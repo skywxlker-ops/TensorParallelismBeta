@@ -33,6 +33,7 @@
 #include "dnn/DistributedNN.h"
 
 
+
 // Dataloader
 #include "Data_Loader/dl_test.cpp"
 
@@ -330,7 +331,7 @@ public:
 
         t_mlp += timer_mlp.get_elapsed_seconds();
         
-        current_x.sync();
+        current_x.sync();  
         
         // --- Final LayerNorm ---
         timer_ln_f.start_timer();
@@ -339,10 +340,12 @@ public:
         t_ln_f += timer_ln_f.get_elapsed_seconds();
 
         // --- LM Head ---
+        // DLMHead is ColumnParallel, its backward produces a partial gradient for current_x.
+        // We must all-reduce this partial gradient before it flows back to ln_f.
+        current_x.register_backward_all_reduce_hook(sum); 
+
         timer_lm_head.start_timer();
-
         logits = lm_head.forward(current_x);
-
 
         t_lm_head += timer_lm_head.get_elapsed_seconds();
         
@@ -559,8 +562,9 @@ int main(int argc, char** argv) {
                     Batch batch = val_loader.next_batch();
                     x.mutable_tensor() = batch.input.to(device);
                     Tensor y = batch.target.to(device);
-                    
+
                     DTensor logits = model.forward(x);
+
                     Tensor loss = dnn::vocab_parallel_cross_entropy_v2(logits, y);
                     
                     Tensor loss_cpu = loss.to_cpu();

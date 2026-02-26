@@ -112,7 +112,7 @@ DTensor::DTensor(const DeviceMesh& device_mesh, std::shared_ptr<ProcessGroupNCCL
         cudaSetDevice(local_gpu);
         
         #ifdef WITH_CUDA
-        OwnTensor::cuda::setCurrentStream(stream_);
+        // OwnTensor::cuda::setCurrentStream(stream_);
         #endif
         
         OwnTensor::TensorOptions opts;
@@ -455,7 +455,7 @@ void DTensor::replicate(int root) {
 // void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
 //     // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
 //     #ifdef WITH_CUDA
-//     OwnTensor::cuda::setCurrentStream(stream_);
+//     // OwnTensor::cuda::setCurrentStream(stream_);
 //     #endif
 //     std::vector<int64_t> global_shape = parent_tensor.shape_;
     
@@ -550,7 +550,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
 
     // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
     #ifdef WITH_CUDA
-    OwnTensor::cuda::setCurrentStream(stream_);
+    // OwnTensor::cuda::setCurrentStream(stream_);
     #endif
     std::vector<int64_t> global_shape = parent_tensor.shape_;
     
@@ -703,7 +703,7 @@ void DTensor::shard(int dim, int root, DTensor &parent_tensor) {
 
 void DTensor::shard_transpose(int dim, int root, DTensor &parent_tensor){
     #ifdef WITH_CUDA
-    OwnTensor::cuda::setCurrentStream(stream_);
+    // OwnTensor::cuda::setCurrentStream(stream_);
     #endif
     
     std::vector<int64_t> global_shape = parent_tensor.shape_;
@@ -793,7 +793,7 @@ void DTensor::shard_transpose(int dim, int root, DTensor &parent_tensor){
 
 // void DTensor::shard_transpose_fused(int dim, int root, DTensor &parent_tensor){
 //     #ifdef WITH_CUDA
-//     OwnTensor::cuda::setCurrentStream(stream_);
+//     // OwnTensor::cuda::setCurrentStream(stream_);
 //     #endif
     
 //     std::vector<int64_t> global_shape = parent_tensor.shape_;
@@ -937,7 +937,7 @@ void DTensor::shard_transpose(int dim, int root, DTensor &parent_tensor){
 // void DTensor::rotate3D(int dim, bool direction){
 //     // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
 //     #ifdef WITH_CUDA
-//     OwnTensor::cuda::setCurrentStream(stream_);
+//     // OwnTensor::cuda::setCurrentStream(stream_);
 //     #endif
     
 //     // OwnTensor::TensorOptions opts;
@@ -1015,7 +1015,7 @@ void DTensor::shard_transpose(int dim, int root, DTensor &parent_tensor){
 // void DTensor::rotate3D_mem(int dim, bool direction){
 //     // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
 //     #ifdef WITH_CUDA
-//     OwnTensor::cuda::setCurrentStream(stream_);
+//     // OwnTensor::cuda::setCurrentStream(stream_);
 //     #endif
     
 //     int64_t nx = shape_[0], ny = shape_[1], nz = shape_[2];
@@ -1150,7 +1150,7 @@ void DTensor::shard_transpose(int dim, int root, DTensor &parent_tensor){
 void DTensor::shard_default(int dim, int root, DTensor &parent_tensor) {
     // CRITICAL: Sync OwnTensor stream with DTensor stream to prevent race conditions
     #ifdef WITH_CUDA
-    OwnTensor::cuda::setCurrentStream(stream_);
+    // OwnTensor::cuda::setCurrentStream(stream_);
     #endif
     
     std::vector<int64_t> global_shape = parent_tensor.shape_;
@@ -1231,7 +1231,7 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
     // Uses separate send_buffer to avoid race conditions
     
     #ifdef WITH_CUDA
-    OwnTensor::cuda::setCurrentStream(stream_);
+    // OwnTensor::cuda::setCurrentStream(stream_);
     #endif
     
     std::vector<int64_t> parent_shape = parent_tensor.shape_;
@@ -1345,7 +1345,7 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
 //     // Only supports dim 2 for now
     
 //     #ifdef WITH_CUDA
-//     OwnTensor::cuda::setCurrentStream(stream_);
+//     // OwnTensor::cuda::setCurrentStream(stream_);
 //     #endif
     
 //     std::vector<int64_t> parent_shape = parent_tensor.shape_;
@@ -1511,7 +1511,6 @@ void DTensor::register_backward_all_reduce_hook(op_t op) {
     
     tensor_.register_post_acc_hook(std::make_unique<LambdaPostAccHook>(
         [pg, size, op, name](const Tensor& grad) {
-
             pg->all_reduce_async(grad.data(), const_cast<void*>(grad.data()), size, OwnTensor::Dtype::Float32, op, false)->wait();
         }
     ));

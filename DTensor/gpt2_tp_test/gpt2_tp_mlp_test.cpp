@@ -437,7 +437,7 @@ int main(int argc, char** argv) {
         const float max_lr = 1e-4f;  
         const float min_lr = max_lr * 0.1f;
         const int VAL_FREQ = 100;
-        const int TOK_GEN_FREQ = 10;
+        const int TOK_GEN_FREQ = 1000;
         
         std::cout << "Configuration:" << std::endl;
         std::cout << "  vocab_size: " << config.vocab_size << std::endl;

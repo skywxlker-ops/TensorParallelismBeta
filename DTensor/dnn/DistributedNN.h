@@ -56,9 +56,15 @@ float clip_grad_norm_dtensor_nccl(
     int valid_params = 0;
     for (auto* p : params) {
         auto& t = p->mutable_tensor();
-        if (!t.has_grad()) continue;
+        if (!t.has_grad()) {
+            if (rank == 0) std::cout << "WARNING: " << p->name() << " has no gradient!" << std::endl;
+            continue;
+        }
         Tensor g = t.grad_view();
-        if (!g.is_valid() || g.numel() == 0) continue;
+        if (!g.is_valid() || g.numel() == 0) {
+            if (rank == 0) std::cout << "WARNING: " << p->name() << " gradient is invalid or empty!" << std::endl;
+            continue;
+        }
 
         if (!p->get_layout().is_replicated() || rank == 0) {
             if (is_inf_norm)
@@ -889,8 +895,8 @@ public:
             output.set_requires_grad(true);
         }
 
-        pg_->all_reduce(output.data<float>(), output.data<float>(),
-                       output.numel(), Dtype::Float32, (op_t)0);  // SUM, in-place
+        // pg_->all_reduce(output.data<float>(), output.data<float>(),
+        //                output.numel(), Dtype::Float32, (op_t)0);  // SUM, in-place
         
 
         return output;
