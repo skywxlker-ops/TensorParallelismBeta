@@ -1,0 +1,67 @@
+========================================
+NCCL Collectives Benchmark (2 GPUs)
+========================================
+
+--- AllReduce ---
+Size:     0.00 MB | Latency:     0.01 ms | Bandwidth:     0.32 GB/s
+Size:     0.02 MB | Latency:     0.02 ms | Bandwidth:     0.84 GB/s
+Size:     0.06 MB | Latency:     0.05 ms | Bandwidth:     1.31 GB/s
+Size:     0.25 MB | Latency:     0.10 ms | Bandwidth:     2.45 GB/s
+Size:     1.00 MB | Latency:     0.32 ms | Bandwidth:     3.09 GB/s
+Size:     4.00 MB | Latency:     1.12 ms | Bandwidth:     3.50 GB/s
+Size:    16.00 MB | Latency:     4.34 ms | Bandwidth:     3.60 GB/s
+Size:    64.00 MB | Latency:    17.16 ms | Bandwidth:     3.64 GB/s
+Size:   256.00 MB | Latency:    68.08 ms | Bandwidth:     3.67 GB/s
+Size:  1024.00 MB | Latency:   273.01 ms | Bandwidth:     3.66 GB/s
+Size:  4096.00 MB | Latency:  1093.29 ms | Bandwidth:     3.66 GB/s
+
+--- Reduce ---
+Size:     0.00 MB | Latency:     0.01 ms | Bandwidth:     0.56 GB/s
+Size:     0.02 MB | Latency:     0.01 ms | Bandwidth:     1.47 GB/s
+Size:     0.06 MB | Latency:     0.02 ms | Bandwidth:     2.80 GB/s
+Size:     0.25 MB | Latency:     0.05 ms | Bandwidth:     4.84 GB/s
+Size:     1.00 MB | Latency:     0.18 ms | Bandwidth:     5.48 GB/s
+Size:     4.00 MB | Latency:     0.66 ms | Bandwidth:     5.94 GB/s
+Size:    16.00 MB | Latency:     2.54 ms | Bandwidth:     6.14 GB/s
+Size:    64.00 MB | Latency:    10.14 ms | Bandwidth:     6.17 GB/s
+Size:   256.00 MB | Latency:    40.43 ms | Bandwidth:     6.18 GB/s
+Size:  1024.00 MB | Latency:   161.54 ms | Bandwidth:     6.19 GB/s
+Size:  4096.00 MB | Latency:   645.77 ms | Bandwidth:     6.19 GB/s
+
+--- Broadcast ---
+Size:     0.00 MB | Latency:     0.01 ms | Bandwidth:     0.48 GB/s
+Size:     0.02 MB | Latency:     0.02 ms | Bandwidth:     0.92 GB/s
+Size:     0.06 MB | Latency:     0.03 ms | Bandwidth:     2.16 GB/s
+Size:     0.25 MB | Latency:     0.06 ms | Bandwidth:     4.25 GB/s
+Size:     1.00 MB | Latency:     0.17 ms | Bandwidth:     5.61 GB/s
+Size:     4.00 MB | Latency:     0.67 ms | Bandwidth:     5.87 GB/s
+Size:    16.00 MB | Latency:     2.59 ms | Bandwidth:     6.04 GB/s
+Size:    64.00 MB | Latency:    10.26 ms | Bandwidth:     6.09 GB/s
+Size:   256.00 MB | Latency:    40.88 ms | Bandwidth:     6.12 GB/s
+Size:  1024.00 MB | Latency:   163.03 ms | Bandwidth:     6.13 GB/s
+Size:  4096.00 MB | Latency:   651.64 ms | Bandwidth:     6.14 GB/s
+
+--- AllGather ---
+Size:     0.00 MB | Latency:     0.02 ms | Bandwidth:     0.23 GB/s
+Size:     0.02 MB | Latency:     0.02 ms | Bandwidth:     0.65 GB/s
+Size:     0.06 MB | Latency:     0.06 ms | Bandwidth:     1.08 GB/s
+Size:     0.25 MB | Latency:     0.11 ms | Bandwidth:     2.26 GB/s
+Size:     1.00 MB | Latency:     0.94 ms | Bandwidth:     1.04 GB/s
+Size:     4.00 MB | Latency:     1.58 ms | Bandwidth:     2.47 GB/s
+Size:    16.00 MB | Latency:     6.07 ms | Bandwidth:     2.57 GB/s
+Size:    64.00 MB | Latency:    22.33 ms | Bandwidth:     2.80 GB/s
+Size:   256.00 MB | Latency:    87.06 ms | Bandwidth:     2.87 GB/s
+Size:  1024.00 MB | Latency:   341.28 ms | Bandwidth:     2.93 GB/s
+Failed: Cuda error benchmarks/nccl_benchmark.cpp:189 'out of memory'
+Failed: Cuda error benchmarks/nccl_benchmark.cpp:189 'out of memory'
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpirun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[64708,1],0]
+  Exit code:    1
+--------------------------------------------------------------------------

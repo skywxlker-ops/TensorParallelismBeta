@@ -1,0 +1,294 @@
+========= COMPUTE-SANITIZER
+========= COMPUTE-SANITIZER
+=== GPT-2 Training Script (WITHOUT Weight Tying) ===
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+  Weight Tying: DISABLED
+=== GPT-2 Training Script (WITHOUT Weight Tying) ===
+Configuration:
+  vocab_size: 50304
+  context_length: 1024
+  n_embd: 384
+  n_layers: 3
+  B=8, T=1024
+  global_batch: 65536
+  grad_accum_steps: 8
+  Weight Tying: DISABLED
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+========= Program hit cudaErrorNoKernelImageForDevice (error 209) due to "no kernel image is available for execution on the device" on CUDA API call to cudaFuncGetAttributes.
+=========     Saved host backtrace up to driver entry point at error
+=========     Host Frame: [0x4caea5]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame: [0x1b23a0]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x6d9bd]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x8412a]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x77290]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame: [0x875be]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:pncclCommInitRank [0x87786]
+=========                in /lib/x86_64-linux-gnu/libnccl.so.2
+=========     Host Frame:ProcessGroupNCCL::ProcessGroupNCCL(int, int, ncclUniqueId&, std::shared_ptr<Work>, CUstream_st*&, int) in ../DTensor/process_group/processGroupNCCL.cpp:49 [0x84bcf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:init_process_group(int, int, CUstream_st*) in ../DTensor/process_group/processGroupNCCL.cpp:106 [0x8b0d3]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::initialize_process_groups() in ../DTensor/tensor/device_mesh.cpp:192 [0x82eaf]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:DeviceMesh::DeviceMesh(std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&) in ../DTensor/tensor/device_mesh.cpp:45 [0x8368c]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:main in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/gpt2_tp_test.cpp:170 [0x4dbf2]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:_start [0x6b874]
+=========                in /home/blu-bridge005/Desktop/Anuj@BluBridge/TensorParallel/CustomDNN/gpt2_tests/./gpt2_tp_test
+========= 
+
+Initializing Tensor Parallel run with 2 GPUs...
+Number of parameters per GPU (with TP): 42574464
+found 3 shards for split train
+found 1 shards for split val
+
+Starting training...
+validation loss: 10.8881
