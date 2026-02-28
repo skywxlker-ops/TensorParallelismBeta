@@ -1,5 +1,3 @@
-*.bin
-*.npy
 *exec
 CustomDNN/gpt2_tests/gpt2_test
 CustomDNN/gpt2_tests/gpt2_tp_test
