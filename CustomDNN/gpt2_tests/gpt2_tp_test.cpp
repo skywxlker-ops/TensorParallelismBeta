@@ -182,7 +182,7 @@ int main() {
         // Training hyperparameters
         const int B = 8;           // Batch size
         const int T = 1024;        // Sequence length
-        const int global_batch = 65536;  // Global batch size
+        const int global_batch = 262144;  // Global batch size
         const int grad_accum_steps = global_batch / (B * T);
         
         const float max_lr = 1e-4f;  
@@ -245,7 +245,7 @@ int main() {
         // Create CSV log file (only on rank 0)
         std::ofstream log_file;
         if (rank == 0) {
-            log_file.open("Naive/naive_run_log15.csv");
+            log_file.open("Naive/naive_run_log16.csv");
             log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
             log_file << std::fixed << std::setprecision(6);
         }
