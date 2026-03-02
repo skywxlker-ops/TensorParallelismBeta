@@ -1,0 +1,421 @@
+﻿[Sprint End Documentation] - Project Beta - February Sprint
+
+
+* Anuj Kumar
+
+
+End Goal - Finish the customDNN module
+
+
+
+
+Algorithm Design - 
+
+
+The flow of multi-GPU tensor operations this month focused on bringing DTensor sharding with our CustomDNN kernels, addressing Vocab Parallelism and Fused MLP operations.
+
+
+  
+
+
+
+
+
+System Design - 
+
+
+The module is fully functional to ensure data flow between Custom C++ DNN, DTensor, Tensor-Implementations and NCCL backends is barrier-free.
+
+
+MLP Implementations (Row / Column Parallel)
+
+
+The feed-forward network splits the operations structurally - 
+
+
+1. Layer 1 (Column-Parallel) - 
+
+
+* Matrix multiplication split across intermediate hidden dimensions. 
+
+
+* No internal synchronization is needed.
+
+
+2. Layer 2 (Row-Parallel) -
+
+
+* Matrix multiplication across the output dimensions. 
+
+
+* I implemented a Fused DMLP Forward pass by adding a no_sync flag to DLinear::forward. 
+
+
+* The internal sub-syncs are skipped and unified into a single synchronization at the tail end of the entire MLP block, drastically increasing single-node and multi-node throughput.
+
+
+DTensor and CustomDNN Integration
+
+
+1. Fused MLP Execution - 
+
+
+* To prevent the GPU stream from blocking on intermediary synchronizations, DLinear::forward was adapted to accept a no_sync flag. 
+
+
+* The CustomDNN implementation of DMLP now routes column-parallel and row-parallel computations successively without waiting, before executing a unified fused AllReduce via the physical DTensor network call.
+
+
+2. Vocab Parallel Processing - 
+
+
+* Processing shifted from full-tensor replication to vocab-dimension sharding. 
+
+
+* The input target dimensions are processed locally per rank. 
+
+
+* CustomDNN computes the maximum logits and exponential sums in local C++ kernels, after which DTensor invokes asynchronous networking to retrieve the global_max and global_sum_exp required for numerically stable block-distributed loss computations.
+
+
+
+
+  
+
+
+
+
+
+System Optimizations
+
+
+1. GPU-Side Gradient Norm Calculation - 
+
+
+* Previously, compute_grad_norm() copied parameter gradients to the CPU to iterate via a slow loop.
+
+
+* I shifted this to a complete GPU-side operation using DTensor::grad_norm(), requiring only a single all_reduce_cpu of a floating point.
+
+
+2. DataLoaderLite Device Allocation Fixes - 
+
+
+*  Implemented automatic device alignment using cudaSetDevice() to resolve "CPU->GPU transfer failed: invalid argument" errors in multi-GPU setup. 
+
+
+* Tensors are allocated dynamically matching the rank, adopting a CPU-first approach with .to(gpu_device).
+
+
+3. Autograd Engine Fixes (NaN Avoidance) - 
+
+
+* Modified DTensor::reduce_grad to return an active view of the tensor rather than modifying the autograd state in-place. 
+
+
+* Because the engine was "stacking" recursive all-reduces on identical memory, early training ran precisely into NaN saturation boundaries.
+
+
+
+
+Memory Layout & Distributed Sharding
+
+
+Memory State Management
+
+
+* I am utilising DTensor wrappers to handle the local shard versus global layout semantics. 
+
+
+* A major structural fix applied was guaranteeing proper copy constructors and deep cloning of Layout and Placement objects. 
+
+
+* Previously, after a shape transpose, differing tensors mapping to the same pointer encountered layout corruption ("Unsupported sharding combination").
+
+
+
+
+
+
+  
+
+
+
+* Now for a 43M model, getting a stable memory consumption of 7.5GBs across both GPUs.
+
+
+* At the start of the sprint, kept on getting OOM issues even with a 22M model - caused by tensor leaks.
+
+
+  
+
+
+
+
+
+
+
+Numerical Stability
+
+
+The primary stability issues encountered revolved around unstable cross-entropy loss handling and erratic gradient scaling.
+
+
+1. Cross-Entropy Scalability
+
+
+* In the beginning, loss graphs flattened at ~11.2 and experienced severe gradient vanishing.
+
+
+* The grad_fn in distributed_sparse_cross_entropy_loss was originally attached redundantly to mean_loss.
+
+
+  
+
+
+
+
+
+* In the beginning, I kept on getting this graph, with the loss curve forming a valley after the warmup and shooting upwards.
+
+
+* Autograd subsequently applied double-reduction scales during backpropagation.
+
+
+* I fixed this by correctly binding grad_fn directly to the untampered sample_losses.
+
+
+* Tried to play around with the loss function, but got a “Loch Ness Monster-eque” curve.
+
+
+  
+
+
+
+* Finally got a good run with the correct sync_w_autograd() call.
+
+
+* Still the loss was saturating at ~7.5.
+
+
+* Changed the sync_w_autograd() to a simple vanilla sync() call and got a stable run.
+
+
+  
+
+
+
+* Had a throughput of 42k which was comparable to that of PyTorch, which was 46k.
+
+
+* Also the loss saturation was at ~5.8
+
+
+2. Vocab Parallel Cross Entropy 
+
+
+* Transitioning to vocab parallelism introduced issues resulting in loss spikes and early saturation. 
+
+
+* By pulling .max() logic outside the local batch and communicating via all_reduce_async, the arithmetic integrity (log(exp_logits)) allows stable tracking without exponential infinite values.
+
+
+* Now, applied two different methods here - 
+
+
+1. Used the normal cross_entropy_loss function
+
+
+          
+
+
+
+
+* Achieved a throughput of 56k with it but the loss saturated little bit early, ~6.2 instead of ~5.8
+
+
+
+
+2. Made a dedicated vocab_parallel_cross_entropy
+
+
+* Now this was not a very robust function.
+
+
+
+
+  
+
+
+
+
+
+* Got a throughput of only 14k and loss saturating at ~7.6
+
+
+* Still working on this, trying to understand what PyTorch has done and reverse engineering it.
+
+
+3. Comparison between the two methods - 
+
+
+1. Loss Curve - 
+
+
+  
+
+
+
+2. Throughput - 
+
+
+  
+
+
+
+* Surprisingly, both of the runs were pretty stable despite the GPUs were being used nonstop
+
+
+Pseudocode / Program Logic (customDNN module)
+
+
+1. Logic - 
+
+
+Generalized Distributed Module Architecture
+
+
+DTensor CustomLayer::forward(DTensor& input) {
+   // 1. Setup local output layout matching the global mesh
+   Layout out_layout(mesh, {batch, out_local});
+   DTensor output(mesh, pg, out_layout, "layer_output");
+
+
+   // 2. Local Math Dispatch (e.g., Matrix Multiplication)
+   // For Column-Parallel: No cross-rank dependency exists in forward
+   // For Row-Parallel: Intermediate results must be summed
+   if (is_column_parallel) {
+       output.linear_w_autograd(input, *weight, *bias);
+       // Sync-free -  Results are naturally sharded correctly.
+   }
+   else if (is_row_parallel) {
+       output.linear_w_autograd(input, *weight);
+      
+       // 3. Collective Communication (Sync)
+       // Aggregates partial products across the mesh dimension
+       if (!no_sync) {
+           output.sync(); // All-Reduce Sum (Gradient identity in backward)
+       }
+      
+       // Add bias AFTER sync to prevent multi-GPU duplication
+       if (has_bias) {
+           output.mutable_tensor() += bias->mutable_tensor();
+       }
+   }
+  
+   return output;
+}
+
+
+
+
+Core Logic -
+
+
+1. Asynchronous Execution -  
+
+
+Operations are dispatched to the GPU stream with no_sync flags whenever possible to overlap communication with the next layer's math.
+
+
+2. Autograd Integration - 
+
+
+CustomDNN manually binds gradients and ensures that collective operations (like AllReduce) don't double-count gradients during the backward pass (using .sync() for identity backprop).
+
+
+3. Device Alignment - 
+
+
+Every module automatically detects its rank and ensures local_v or local_hidden dimensions are sliced before kernel launching.
+
+
+2. Usage - 
+
+
+* Fused MLP Block (Communication Hiding)
+
+
+We hide communication by skipping internal syncs and unifying them at the block boundary.
+
+
+// DMLP usage in the GPT-2 block
+DTensor DMLP::forward(const DTensor& input) {
+   // Column-parallel: naturally asynchronous (No sync required)
+   DTensor h = fc1_->forward(input);
+   DTensor h_act = h.gelu();
+  
+   // Row-parallel: Pass no_sync=true to evade internal stream blocking
+   DTensor output = fc2_->forward(h_act, /*no_sync=*/true);
+  
+   // Unified sync: Triggers one single NCCL AllReduce for the entire MLP
+   output.sync();
+   return output;
+}
+
+
+* Training Loop Usage
+
+
+// gpt2_tp_test.cpp training step logic
+for (auto& batch : train_loader) {
+   // Forward pass with Vocab Parallelism
+   auto logits = model.forward(batch.input);
+  
+   // Sharded cross-entropy usage
+   auto loss = vocab_parallel_cross_entropy(logits, batch.target);
+  
+   // Integrated GPU-side grad clipping
+   float norm = param.grad_norm();
+}
+
+
+
+
+
+
+
+
+Research Material - 
+
+
+1. Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism
+
+
+2. Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM
+
+
+3. Domino: Eliminating Communication in LLM Training via Generic Tensor Slicing and Overlapping
+
+
+4. NeutronTP: Load-Balanced Distributed Full-Graph GNN Training with Tensor Parallelism
+
+
+5. ATP: Adaptive Tensor Parallelism for Foundation Models
+
+
+6. PyTorch DTensor Documentation
+
+
+7. PyTorch Tensor Parallel Documentation
+
+
+
+
+Overall Structure for Tensor Parallel - 
+
+
+  
+
+Regards,
+Anuj Kumar

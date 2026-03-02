@@ -25,6 +25,37 @@
 using namespace OwnTensor;
 
 // =============================================================================
+// User-Defined Forward Passes for CustomDNN Modules
+// =============================================================================
+
+namespace CustomDNN {
+
+DTensor DMLP::forward(DTensor& input) {
+    // Add backward hook to AllReduce the partial sum gradients from column-parallel fc1
+    input.register_backward_all_reduce_hook(sum);
+    
+    DTensor h = fc1_->forward(input);
+    h = gelu_.forward(h);
+    DTensor output = fc2_->forward(h);
+    return output;
+}
+
+DTensor DBlock::forward(DTensor& input) {
+    // Pre-Norm: ln(x)
+    DTensor h = ln_->forward(input);
+    
+    // MLP processing
+    h = mlp_->forward(h);
+    
+    // Residual connection: x + MLP(ln(x))
+    DTensor output(input.get_device_mesh(), input.get_pg(), input.get_layout(), "DBlock_residual_output", 0.0f);
+    output.mutable_tensor() = autograd::add(input.mutable_tensor(), h.mutable_tensor());
+    return output;
+}
+
+} // namespace CustomDNN
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
@@ -57,7 +88,11 @@ public:
     {
         // Create MLP blocks and add to Sequential
         for (int i = 0; i < cfg.n_layers; ++i) {
-            mlps.add(std::shared_ptr<CustomDNN::DBlock>(new CustomDNN::DBlock(mesh, pg, B, T, cfg.n_embd, cfg.n_layers, seed + 200 + i * 10)));
+            mlps.add(std::shared_ptr<CustomDNN::DBlock>(new CustomDNN::DBlock(
+                mesh, pg, B, T, cfg.n_embd, cfg.n_layers, 
+                CustomDNN::ShardingType::Shard(1), // fc1: column-parallel
+                CustomDNN::ShardingType::Shard(0), // fc2: row-parallel
+                seed + 200 + i * 10)));
         }
 
         // Optimization: cache position tensor once (avoids re-creating + H2D transfer every forward)
@@ -152,8 +187,8 @@ int main() {
         
         const float max_lr = 1e-4f;  
         const float min_lr = max_lr * 0.1f;
-        const int warmup_steps = 174;
-        const int max_steps = 1738;
+        const int warmup_steps = 608;
+        const int max_steps = 6076;
         
         if (rank == 0) {
             std::cout << "Configuration:" << std::endl;
@@ -210,7 +245,7 @@ int main() {
         // Create CSV log file (only on rank 0)
         std::ofstream log_file;
         if (rank == 0) {
-            log_file.open("Naive/naive_run_log.csv");
+            log_file.open("Naive/naive_run_log15.csv");
             log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
             log_file << std::fixed << std::setprecision(6);
         }

@@ -275,6 +275,8 @@ public:
          int64_t in_features,
          int64_t hidden_features,
          int64_t out_features,
+         ShardingType fc1_sharding,
+         ShardingType fc2_sharding,
          bool has_bias = false,
          float residual_scale = 1.0f,
          int seed = 42);
@@ -282,10 +284,6 @@ public:
     DTensor forward(DTensor& input) override;
     void all_reduce_gradients(ProcessGroupNCCL* pg) override;
     
-    DLinear& fc1() { return *fc1_; }
-    DLinear& fc2() { return *fc2_; }
-
-private:
     std::unique_ptr<DLinear> fc1_;
     std::unique_ptr<DLinear> fc2_;
     DGeLU gelu_;
@@ -311,12 +309,13 @@ public:
          int64_t seq_len,
          int64_t n_embd,
          int n_layers,
+         ShardingType fc1_sharding,
+         ShardingType fc2_sharding,
          int seed = 42);
     
     DTensor forward(DTensor& input) override;
     void all_reduce_gradients(ProcessGroupNCCL* pg) override;
 
-private:
     std::unique_ptr<DLayerNorm> ln_;
     std::unique_ptr<DMLP> mlp_;
 };

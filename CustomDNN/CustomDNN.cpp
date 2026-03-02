@@ -212,6 +212,8 @@ DMLP::DMLP(const DeviceMesh& mesh,
            int64_t in_features,
            int64_t hidden_features,
            int64_t out_features,
+           ShardingType fc1_sharding,
+           ShardingType fc2_sharding,
            bool has_bias,
            float residual_scale,
            int seed)
@@ -219,29 +221,23 @@ DMLP::DMLP(const DeviceMesh& mesh,
     fc1_ = std::make_unique<DLinear>(
         mesh, pg, batch_size, seq_len,
         in_features, hidden_features,
-        ShardingType::Shard(1),
+        fc1_sharding,
         has_bias, 0.02f, seed);
 
     float fc2_sd = 0.02f * residual_scale;
     fc2_ = std::make_unique<DLinear>(
         mesh, pg, batch_size, seq_len,
         hidden_features, out_features,
-        ShardingType::Shard(0),
+        fc2_sharding,
         has_bias, fc2_sd, seed + 1);
 
     register_module(fc1_.get());
     register_module(fc2_.get());
 }
 
-DTensor DMLP::forward(DTensor& input) {
-    // Add backward hook to AllReduce the partial sum gradients from column-parallel fc1
-    input.register_backward_all_reduce_hook(sum);
-    
-    DTensor h = fc1_->forward(input);
-    h = gelu_.forward(h);
-    DTensor output = fc2_->forward(h);
-    return output;
-}
+/* DTensor DMLP::forward(DTensor& input) {
+    // Implemented in user script
+} */
 
 void DMLP::all_reduce_gradients(ProcessGroupNCCL* pg) {
     fc1_->all_reduce_gradients(pg);
@@ -258,6 +254,8 @@ DBlock::DBlock(const DeviceMesh& mesh,
                int64_t seq_len,
                int64_t n_embd,
                int n_layers,
+               ShardingType fc1_sharding,
+               ShardingType fc2_sharding,
                int seed)
     : ln_(std::make_unique<DLayerNorm>(mesh, n_embd, true))
 {
@@ -268,24 +266,16 @@ DBlock::DBlock(const DeviceMesh& mesh,
     mlp_ = std::make_unique<DMLP>(
         mesh, pg, batch_size, seq_len,
         n_embd, 4 * n_embd, n_embd,
+        fc1_sharding, fc2_sharding,
         true, scale, seed);
 
     register_module(ln_.get());
     register_module(mlp_.get());
 }
 
-DTensor DBlock::forward(DTensor& input) {
-    // Pre-Norm: ln(x)
-    DTensor h = ln_->forward(input);
-    
-    // MLP processing
-    h = mlp_->forward(h);
-    
-    // Residual connection: x + MLP(ln(x))
-    DTensor output(input.get_device_mesh(), input.get_pg(), input.get_layout(), "DLayerNorm_output", 0.0f);
-    output.mutable_tensor() = autograd::add(input.mutable_tensor(), h.mutable_tensor());
-    return output;
-}
+/* DTensor DBlock::forward(DTensor& input) {
+    // Implemented in user script
+} */
 
 void DBlock::all_reduce_gradients(ProcessGroupNCCL* pg) {
     ln_->all_reduce_gradients(pg);
