@@ -1,0 +1,66 @@
+PyTorch TP attn script 
+
+MLP Sharded - 
+
+TP = 2
+
+Step 1000
+
+rank 0 sample 0: america is a used tool to determine the method of into any-b, any new method. For simple technique to be the method: a can notey the found source of energy (CV.e2L. 0.0
+F is2) A 3 from Figure 1. 15
+rank 0 sample 1: america is usually open the � factorableedian�, for two women who do the groups of those the female are onlyThe men of not men at a whose A� is a adult�the men” of the population. Many-� is on the main percentage of the number of
+rank 0 sample 2: america is the for P G as
+(in-N-D2
+A: of H: The-D)N- C-S--P) (GAP.A. EIC, L5OAP onP) (LH1)),)1-
+rank 0 sample 3: america is called ancient. This is part in the last group of the known of the early form or one. no term of at the two the two one at the the twothb. Most century in two species of: these species species have a main in of the different three different of the
+
+
+Step 2000
+
+rank 0 sample 0: america is a of anumen. have size weight so but also show not as amount cases time same of as those number of InLs, the are not size of the population. It is believed a because people their male are who have died risk from developing children. or is not a of
+rank 0 sample 1: america is as able. a of the C Roman, or itsias, theud. The Ituchusus, by woman, the E, Auchio inL.
+ is History the
+'s of of the E. Itans also an contains
+ of the most Hindu, religious
+rank 0 sample 2: america is the to you, as consider the result. WhenThese most differences were they used to refer as to methods types The various characteristics of used specific of the known, the types are in which case that is not causetoamine/ different numbers. In a people, there can usually be
+rank 0 sample 3: america is a member-inized
+- Itt
+chem in the above body its to shape axis. ThisIf initial type, it is also clear shown to
+c.iosThe problem type used makes be a as- person more when a person the only that will actually use a similar
+
+
+Step 3000
+
+rank 0 sample 0: america is available in its house. long with some numerous images
+ represent little tom associated many years since The age was age. 18 lifetime. Mary. like the 175 average summer.
+How Theesse hasutton It also known as in Henry Jefferson.This The article of Thomas History81 Historical
+rank 0 sample 1: america is famous only rich long high content in high and than 2 low per 70 0 the, and total, rainfall 2.3 trillion moves.0�010iet
+Lherent Of the minimum hundred 60 1 mg/ 25 poundsold syrup
+Fower ( cup sodium potatoes%)ops
+rank 0 sample 2: america is located located home high National, to southern southern around the area from its east to east. theThe summerth 18 from 18 1876 in 18 181918 18 1860 near18 1800January -
+ March Feb March April 582 18 1891.12. 2012 TheGreat
+
+rank 0 sample 3: america is used dedicated on the hand, a collection collection store or then so to use a with. of the is on you ground. the hand of in water, about a with where at every 1000 days you you have like for the having least eight hours. you you get a time testfrom
+
+
+
+[Fixing clip grad norm]
+Step 1000
+
+rank 0 sample 0: america is a used tool to determine the following or information treatment by the the as method, the method of treatment, the treatment method of the individual which did them is only possible one person the For: of which other, these not used, because is the method not to the results of the only
+rank 0 sample 1: america is part by the American, the United Arab who was told very have not already able to have with� two major hundred in the fact, The five, even five were the first time. TheHow some the three two different three more four three not: each third. the number of number
+rank 0 sample 2: america is the to � the second�B��: The-�atic”:6.
+-1. The third is the above, the appears� (5,3, 16:10.13 to10.203..0.10.5.2.
+rank 0 sample 3: america is called significant. This is in the of that infection is the as to be a on the cell. As C was applied only a in-year person of the. wasAn is also up the main study of H1,�
+In. the study the journal journal. the same
+
+
+Step 2000
+
+rank 0 sample 0: america is a very from to, that of become since is a related with its pain or pain that are withIn some, she are a, for which a child with a little of his career
+. Iaint, was a career very social work in his a her woman on his of,
+rank 0 sample 1: america is the one city of the of. - the the when from to a who.
+ were by in at a time and it was to by that the effort his a.. was all in being who before their could. of what and to can find how the treat the Mary. the
+rank 0 sample 2: america is the the tool of maintaining body
+ AsThe New of the � and� man society for the and of the life of the the It that the� a that the the world the a world by her people the God and His as, a the country which the the property has an money
+rank 0 sample 3: america is a professional to have to a more community of people a are very to a of friend to it the it life, is good a of the natural school being when the and mostMany at today different, and,., world and there more if more of an way, it of one

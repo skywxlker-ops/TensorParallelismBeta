@@ -121,7 +121,7 @@ DLinear::DLinear(const DeviceMesh& mesh,
         Layout full_layout(mesh, {in_features_, out_features_});
         DTensor full_weight(mesh, pg, full_layout, "DLinear_full_weight_init", sd, seed);
 
-        Layout weight_layout(mesh, {in_features_, out_features_}, 1);
+        Layout weight_layout(mesh, {in_features_, out_local_});
         weight_ = std::make_unique<DTensor>(mesh, pg, weight_layout, "DLinear_weight");
         weight_->shard_fused_transpose(1, 0, full_weight);
         
@@ -133,7 +133,7 @@ DLinear::DLinear(const DeviceMesh& mesh,
         Layout full_layout(mesh, {in_features_, out_features_});
         DTensor full_weight(mesh, pg, full_layout, "DLinear_full_weight_init", sd, seed);
 
-        Layout weight_layout(mesh, {in_features_, out_features_}, 0);
+        Layout weight_layout(mesh, {in_local, out_local_});
         weight_ = std::make_unique<DTensor>(mesh, pg, weight_layout, "DLinear_weight");
         weight_->shard_fused_transpose(0, 0, full_weight);
         
@@ -149,7 +149,7 @@ DLinear::DLinear(const DeviceMesh& mesh,
 
     if (has_bias_) {
         if (weight_sharding_.is_shard() && weight_sharding_.shard_dim() == 1) {
-            Layout bias_layout(mesh, {out_features_}, 0);
+            Layout bias_layout(mesh, {out_local_});
             bias_ = std::make_unique<DTensor>(mesh, pg, bias_layout, "DLinear_bias");
         } else {
             Layout bias_layout(mesh, {out_features_});
@@ -162,7 +162,7 @@ DLinear::DLinear(const DeviceMesh& mesh,
 }
 
 DTensor DLinear::forward(DTensor& input) {
-    Layout out_layout(*mesh_, {seq_len_, out_local_});
+    Layout out_layout(*mesh_, {batch_size_, seq_len_, out_local_});
     DTensor output(*mesh_, pg_, out_layout, "DLinear_output", 0.0f);
 
     // For row parallel, bias is added AFTER all-reduce to prevent duplicating the bias
@@ -245,6 +245,47 @@ void DMLP::all_reduce_gradients(ProcessGroupNCCL* pg) {
 }
 
 // =============================================================================
+// DAttention Implementation
+// =============================================================================
+
+DAttention::DAttention(const DeviceMesh& mesh,
+                       std::shared_ptr<ProcessGroupNCCL> pg,
+                       int64_t batch_size, int64_t seq_len,
+                       int64_t n_embd, int64_t n_heads, int n_layers,
+                       ShardingType c_attn_sharding,
+                       ShardingType c_proj_sharding,
+                       bool has_bias,
+                       float residual_scale,
+                       int seed)
+    : n_embd_(n_embd), n_heads_(n_heads), head_dim_(n_embd / n_heads)
+{
+    c_attn_ = std::make_unique<DLinear>(
+        mesh, pg, batch_size, seq_len,
+        n_embd, 3 * n_embd,
+        c_attn_sharding,
+        has_bias, 0.02f, seed);
+
+    float proj_sd = 0.02f * residual_scale;
+    c_proj_ = std::make_unique<DLinear>(
+        mesh, pg, batch_size, seq_len,
+        n_embd, n_embd,
+        c_proj_sharding,
+        has_bias, proj_sd, seed + 1);
+
+    register_module(c_attn_.get());
+    register_module(c_proj_.get());
+}
+
+/* DTensor DAttention::forward(DTensor& input) {
+    // Implemented in user script
+} */
+
+void DAttention::all_reduce_gradients(ProcessGroupNCCL* pg) {
+    c_attn_->all_reduce_gradients(pg);
+    c_proj_->all_reduce_gradients(pg);
+}
+
+// =============================================================================
 // DBlock Implementation
 // =============================================================================
 
@@ -253,32 +294,32 @@ DBlock::DBlock(const DeviceMesh& mesh,
                int64_t batch_size,
                int64_t seq_len,
                int64_t n_embd,
+               int64_t n_head,
                int n_layers,
                ShardingType fc1_sharding,
                ShardingType fc2_sharding,
                int seed)
-    : ln_(std::make_unique<DLayerNorm>(mesh, n_embd, true))
+    : ln_1_(std::make_unique<DLayerNorm>(mesh, n_embd, true)),
+      ln_2_(std::make_unique<DLayerNorm>(mesh, n_embd, true))
 {
-    
     // Scale residual projection: std *= (2 * n_layers) ** -0.5
     float scale = 1.0f / std::sqrt(2.0f * static_cast<float>(n_layers));
-    
+
     mlp_ = std::make_unique<DMLP>(
         mesh, pg, batch_size, seq_len,
         n_embd, 4 * n_embd, n_embd,
         fc1_sharding, fc2_sharding,
-        true, scale, seed);
+        true, scale, seed + 10);
 
-    register_module(ln_.get());
+    register_module(ln_1_.get());
+    register_module(ln_2_.get());
     register_module(mlp_.get());
 }
 
-/* DTensor DBlock::forward(DTensor& input) {
-    // Implemented in user script
-} */
-
+// Update DBlock Implementation
 void DBlock::all_reduce_gradients(ProcessGroupNCCL* pg) {
-    ln_->all_reduce_gradients(pg);
+    ln_1_->all_reduce_gradients(pg);
+    ln_2_->all_reduce_gradients(pg);
     mlp_->all_reduce_gradients(pg);
 }
 
@@ -743,4 +784,4 @@ void AdamW::step(std::vector<DTensor*> params) {
     launch_group(no_wd);
 }
 
-} // namespace CustomDNN
+} // namespace CustomDNN`

@@ -15,6 +15,8 @@
 #include "mlp/activation.h"
 #include "autograd/operations/EmbeddingOps.h"
 #include "nn/NN.h"
+#include "autograd/operations/TrilOps.h"
+#include "autograd/backward/TrilBackward.h"
 
 // Dataloader
 #include "../dl_test.cpp"
@@ -30,6 +32,76 @@ using namespace OwnTensor;
 
 namespace CustomDNN {
 
+
+    
+DTensor DAttention::forward(DTensor& input) {
+    using namespace OwnTensor;
+
+    // Backward hook: AllReduce grads flowing through column-parallel c_attn
+    input.register_backward_all_reduce_hook(sum);
+
+    const DeviceMesh& mesh = input.get_device_mesh();
+    auto pg = input.get_pg();
+    auto shape = input.get_layout().get_global_shape();
+    int64_t B = shape[0], T = shape[1], C = shape[2];
+    int64_t world_size = pg->get_worldsize();
+    int64_t n_heads_local = n_heads_ / world_size;
+
+    int rank = pg->get_rank();
+
+    // QKV: column-parallel gives local heads' Q,K,V
+    DTensor qkv_dt = c_attn_->forward(input);
+    Tensor qkv = qkv_dt.mutable_tensor();
+
+    int64_t local_out = qkv.numel() / (B * T);
+    if (qkv.ndim() == 2) {
+        qkv = autograd::reshape(qkv, Shape({{B, T, local_out}}));
+    }
+
+    // Split Q, K, V each [B, T, C_local]
+    std::vector<Tensor> parts = qkv.make_shards_inplace_axis(3, 2);
+    Tensor q = parts[0], k = parts[1], v = parts[2];
+
+
+    // Reshape to local heads: [B, n_heads_local, T, head_dim]
+    q = autograd::transpose(autograd::reshape(q, Shape({{B, T, n_heads_local, head_dim_}})), 1, 2).contiguous();
+    k = autograd::transpose(autograd::reshape(k, Shape({{B, T, n_heads_local, head_dim_}})), 1, 2).contiguous();
+    v = autograd::transpose(autograd::reshape(v, Shape({{B, T, n_heads_local, head_dim_}})), 1, 2).contiguous();
+
+
+    // Scaled dot-product attention
+    Tensor scale_t = Tensor::full(Shape{{1}},
+        TensorOptions().with_dtype(Dtype::Float32).with_device(q.device()),
+        1.0f / std::sqrt(static_cast<float>(head_dim_)));
+    Tensor attn_weights = autograd::mul(
+        autograd::matmul(q, autograd::transpose(k, -2, -1)), scale_t);
+
+
+    // Causal mask + softmax
+    float neg_inf = -std::numeric_limits<float>::infinity();
+    Tensor masked = autograd::tril(attn_weights, 0, neg_inf);
+    Tensor attn_probs = autograd::softmax(masked);
+
+
+    // Attention output: [B, n_heads_local, T, head_dim]
+    Tensor attn_out = autograd::matmul(attn_probs, v);
+
+
+    // Merge local heads: [B, T, C_local]
+    int64_t C_local = n_heads_local * head_dim_;
+    Tensor merged = autograd::reshape(
+        autograd::transpose(attn_out, 1, 2), Shape({{B, T, C_local}}));
+
+
+    // Output projection (row-parallel → AllReduce inside DLinear)
+    DTensor merged_dt(mesh, pg, Layout(mesh, {B, T, C_local}));
+    merged_dt.mutable_tensor() = merged;
+    DTensor proj_dt = c_proj_->forward(merged_dt);
+
+
+    return proj_dt;
+}
+
 DTensor DMLP::forward(DTensor& input) {
     // Add backward hook to AllReduce the partial sum gradients from column-parallel fc1
     input.register_backward_all_reduce_hook(sum);
@@ -41,15 +113,20 @@ DTensor DMLP::forward(DTensor& input) {
 }
 
 DTensor DBlock::forward(DTensor& input) {
-    // Pre-Norm: ln(x)
-    DTensor h = ln_->forward(input);
+    using namespace OwnTensor;
+
+    // 1. Attention branch: x = x + Attention(ln_1(x))
+    DTensor h = ln_1_->forward(input);
+    // DBlock no longer has attn_ — attention is handled at GPT level
+    // This is a placeholder; attention must be called externally
     
-    // MLP processing
-    h = mlp_->forward(h);
+    // 2. MLP branch: x = x + MLP(ln_2(x))
+    DTensor h2 = ln_2_->forward(input);
+    h2 = mlp_->forward(h2);
     
-    // Residual connection: x + MLP(ln(x))
-    DTensor output(input.get_device_mesh(), input.get_pg(), input.get_layout(), "DBlock_residual_output", 0.0f);
-    output.mutable_tensor() = autograd::add(input.mutable_tensor(), h.mutable_tensor());
+    DTensor output(input.get_device_mesh(), input.get_pg(), input.get_layout());
+    output.mutable_tensor() = autograd::add(input.mutable_tensor(), h2.mutable_tensor());
+    
     return output;
 }
 
@@ -63,11 +140,12 @@ struct GPTConfig {
     int64_t context_length = 1024;
     int64_t vocab_size = 50304;  // GPT-2 vocab size
     int64_t n_embd = 384;
+    int64_t n_head = 6;
     int64_t n_layers = 3;
 };
 
 // =============================================================================
-// GPT Model (CustomDNN Backend)
+// GPT Model (CustomDNN Backend) — with Attention
 // =============================================================================
 
 class GPT : public CustomDNN::DModuleBase {
@@ -75,7 +153,10 @@ public:
     GPTConfig config;
     CustomDNN::DEmbedding wte;
     CustomDNN::DEmbedding wpe;
-    CustomDNN::DSequential mlps;
+    std::vector<std::shared_ptr<CustomDNN::DAttention>> attn_blocks;
+    std::vector<std::shared_ptr<CustomDNN::DMLP>> mlp_blocks;
+    std::vector<std::shared_ptr<CustomDNN::DLayerNorm>> ln1_blocks;  // pre-attention norm
+    std::vector<std::shared_ptr<CustomDNN::DLayerNorm>> ln2_blocks;  // pre-MLP norm
     CustomDNN::DLayerNorm ln_f;
     CustomDNN::DLinear lm_head;
 
@@ -86,17 +167,40 @@ public:
           ln_f(mesh, cfg.n_embd, true),
           lm_head(mesh, pg, B, T, cfg.n_embd, cfg.vocab_size, CustomDNN::ShardingType::Replicated(), false, 0.02f, seed + 1000)
     {
-        // Create MLP blocks and add to Sequential
+        float scale = 1.0f / std::sqrt(2.0f * static_cast<float>(cfg.n_layers));
+
         for (int i = 0; i < cfg.n_layers; ++i) {
-            mlps.add(std::shared_ptr<CustomDNN::DBlock>(new CustomDNN::DBlock(
-                mesh, pg, B, T, cfg.n_embd, cfg.n_layers, 
+            // Pre-attention LayerNorm
+            auto ln1 = std::make_shared<CustomDNN::DLayerNorm>(mesh, cfg.n_embd, true);
+            ln1_blocks.push_back(ln1);
+            register_module(ln1.get());
+
+            // Attention block (column-parallel QKV, row-parallel output)
+            auto attn = std::make_shared<CustomDNN::DAttention>(
+                mesh, pg, B, T, cfg.n_embd, cfg.n_head, cfg.n_layers,
+                CustomDNN::ShardingType::Shard(1),  // c_attn: column-parallel
+                CustomDNN::ShardingType::Shard(0),  // c_proj: row-parallel
+                true, scale, seed + 200 + i * 10);
+            attn_blocks.push_back(attn);
+            register_module(attn.get());
+
+            // Pre-MLP LayerNorm
+            auto ln2 = std::make_shared<CustomDNN::DLayerNorm>(mesh, cfg.n_embd, true);
+            ln2_blocks.push_back(ln2);
+            register_module(ln2.get());
+
+            // MLP block
+            auto mlp = std::make_shared<CustomDNN::DMLP>(
+                mesh, pg, B, T, cfg.n_embd, 4 * cfg.n_embd, cfg.n_embd,
                 CustomDNN::ShardingType::Shard(1), // fc1: column-parallel
                 CustomDNN::ShardingType::Shard(0), // fc2: row-parallel
-                seed + 200 + i * 10)));
+                true, scale, seed + 200 + i * 10);
+            mlp_blocks.push_back(mlp);
+            register_module(mlp.get());
         }
 
-        // Optimization: cache position tensor once (avoids re-creating + H2D transfer every forward)
-        Tensor pos_cpu(Shape{{1, cfg.context_length}}, TensorOptions().with_dtype(Dtype::Int64));
+        // Optimization: cache position tensor once
+        OwnTensor::Tensor pos_cpu(Shape{{1, cfg.context_length}}, TensorOptions().with_dtype(Dtype::Int64));
         int64_t* pos_data = pos_cpu.data<int64_t>();
         for (int64_t i = 0; i < cfg.context_length; ++i) {
             pos_data[i] = i;
@@ -105,13 +209,14 @@ public:
 
         register_module(wte);
         register_module(wpe);
-        register_module(mlps);
         register_module(ln_f);
         register_module(lm_head);
     }
     
     // Forward: indices [B, T] -> logits [B, T, vocab_size]
     DTensor forward(DTensor& idx) override {
+        using namespace OwnTensor;
+
         // Get embeddings [B, T, C]
         DTensor tok_emb = wte.forward(idx);
 
@@ -124,20 +229,33 @@ public:
         DTensor x(idx.get_device_mesh(), idx.get_pg(), tok_emb.get_layout());
         x.mutable_tensor() = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
 
-        // Apply MLP blocks
-        x = mlps.forward(x);
-        
+        // Transformer blocks: interleave Attention + MLP per layer
+        for (int i = 0; i < config.n_layers; ++i) {
+            // Attention: x = x + Attention(ln_1(x))
+            DTensor h = ln1_blocks[i]->forward(x);
+            DTensor attn_out = attn_blocks[i]->forward(h);
+            DTensor x_attn(x.get_device_mesh(), x.get_pg(), x.get_layout());
+            x_attn.mutable_tensor() = autograd::add(x.mutable_tensor(), attn_out.mutable_tensor());
+
+            // MLP: x = x + MLP(ln_2(x))
+            DTensor h2 = ln2_blocks[i]->forward(x_attn);
+            h2 = mlp_blocks[i]->forward(h2);
+            DTensor x_mlp(x.get_device_mesh(), x.get_pg(), x.get_layout());
+            x_mlp.mutable_tensor() = autograd::add(x_attn.mutable_tensor(), h2.mutable_tensor());
+            x = x_mlp;
+        }
+
         // Final normalization
         x = ln_f.forward(x);
 
-        // Output projection via separate lm_head
+        // Output projection
         DTensor logits = lm_head.forward(x);
         
         return logits;
     }
 
 private:
-    Tensor cached_pos_;  // [1, T] position indices, cached on GPU
+    OwnTensor::Tensor cached_pos_;
 };
 
 // =============================================================================
@@ -169,7 +287,7 @@ int main() {
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
         if (rank == 0) {
-            std::cout << "=== GPT-2 Training Script (MLP-TP, Replicated Embeddings) ===" << std::endl;
+            std::cout << "=== GPT-2 Training Script (Attention + MLP-TP) ===" << std::endl;
         }
         
         // Configuration
@@ -177,25 +295,28 @@ int main() {
         config.context_length = 1024;
         config.vocab_size = 50304;
         config.n_embd = 384;
+        config.n_head = 6;
         config.n_layers = 3;
         
         // Training hyperparameters
         const int B = 8;           // Batch size
         const int T = 1024;        // Sequence length
-        const int global_batch = 262144;  // Global batch size
+        const int global_batch = 65536;  // Global batch size
         const int grad_accum_steps = global_batch / (B * T);
         
-        const float max_lr = 1e-4f;  
+        const float max_lr = 6e-4f;  
         const float min_lr = max_lr * 0.1f;
-        const int warmup_steps = 608;
-        const int max_steps = 6076;
+        const int warmup_steps = 677;
+        const int max_steps = 6768;
         
         if (rank == 0) {
             std::cout << "Configuration:" << std::endl;
             std::cout << "  vocab_size: " << config.vocab_size << std::endl;
             std::cout << "  context_length: " << config.context_length << std::endl;
             std::cout << "  n_embd: " << config.n_embd << std::endl;
+            std::cout << "  n_heads: " << config.n_head << std::endl;
             std::cout << "  n_layers: " << config.n_layers << std::endl;
+            std::cout << "  head_dim: " << (config.n_embd / config.n_head) << std::endl;
             std::cout << "  B=" << B << ", T=" << T << std::endl;
             std::cout << "  global_batch: " << global_batch << std::endl;
             std::cout << "  grad_accum_steps: " << grad_accum_steps << std::endl;
@@ -245,7 +366,7 @@ int main() {
         // Create CSV log file (only on rank 0)
         std::ofstream log_file;
         if (rank == 0) {
-            log_file.open("Naive/naive_run_log16.csv");
+            log_file.open("../attn/attn_run_log_attn_shard_3.csv");
             log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec\n";
             log_file << std::fixed << std::setprecision(6);
         }

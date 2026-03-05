@@ -290,14 +290,47 @@ public:
 };
 
 // =============================================================================
+// Distributed Attention
+// =============================================================================
+
+/**
+ * @class DAttention
+ * @brief Configurable tensor-parallel multi-head causal self-attention
+ * 
+ * Architecture: c_attn (column-parallel) → attention → c_proj (row-parallel, auto-sync)
+ * Mirrors the DMLP pattern: sharding types are passed in, forward is user-defined.
+ */
+class DAttention : public DModuleBase {
+public:
+    DAttention(const DeviceMesh& mesh,
+               std::shared_ptr<ProcessGroupNCCL> pg,
+               int64_t batch_size, int64_t seq_len,
+               int64_t n_embd, int64_t n_heads, int n_layers,
+               ShardingType c_attn_sharding,
+               ShardingType c_proj_sharding,
+               bool has_bias = true,
+               float residual_scale = 1.0f,
+               int seed = 1234);
+
+    DTensor forward(DTensor& input) override;
+    void all_reduce_gradients(ProcessGroupNCCL* pg) override;
+
+    std::unique_ptr<DLinear> c_attn_;   // QKV projection: [n_embd] → [3*n_embd]
+    std::unique_ptr<DLinear> c_proj_;   // Output projection: [n_embd] → [n_embd]
+    int64_t n_embd_;
+    int64_t n_heads_;
+    int64_t head_dim_;
+};
+
+// =============================================================================
 // Distributed Block
 // =============================================================================
 
 /**
  * @class DBlock
- * @brief Matches the exact architecture of gpt2_tp_test's MLP block.
+ * @brief Matches the exact architecture of gpt2_tp_test's Transformer block.
  * 
- * Architecture: pre-LN → DMLP → Residual Add
+ * Architecture: x + Attention(ln_1(x)) + MLP(ln_2(x))
  */
 class DLayerNorm;
 
@@ -308,6 +341,7 @@ public:
          int64_t batch_size,
          int64_t seq_len,
          int64_t n_embd,
+         int64_t n_head,
          int n_layers,
          ShardingType fc1_sharding,
          ShardingType fc2_sharding,
@@ -316,7 +350,8 @@ public:
     DTensor forward(DTensor& input) override;
     void all_reduce_gradients(ProcessGroupNCCL* pg) override;
 
-    std::unique_ptr<DLayerNorm> ln_;
+    std::unique_ptr<DLayerNorm> ln_1_;
+    std::unique_ptr<DLayerNorm> ln_2_;
     std::unique_ptr<DMLP> mlp_;
 };
 

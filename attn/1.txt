@@ -1,0 +1,214 @@
+Tensor parallel in attention
+Tensor Parallel (TP) in the attention mechanism is a distributed computing technique where the large weight matrices of an attention layer are split across multiple GPUs. Instead of one GPU processing all attention heads, each GPU handles a subset of heads or a partial shard of the weight matrices to reduce the memory footprint and accelerate computation. 
+Hugging Face
+Hugging Face
+ +1
+Core Mechanism in Attention
+In a standard Transformer block, tensor parallelism is typically applied to the linear projections and the final output projection: 
+GitHub
+GitHub
+ +1
+Column Parallel (Q, K, V Projections): The weight matrices for the Query (
+), Key (
+), and Value (
+) projections are sliced vertically (by columns). Each GPU receives the full input but only computes the output for a subset of the attention heads.
+Independent Attention Computation: Because attention heads are mathematically independent, each GPU can compute the attention scores and weighted values for its assigned heads without communicating with other GPUs.
+Row Parallel (Output Projection): The results from individual heads are concatenated. The final linear layer (output projection) is sliced horizontally (by rows). Each GPU multiplies its local attention results by its corresponding weight shard.
+All-Reduce Synchronization: After the row-parallel projection, the partial results from all GPUs are summed using an All-Reduce operation to produce the final, complete output for the layer. 
+GitHub
+GitHub
+ +5
+Advanced TP Techniques for Attention
+Recent research has introduced specialized TP schemes to address efficiency bottlenecks in modern architectures like DeepSeek's Multi-Head Latent Attention (MLA): 
+arXiv.org
+arXiv.org
+ +1
+Tensor-Parallel Latent Attention (TPLA): Specifically designed for models with compressed KV caches. It partitions latent representations and input dimensions across devices, allowing each head to maintain full representational capacity while unlocking TP efficiency.
+Grouped Latent Attention (GLA): Partitions both attention heads and latent representations into groups to reduce the per-device KV cache memory load.
+Sync-Point Drop (SPD): A technique to reduce communication overhead by selectively dropping the synchronization (all-reduce) on attention outputs, which can improve inference latency with minimal accuracy loss. 
+arXiv.org
+arXiv.org
+ +3
+Key Benefits and Constraints
+Memory Efficiency: Distributes parameters and activations, allowing models to fit on multiple GPUs that would be too large for one.
+High Bandwidth Required: Because TP requires frequent synchronization (All-Reduce) within a single layer, it is most effective on systems with high-speed interconnects like NVIDIA NVLink.
+Head Count Constraint: The degree of parallelism (number of GPUs) must typically divide the number of attention heads evenly. 
+Hugging Face
+Hugging Face
+ +5
+Would you like to see a code implementation of a tensor-parallel attention layer using PyTorch's Distributed Tensor (DTensor)?
+
+
+
+
+undefined
+undefined
+undefined
+14 sites
+TPLA: Tensor Parallel Latent Attention for Efficient ... - arXiv.org
+21 Aug 2025 — We propose Tensor-Parallel Latent Attention (TPLA): a scheme that partitions both the latent representation and each head's input ...
+
+arXiv.org
+Tensor Parallelism and Sequence Parallelism: Detailed Analysis
+11 Jan 2024 — How Calculating Attention in Training and Inference is Different? # Calculating attention itself is the same ( Attention ( Q , K ,
+
+GitHub
+
+Tensor Parallelism (TP) in Transformers - Hugging Face
+4 Dec 2025 — Q = XW_Q,\quad K = XW_K,\quad V = XW_V. Q=XWQ,K=XWK,V=XWV. A learned output projection W O W_O WO then produces the final attentio...
+
+Hugging Face
+
+Show all
+are these different from context parallelism right?
+Yes, Tensor Parallelism (TP) and Context Parallelism (CP) are distinct techniques that solve different scaling challenges in the attention mechanism. While TP splits the "width" of the model (parameters), CP splits the "length" of the input (sequence). 
+Exxact Corp.
+Exxact Corp.
+ +1
+Key Differences
+Feature 	Tensor Parallelism (TP)	Context Parallelism (CP)
+What is split?	Model weights (Q, K, V, and Output matrices).	The input sequence (tokens).
+Primary Goal	Fit large parameters that exceed a single GPU's memory.	Fit long sequences (128k to 1M+ tokens) by distributing activation memory.
+Partitioning	Splits by attention heads. Each GPU handles a subset of heads.	Splits by token dimension. Each GPU handles a subset of the sequence.
+Communication	Uses All-Reduce after the output projection to sync results.	Often uses Ring Attention or All-to-All to share KV shards across the ring.
+Constraint	Limited by the total number of attention heads.	Scalable to very large degrees, limited mainly by interconnect bandwidth.
+How They Work in Attention
+TP in Attention: Each GPU gets the entire sequence but only computes a few attention heads. If you have 32 heads and 4 GPUs, each GPU computes 8 heads for the full 100k tokens.
+CP in Attention: Each GPU gets all attention heads but only for a segment of the sequence. To compute global attention, GPUs must "rotate" their Key (K) and Value (V) data in a ring so that every token can eventually attend to every other token. 
+Exxact Corp.
+Exxact Corp.
+ +2
+Why use both?
+Modern long-context models (like Llama 3) often combine both into a 2D or 3D parallel strategy: 
+Exxact Corp.
+Exxact Corp.
+ +1
+TP fits the massive 405B weights by sharding them across GPUs within a single node.
+CP extends the context window to 1M+ tokens by sharding the sequence across multiple nodes. 
+Exxact Corp.
+Exxact Corp.
+ +3
+Would you like to know how to calculate the memory savings when combining TP and CP for a specific model size?
+
+
+
+
+undefined
+undefined
+undefined
+14 sites
+Context Parallelism & Ring Attention - Reaching 1M Token ...
+22 Jan 2026 — Parallelism Fundamentals. When a model or dataset exceeds single-GPU capacity, parallelism strategies distribute the workload. Eac...
+
+Exxact Corp.
+
+Introduction to Context Parallel — PyTorch Tutorials 2.11.0+ ...
+Ring Attention, a novel parallel implementation of the Attention layer, is critical to performant Context Parallel. Ring Attention...
+
+PyTorch documentation
+Introducing Context Parallelism - Insu Jang
+20 Sept 2024 — Context Parallelism vs Sequence Parallelism. Why suddenly we say context parallelism instead of sequence parallelism? This is for ...
+
+GitHub
+
+Show all
+what are thr functions i need for this
+To implement Tensor Parallelism (TP) and Context Parallelism (CP) in the attention mechanism, you need specific functions that handle weight sharding, communication primitives (like All-Reduce), and sequence partitioning.
+The most common way to do this today is using the PyTorch Distributed Tensor (DTensor) framework or high-level libraries like NVIDIA Megatron-Core.
+1. Core Functions for Tensor Parallelism (TP)
+TP splits the weight matrices. You need functions to wrap standard linear layers into sharded versions: 
+parallelize_module(): The primary PyTorch API to apply a parallelization plan to your model.
+ColwiseParallel(): Used for the Query, Key, and Value (QKV) projections. It shards the weight matrix vertically so each GPU handles a subset of attention heads.
+RowwiseParallel(): Used for the Output projection layer. It shards the weight matrix horizontally to combine the partial results from different heads.
+all_reduce(): A low-level communication function that sums the partial results from all GPUs after the row-parallel projection to produce the final attention output. 
+PyTorch documentation
+PyTorch documentation
+ +3
+2. Core Functions for Context Parallelism (CP)
+CP (or Sequence Parallelism) shards the input tokens. You need functions that manage how tokens are distributed and how they "talk" to each other during attention:
+DeviceMesh(): Defines the grid of GPUs. For CP, you typically create a 1D or 2D mesh where one dimension represents the CP group.
+all_to_all(): Used in DeepSpeed Ulysses style CP. It re-shards data from the "sequence dimension" to the "head dimension" so that each GPU can perform a standard attention calculation on all tokens for its assigned heads.
+RingAttention primitives: If using Ring Attention, you need custom send and recv (P2P) functions to rotate Key (K) and Value (V) blocks between GPUs in a circle.
+reduce_scatter() and all_gather(): Specialized versions of TP (often called NVIDIA Sequence Parallelism) use these to shard activations even further, saving memory on LayerNorm and Dropout layers. 
+PyTorch documentation
+PyTorch documentation
+ +4
+Summary Implementation Workflow
+Initialize the Mesh: Use init_device_mesh("cuda", mesh_shape) to group your GPUs.
+Define the Plan: Create a dictionary mapping your attention sub-modules (e.g., q_proj, k_proj) to ColwiseParallel or RowwiseParallel.
+Parallelize: Call parallelize_module(model, mesh, plan).
+Partition Input: For CP, manually slice your input tensor along the sequence dimension (e.g., input[:, start:end, :]) before passing it to the model. 
+PyTorch documentation
+PyTorch documentation
+ +4
+Would you like a minimal code snippet showing how to set up the DeviceMesh for a combined TP+CP configuration?
+
+
+
+
+undefined
+undefined
+undefined
+11 sites
+torch.distributed.tensor.parallel — PyTorch 2.10 documentation
+13 Jun 2025 — Tensor Parallelism - torch. distributed. tensor. parallel. ... Tensor Parallelism(TP) is built on top of the PyTorch DistributedTe...
+
+PyTorch documentation
+
+Large Scale Transformer model training with Tensor Parallel ...
+19 Apr 2024 — For example: * # forward in a TransformerBlock def forward(self, x): h = x + self. attention(self. attention_norm(x)) out = h + se...
+
+PyTorch documentation
+
+PyTorch Distributed Overview
+20 Jul 2025 — Distributed Data-Parallel (DDP) Fully Sharded Data-Parallel Training (FSDP2) Tensor Parallel (TP) Pipeline Parallel (PP) Sharding ...
+
+PyTorch
+
+Show all
+i mean i have implemeentd tp in the mlp and vocab, now wanna go into tp in attention
+To extend Tensor Parallelism (TP) from the MLP and Vocab layers to the Attention mechanism, you follow the same Column-Row composition logic used in your MLP blocks. 
+DEV Community
+DEV Community
+ +1
+In attention, the Q, K, and V projections act as the "Column" part, and the Output projection acts as the "Row" part. 
+Hugging Face
+Hugging Face
+ +1
+1. Functional Mapping for Attention TP
+The standard Transformer attention block is parallelized by splitting the attention heads across devices. 
+GitHub
+GitHub
+ +1
+Layer component 	Parallel style	Reasoning
+wq, wk, wv	ColwiseParallel	Splitting weights vertically ensures each GPU gets a complete subset of heads.
+Softmax / Dropout	(Local)	These are element-wise and happen locally on each GPU's shard.
+wo (Output)	RowwiseParallel	This combines the partial attention results from each GPU and triggers the All-Reduce to sync the final tensor.
+2. Implementation in PyTorch
+If you are using torch.distributed.tensor.parallel, you define your plan within parallelize_module: 
+PyTorch documentation
+PyTorch documentation
+ +2
+python
+from torch.distributed.tensor.parallel import parallelize_module, ColwiseParallel, RowwiseParallel
+
+# Assuming 'layer' is one Transformer block
+layer_tp_plan = {
+    "attention.wq": ColwiseParallel(),
+    "attention.wk": ColwiseParallel(),
+    "attention.wv": ColwiseParallel(),
+    "attention.wo": RowwiseParallel(),
+}
+
+parallelize_module(layer, tp_mesh, layer_tp_plan)
+Use code with caution.
+
+3. Critical Considerations
+Head Count Divisibility: The number of attention heads must be divisible by your TP world size (e.g., if you have 32 heads, your TP size can be 2, 4, 8, etc.).
+Fused QKV: If your implementation uses a single fused linear layer for Q, K, and V (common for performance), apply ColwiseParallel to that fused layer. Each GPU will then hold a chunk containing 
+.
+All-Reduce Synchronization: Ensure your RowwiseParallel layer is configured to perform the reduction. In PyTorch DTensor, this happens automatically when the output layout is set to Replicate(). 
+GitHub
+GitHub
+ +4
+Do you have your Q, K, and V projections as separate layers, or are they fused into a single QKV linear layer?
