@@ -1,0 +1,4 @@
+
+        |-----attn shard 1               mlp shard 1    
+embd ----                   -- sync AR                  -- sync AR   LM Head
+        |-----attn shard 2               mlp shard 2

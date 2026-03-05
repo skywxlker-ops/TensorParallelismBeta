@@ -3,3 +3,11 @@ CustomDNN/gpt2_tests/gpt2_test
 CustomDNN/gpt2_tests/gpt2_tp_test
 CustomDNN/gpt2_tests/test
 DTensor/gpt2_tp_mlp_test_exec
+
+# Libraries
+*.so
+*.a
+
+# Model checkpoints
+*.ckpt
+*.pt
