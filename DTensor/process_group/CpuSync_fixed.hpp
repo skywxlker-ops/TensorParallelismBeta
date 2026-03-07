@@ -112,8 +112,26 @@ public:
         return true;
     }
 
+    // GPU-side wait: inserts a stream dependency so target_stream waits for the NCCL event
+    // without blocking the CPU thread. Use this instead of wait() when you want to
+    // enqueue follow-up GPU work that depends on the AllReduce without stalling the CPU.
+    bool stream_wait(cudaStream_t target_stream) {
+        if (event_ == nullptr) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            completed_ = true;
+            success_ = true;
+            return true;
+        }
+        cudaError_t err = cudaStreamWaitEvent(target_stream, event_, 0);
+        std::lock_guard<std::mutex> lock(mutex_);
+        completed_ = true;
+        success_ = (err == cudaSuccess);
+        if (!success_) last_err = err;
+        return success_;
+    }
+
     //will return the success.
-    bool is_success(){ 
+    bool is_success(){
         // std::unique_lock<std::mutex> lock(mutex_);
         std::lock_guard<std::mutex> lock(mutex_);
         return success_;

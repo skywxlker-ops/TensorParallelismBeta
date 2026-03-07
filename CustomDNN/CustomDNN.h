@@ -239,6 +239,12 @@ public:
     bool has_bias() const { return has_bias_; }
     ShardingType get_sharding() const { return weight_sharding_; }
 
+    // Deferred sync: row-parallel forward launches AllReduce but does NOT wait.
+    // Caller must call complete_deferred_sync() before reading the output.
+    void set_deferred_sync(bool val) { deferred_sync_ = val; }
+    bool is_deferred_sync() const { return deferred_sync_; }
+    void complete_deferred_sync(DTensor& output);
+
     void all_reduce_gradients(ProcessGroupNCCL* pg) override;
 
 private:
@@ -252,6 +258,7 @@ private:
     bool has_bias_;
     ShardingType weight_sharding_;
     bool is_row_parallel_;
+    bool deferred_sync_ = false;
     std::unique_ptr<DTensor> weight_;
     std::unique_ptr<DTensor> bias_;
 };

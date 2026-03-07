@@ -1,4 +1,116 @@
+Summary of Changes
+CustomDNN.h — DLinear class
+Added set_deferred_sync(bool), is_deferred_sync(), complete_deferred_sync(DTensor&) public methods
+Added bool deferred_sync_ = false private member
+CustomDNN.cpp — DLinear implementation
+DLinear::forward(): When deferred_sync_ is true AND row-parallel, calls sync_async() but skips wait_on_stream(0) and bias add — the AllReduce runs on the NCCL stream while stream 0 is free
+New DLinear::complete_deferred_sync(): Inserts the GPU-side stream wait event + bias add. Called by the consumer when the AllReduce result is actually needed
+gpt2_tp_test.cpp — GPT model
+Constructor: Sets deferred_sync(true) on every layer's c_proj and fc2
+Forward pass restructured for two overlap windows:
+Overlap 1 — Within-layer (parallel block):
 
-        |-----attn shard 1               mlp shard 1    
-embd ----                   -- sync AR                  -- sync AR   LM Head
-        |-----attn shard 2               mlp shard 2
+
+Stream 0:  LN2(x) → fc1 → gelu     ← independent computation
+NCCL:      c_proj AllReduce          ← runs simultaneously
+Both LN1 and LN2 apply to the same x (PaLM-style parallel block), so the MLP branch is fully independent of the attention AllReduce.
+
+Overlap 2 — Cross-layer (deferred MLP residual):
+
+
+Stream 0:  x + attn_out  →  next layer's LN1(x) + LN2(x) + c_attn start
+NCCL:      fc2 AllReduce                                    ← runs simultaneously
+The MLP residual + mlp_out is deferred until the fc2 AllReduce completes, which happens after the next layer's LN operations have already started.
+
+Fixed uncommented NVTX_POP() compile error
+
+
+----------------------------------------------------------------
+
+Walkthrough: Double-Buffered Async Data Pipeline
+The Problem
+The original loop was synchronous — every micro-step stalled the GPU:
+
+
+[CPU memcpy mmap→pinned] → [cudaMemcpy H2D] → [forward] → [backward] → repeat
+                            ↑ GPU idle here    ↑ GPU busy
+The cudaMemcpy (synchronous) blocks until the transfer completes. Stream 0 sits idle during every H2D copy.
+
+The Solution: Two Buffer Sets + A Dedicated Copy Stream
+Double buffering means we have two independent copies of everything:
+
+
+Buffer 0:  pinned_x_[0], pinned_y_[0]  →  gpu_input_[0], gpu_target_[0]
+Buffer 1:  pinned_x_[1], pinned_y_[1]  →  gpu_input_[1], gpu_target_[1]
+And a dedicated copy_stream_ (created with cudaStreamNonBlocking) that runs H2D transfers independently from stream 0's compute kernels.
+
+The Pipeline Flow
+
+                    copy_stream              stream 0 (compute)
+                    ───────────              ──────────────────
+Step 0:  prefetch(batch 0 → buf 0)
+                    │
+Step 1:  ───────────┤ consume(buf 0)  ──→  forward(batch 0) + backward(batch 0)
+         prefetch(batch 1 → buf 1)         │ ← these overlap on the GPU
+                    │                      │
+Step 2:  ───────────┤ consume(buf 1)  ──→  forward(batch 1) + backward(batch 1)
+         prefetch(batch 2 → buf 0)         │ ← buf 0 is free again, reuse it
+                    │                      │
+Step 3:  ───────────┤ consume(buf 0)  ──→  forward(batch 2) + backward(batch 2)
+         (last step, no prefetch)
+Code Walkthrough
+1. prefetch_next_batch() — dl_test.cpp:266-306
+This does three things and returns immediately:
+
+
+// (a) CPU memcpy: mmap'd file → pinned host buffer (very fast, ~μs for pinned)
+std::memcpy(pinned_x_[buf], tokens, BT * sizeof(u_int16_t));
+std::memcpy(pinned_y_[buf], tokens + 1, BT * sizeof(u_int16_t));
+
+// (b) Async H2D on copy_stream (returns immediately, DMA runs in background)
+cudaMemcpyAsync(gpu_input_[buf].data(), pinned_x_[buf],
+                BT * sizeof(u_int16_t), cudaMemcpyHostToDevice, copy_stream_);
+
+// (c) Record event so consumers know when the copy finishes
+cudaEventRecord(copy_done_, copy_stream_);
+The CPU memcpy in step (a) is the one part that still blocks the CPU, but it's fast because pinned memory avoids page faults. The actual H2D DMA in step (b) runs entirely on the GPU's copy engine — CPU returns immediately.
+
+2. consume_prefetched() — dl_test.cpp:310-328
+
+// GPU-side wait: stream 0 won't start until copy_done_ fires.
+// CPU is NOT blocked — it just enqueues a dependency.
+cudaStreamWaitEvent(0, copy_done_, 0);
+
+// Return tensors from the buffer that was just filled
+b.input  = gpu_input_[buf];
+b.target = gpu_target_[buf];
+
+buf_idx_ ^= 1;  // swap: next prefetch writes to the OTHER buffer
+The key is cudaStreamWaitEvent vs cudaStreamSynchronize. The former inserts a GPU-side dependency (zero CPU cost), while the latter blocks the CPU thread until the stream drains.
+
+3. Training loop — gpt2_tp_test.cpp:575-613
+
+// Prime the pipeline: start copying batch 0 before the loop
+train_loader.prefetch_next_batch();
+
+for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
+    // Grab batch that's already (or almost) on the GPU
+    Batch batch = train_loader.consume_prefetched();
+
+    // Immediately kick off the NEXT batch's H2D copy
+    if (micro_step + 1 < grad_accum_steps)
+        train_loader.prefetch_next_batch();
+    //     ↑ This H2D runs on copy_stream while forward+backward runs on stream 0
+
+    // Compute (stream 0) — fully overlapped with the H2D above
+    DTensor logits = model.forward(input_d);
+    loss.backward(&grad_scale);
+}
+The prefetch for micro-step i+1 is launched before the forward pass of micro-step i. Since they run on different streams, the GPU executes them concurrently on its copy engine and compute SMs.
+
+Why Double Buffering Is Required
+With a single buffer, the prefetch for batch i+1 would overwrite the GPU tensor that forward pass i is still reading — a data race. With two buffers, buf_idx_ ^= 1 ensures we always write to the buffer that compute isn't using.
+
+What Stays Unchanged
+Validation still uses the synchronous next_batch() — no need for overlap there since it's infrequent
+Pinned memory fallback — if cudaHostAlloc fails, both paths fall back to pageable set_data() (synchronous)

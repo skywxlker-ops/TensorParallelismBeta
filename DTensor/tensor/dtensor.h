@@ -76,7 +76,8 @@ public:
     // void sync_async_backward_hook();
     void sync_w_autograd(op_t op = sum);     // Autograd-aware sync (registers backward for deep gradient all-reduce)
     void register_backward_all_reduce_hook(op_t op = sum); // Backward-only sync via hook
-    void wait();               // Wait for pending async collective
+    void wait();               // Wait for pending async collective (CPU-blocking)
+    void wait_on_stream(cudaStream_t stream = 0); // GPU-side wait: no CPU block, inserts stream dependency
     // void wait_backward_hook();
     bool has_pending_collective() const;  // Check if async collective pending
 

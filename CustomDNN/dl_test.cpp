@@ -145,8 +145,7 @@ public:
           split_(split), root_(data_root),
           master_(master_process),
           max_tokens_(max_tokens_per_shard),
-          device_idx_(device_idx),
-          pinned_x_(nullptr), pinned_y_(nullptr) {
+          device_idx_(device_idx) {
 
         if (!(split_ == "train" || split_ == "val"))
             throw std::runtime_error("split must be 'train' or 'val'");
@@ -163,31 +162,42 @@ public:
             std::cout << "found " << shards_.size() << " shards for split " << split_ << "\n";
         }
 
-        // Optimization #3: allocate pinned (page-locked) staging buffers once
         const size_t BT = static_cast<size_t>(B_) * static_cast<size_t>(T_);
-        pinned_x_ = nullptr;
-        pinned_y_ = nullptr;
-        cudaError_t err1 = cudaHostAlloc(&pinned_x_, BT * sizeof(u_int16_t), cudaHostAllocDefault);
-        cudaError_t err2 = cudaHostAlloc(&pinned_y_, BT * sizeof(u_int16_t), cudaHostAllocDefault);
-        if (err1 != cudaSuccess || err2 != cudaSuccess) {
-            std::cerr << "Warning: cudaHostAlloc failed, falling back to pageable memory\n";
-            if (pinned_x_) { cudaFreeHost(pinned_x_); pinned_x_ = nullptr; }
-            if (pinned_y_) { cudaFreeHost(pinned_y_); pinned_y_ = nullptr; }
+        OwnTensor::DeviceIndex dev(OwnTensor::Device::CUDA, device_idx_);
+
+        // Double-buffered pinned staging + GPU tensors for async H2D overlap.
+        // Buffer 0 and buffer 1 alternate: one is consumed by compute while
+        // the other receives the next batch's H2D copy on copy_stream_.
+        for (int i = 0; i < 2; ++i) {
+            pinned_x_[i] = nullptr;
+            pinned_y_[i] = nullptr;
+            cudaError_t e1 = cudaHostAlloc(&pinned_x_[i], BT * sizeof(u_int16_t), cudaHostAllocDefault);
+            cudaError_t e2 = cudaHostAlloc(&pinned_y_[i], BT * sizeof(u_int16_t), cudaHostAllocDefault);
+            if (e1 != cudaSuccess || e2 != cudaSuccess) {
+                std::cerr << "Warning: cudaHostAlloc failed for buffer " << i << ", falling back to pageable\n";
+                if (pinned_x_[i]) { cudaFreeHost(pinned_x_[i]); pinned_x_[i] = nullptr; }
+                if (pinned_y_[i]) { cudaFreeHost(pinned_y_[i]); pinned_y_[i] = nullptr; }
+            }
+
+            gpu_input_[i] = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}},
+                OwnTensor::TensorOptions().with_dtype(OwnTensor::Dtype::UInt16).with_device(dev));
+            gpu_target_[i] = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}},
+                OwnTensor::TensorOptions().with_dtype(OwnTensor::Dtype::UInt16).with_device(dev));
         }
 
-        // Optimization #5: pre-allocate tensors once, reuse across batches
-        OwnTensor::DeviceIndex dev(OwnTensor::Device::CUDA, device_idx_);
-        input_tensor_ = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}},
-            OwnTensor::TensorOptions().with_dtype(OwnTensor::Dtype::UInt16).with_device(dev));
-        target_tensor_ = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}},
-            OwnTensor::TensorOptions().with_dtype(OwnTensor::Dtype::UInt16).with_device(dev));
+        cudaStreamCreateWithFlags(&copy_stream_, cudaStreamNonBlocking);
+        cudaEventCreateWithFlags(&copy_done_, cudaEventDisableTiming);
 
         reset();
     }
 
     ~DataLoaderLite() {
-        if (pinned_x_) { cudaFreeHost(pinned_x_); pinned_x_ = nullptr; }
-        if (pinned_y_) { cudaFreeHost(pinned_y_); pinned_y_ = nullptr; }
+        for (int i = 0; i < 2; ++i) {
+            if (pinned_x_[i]) { cudaFreeHost(pinned_x_[i]); }
+            if (pinned_y_[i]) { cudaFreeHost(pinned_y_[i]); }
+        }
+        cudaStreamDestroy(copy_stream_);
+        cudaEventDestroy(copy_done_);
     }
 
     // Non-copyable (pinned buffer ownership)
@@ -197,14 +207,15 @@ public:
     void reset() {
         current_shard_ = 0;
         shard_.open(shards_[current_shard_], max_tokens_);
-
-        // current_position = B*T*process_rank
         pos_ = static_cast<size_t>(B_) * static_cast<size_t>(T_) * static_cast<size_t>(rank_);
+        buf_idx_ = 0;
+        prefetched_ = false;
     }
 
+    // Original synchronous next_batch (for validation or non-overlapped paths)
     Batch next_batch() {
         const size_t BT = static_cast<size_t>(B_) * static_cast<size_t>(T_);
-        const size_t need = BT + 1; // because y is shifted by 1
+        const size_t need = BT + 1;
 
         if (shard_.size_tokens() < need) {
             throw std::runtime_error("shard too small for one batch: " + shard_.path());
@@ -214,42 +225,105 @@ public:
             advance_shard();
         }
 
-        // Optimization #2: zero-copy pointer directly into mmap'd region
         const u_int16_t* tokens = shard_.data_ptr() + pos_;
+        int buf = buf_idx_;
 
         Batch b;
         b.B = B_; b.T = T_;
 
-        if (pinned_x_) {
-            // Stage into pinned buffers, then cudaMemcpy directly from pinned → GPU
-            // This enables DMA transfer (bypasses CPU, ~2× faster than pageable)
-            std::memcpy(pinned_x_, tokens, BT * sizeof(u_int16_t));
-            std::memcpy(pinned_y_, tokens + 1, BT * sizeof(u_int16_t));
-
-            cudaMemcpy(input_tensor_.data(), pinned_x_, BT * sizeof(u_int16_t), cudaMemcpyHostToDevice);
-            cudaMemcpy(target_tensor_.data(), pinned_y_, BT * sizeof(u_int16_t), cudaMemcpyHostToDevice);
+        if (pinned_x_[buf]) {
+            std::memcpy(pinned_x_[buf], tokens, BT * sizeof(u_int16_t));
+            std::memcpy(pinned_y_[buf], tokens + 1, BT * sizeof(u_int16_t));
+            cudaMemcpy(gpu_input_[buf].data(), pinned_x_[buf], BT * sizeof(u_int16_t), cudaMemcpyHostToDevice);
+            cudaMemcpy(gpu_target_[buf].data(), pinned_y_[buf], BT * sizeof(u_int16_t), cudaMemcpyHostToDevice);
         } else {
-            // Fallback: use set_data with pageable memory
             x_buf_.resize(BT);
             y_buf_.resize(BT);
             std::memcpy(x_buf_.data(), tokens, BT * sizeof(u_int16_t));
             std::memcpy(y_buf_.data(), tokens + 1, BT * sizeof(u_int16_t));
-            input_tensor_.set_data(x_buf_);
-            target_tensor_.set_data(y_buf_);
+            gpu_input_[buf].set_data(x_buf_);
+            gpu_target_[buf].set_data(y_buf_);
         }
 
-        b.input = input_tensor_;
-        b.target = target_tensor_;
+        b.input = gpu_input_[buf];
+        b.target = gpu_target_[buf];
 
-        //current_position += B*T*num_processes
         pos_ += BT * static_cast<size_t>(world_);
-
-        // if current_position + (B*T*num_processes + 1) > len(tokens):
-        //     load next shard; self.current_position = B*T*rank
         if (pos_ + (BT * static_cast<size_t>(world_) + 1) > shard_.size_tokens()) {
             advance_shard();
         }
 
+        buf_idx_ ^= 1;
+        return b;
+    }
+
+    // =========================================================================
+    // Async double-buffered pipeline
+    // =========================================================================
+
+    // Launch H2D copy for the next batch on copy_stream_.
+    // Returns immediately — the copy runs concurrently with compute on stream 0.
+    void prefetch_next_batch() {
+        const size_t BT = static_cast<size_t>(B_) * static_cast<size_t>(T_);
+        const size_t need = BT + 1;
+
+        if (pos_ + need > shard_.size_tokens()) {
+            advance_shard();
+        }
+
+        const u_int16_t* tokens = shard_.data_ptr() + pos_;
+        int buf = buf_idx_;   // the "back" buffer (not being consumed by compute)
+
+        if (pinned_x_[buf]) {
+            // Stage mmap → pinned (CPU memcpy, very fast for pinned memory)
+            std::memcpy(pinned_x_[buf], tokens, BT * sizeof(u_int16_t));
+            std::memcpy(pinned_y_[buf], tokens + 1, BT * sizeof(u_int16_t));
+
+            // Async H2D on dedicated copy stream — overlaps with compute on stream 0
+            cudaMemcpyAsync(gpu_input_[buf].data(), pinned_x_[buf],
+                            BT * sizeof(u_int16_t), cudaMemcpyHostToDevice, copy_stream_);
+            cudaMemcpyAsync(gpu_target_[buf].data(), pinned_y_[buf],
+                            BT * sizeof(u_int16_t), cudaMemcpyHostToDevice, copy_stream_);
+        } else {
+            // Fallback: synchronous copy (no pinned memory available)
+            x_buf_.resize(BT);
+            y_buf_.resize(BT);
+            std::memcpy(x_buf_.data(), tokens, BT * sizeof(u_int16_t));
+            std::memcpy(y_buf_.data(), tokens + 1, BT * sizeof(u_int16_t));
+            gpu_input_[buf].set_data(x_buf_);
+            gpu_target_[buf].set_data(y_buf_);
+        }
+
+        // Record event so consumers can wait for this copy to finish
+        cudaEventRecord(copy_done_, copy_stream_);
+
+        pos_ += BT * static_cast<size_t>(world_);
+        if (pos_ + (BT * static_cast<size_t>(world_) + 1) > shard_.size_tokens()) {
+            advance_shard();
+        }
+
+        prefetched_ = true;
+    }
+
+    // Wait for the prefetched copy and return the batch.
+    // After this call, the returned tensors are safe to read on any stream.
+    Batch consume_prefetched() {
+        if (!prefetched_) {
+            throw std::runtime_error("consume_prefetched called without prefetch_next_batch");
+        }
+
+        // GPU-side wait: make stream 0 wait for the copy to finish.
+        // CPU is NOT blocked — just inserts a dependency on the GPU.
+        cudaStreamWaitEvent(0, copy_done_, 0);
+
+        int buf = buf_idx_;
+        Batch b;
+        b.B = B_; b.T = T_;
+        b.input = gpu_input_[buf];
+        b.target = gpu_target_[buf];
+
+        buf_idx_ ^= 1;    // swap to other buffer for next prefetch
+        prefetched_ = false;
         return b;
     }
 
@@ -277,16 +351,20 @@ private:
 
     UInt16ShardView shard_;
 
-    // Optimization #3: pinned staging buffers for direct H2D DMA transfer
-    u_int16_t* pinned_x_;
-    u_int16_t* pinned_y_;
+    // Double-buffered pinned staging + GPU tensors (indices 0 and 1)
+    u_int16_t* pinned_x_[2] = {};
+    u_int16_t* pinned_y_[2] = {};
+    OwnTensor::Tensor gpu_input_[2];
+    OwnTensor::Tensor gpu_target_[2];
+    int buf_idx_ = 0;         // which buffer to write next
+
+    // Dedicated copy stream + completion event for async H2D
+    cudaStream_t copy_stream_ = nullptr;
+    cudaEvent_t copy_done_ = nullptr;
+    bool prefetched_ = false;
 
     // Fallback pageable buffers (only used if pinned alloc fails)
     std::vector<u_int16_t> x_buf_;
     std::vector<u_int16_t> y_buf_;
-
-    // Optimization #5: pre-allocated tensors reused across batches
-    OwnTensor::Tensor input_tensor_;
-    OwnTensor::Tensor target_tensor_;
 };
 

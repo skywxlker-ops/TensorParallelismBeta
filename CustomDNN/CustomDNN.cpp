@@ -175,20 +175,31 @@ DTensor DLinear::forward(DTensor& input) {
     }
 
     // Row-parallel: sync output via AllReduce
-    // IMPORTANT: Use sync() (no autograd backward hook) instead of sync_w_autograd().
-    // In Tensor Parallelism, the backward of AllReduce should be IDENTITY because
-    // both ranks process the same data and already have identical gradients.
-    // sync_w_autograd() would register an AllReduceSumBackward that doubles gradients.
+    // sync_async() launches the AllReduce on the NCCL stream and returns immediately.
     if (is_row_parallel_) {
-        output.sync();
-        
-        // Add bias after AllReduce for row-parallel layer
-        if (has_bias_ && bias_) {
-            output.mutable_tensor() = autograd::add(output.mutable_tensor(), bias_->mutable_tensor());
+        output.sync_async();
+
+        if (!deferred_sync_) {
+            // Immediate mode: wait + bias now (original behavior)
+            output.wait_on_stream(0);
+            if (has_bias_ && bias_) {
+                output.mutable_tensor() = autograd::add(output.mutable_tensor(), bias_->mutable_tensor());
+            }
         }
+        // Deferred mode: AllReduce is in-flight on NCCL stream.
+        // Caller MUST call complete_deferred_sync(output) before reading the result.
     }
 
     return output;
+}
+
+void DLinear::complete_deferred_sync(DTensor& output) {
+    // Insert GPU-side dependency: stream 0 waits for the NCCL AllReduce to finish.
+    output.wait_on_stream(0);
+    // Add row-parallel bias after AllReduce completes
+    if (has_bias_ && bias_) {
+        output.mutable_tensor() = autograd::add(output.mutable_tensor(), bias_->mutable_tensor());
+    }
 }
 
 void DLinear::all_reduce_gradients(ProcessGroupNCCL* pg) {

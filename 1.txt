@@ -1,5 +1,111 @@
-1. add attention and embedding sharding in the pytroch script - use loss parallel
+Now I have a thorough understanding of your codebase. Let me provide a comprehensive analysis of throughput optimization opportunities.
 
-2. add it to custom DNN - custom dnn should only define the attention layer and embedding layer
+Here are the key areas where you can increase throughput further in your GPT-2 TP training, ordered by expected impact:
 
-3. define the shading strategy for the custom DNNinside the gpt2 script only - how exactly to define the shading strategy - it should be the gpt2 script who says i want to sharding the attention layer and embedding layer.
+ -----1. Overlap Communication with Computation (Biggest Win)
+Your current DLinear::forward does sync_async() + wait_on_stream(0) for row-parallel layers—this is good, but the AllReduce still blocks the compute stream before the next layer starts. The Domino-style overlap technique can pipeline this:
+
+Attention c_proj AllReduce can overlap with LayerNorm ln_2 + MLP fc1 compute
+MLP fc2 AllReduce can overlap with ln_1 of the next layer + next layer's c_attn
+This requires restructuring the forward pass so the AllReduce of one sub-block runs on the NCCL stream while the compute of the next sub-block runs on stream 0, with dependency events inserted only where truly needed (i.e., at the residual addition). This is the approach described in the Domino architecture you've studied previously.
+
+ -----2. Async Data Loading (Pipeline CPU↔GPU)
+cpp
+// Currently: synchronous load + cudaMemcpy per micro-step
+Batch batch = train_loader.next_batch();  // blocking H2D copy
+Use double-buffering with CUDA streams: launch the H2D copy for micro-step i+1 on a separate stream while micro-step i's forward/backward runs on the compute stream. You already have pinned memory in 
+
+DataLoaderLite
+—just add a second pinned buffer set + a dedicated copy stream:
+
+cpp
+// Pseudocode: double-buffered async data pipeline
+cudaStream_t copy_stream;
+cudaStreamCreate(&copy_stream);
+// Pre-fetch first batch
+Batch next_batch = train_loader.next_batch_async(copy_stream);
+for (int micro = 0; micro < grad_accum_steps; ++micro) {
+    Batch batch = next_batch;  // already on GPU
+    cudaStreamSynchronize(copy_stream);  // wait for copy if still running
+    
+    // Pre-fetch NEXT batch while compute runs
+    if (micro + 1 < grad_accum_steps)
+        next_batch = train_loader.next_batch_async(copy_stream);
+    
+    // Forward + backward on default stream (overlaps with next batch copy)
+    DTensor logits = model.forward(input_d);
+    loss.backward(&grad_scale);
+}
+ 3. Fuse Small Kernels & Reduce DTensor Wrapper Overhead
+Several operations create unnecessary intermediate DTensor wrappers with Layout objects:
+
+cpp
+// Lines 309-310: two DTensor constructions just for an add
+DTensor x(idx.get_device_mesh(), idx.get_pg(), tok_emb.get_layout());
+x.mutable_tensor() = autograd::add(tok_emb.mutable_tensor(), pos_emb.mutable_tensor());
+Similarly at lines 328-329, 344-346, and inside DGeLU. Each DTensor construction involves layout computation. Consider:
+
+Operating on raw Tensor within a layer and wrapping back to DTensor only at boundaries
+Fusing residual add + LayerNorm into a single kernel (this is a well-known optimization)
+ 4. Batch AllReduce for Replicated Gradient Sync
+Lines 590-602 do one AllReduce per replicated parameter, each with a wait():
+
+cpp
+for (auto* p : params) {
+    if (p->get_layout().is_replicated() && ...) {
+        pg->all_reduce_async(...)->wait();  // SEQUENTIAL!
+        // Plus a Tensor::full + autograd::div per parameter
+    }
+}
+Optimization: Flatten all replicated gradients into a single contiguous buffer, do one AllReduce, then scatter back. This dramatically reduces NCCL launch overhead (from N launches to 1, where N = number of replicated params):
+
+cpp
+// Pseudo: bucket all replicated grads → one AllReduce → divide
+std::vector<float*> grad_ptrs;
+size_t total_numel = 0;
+for (auto* p : params) {
+    if (p->get_layout().is_replicated() && p->mutable_tensor().has_grad()) {
+        grad_ptrs.push_back(p->mutable_tensor().grad_view().data<float>());
+        total_numel += p->mutable_tensor().grad_view().numel();
+    }
+}
+// Pack into contiguous buffer, AllRedce once, unpack + divide
+ 5. Use FlashAttention / Fused SDPA
+Your attention (lines 104-122) does several separate kernels:
+
+matmul(q, k^T) → 2. mul(scale) → 3. tril(mask) → 4. softmax → 5. matmul(probs, v)
+This is 5 separate kernel launches with intermediate materializations (especially the full [B, n_heads, T, T] attention matrix). A fused SDPA kernel (like FlashAttention) would:
+
+Reduce this to 1 kernel
+Avoid materializing the O(T²) attention matrix
+Reduce memory bandwidth by ~10×
+This is probably the single biggest compute optimization if you can integrate cuDNN's fused attention or a FlashAttention-style custom kernel.
+
+ 6. Reduce Contiguous Copies in Attention
+Lines 99-101 each call .contiguous() after reshape+transpose:
+
+cpp
+q = autograd::transpose(autograd::reshape(q,...), 1, 2).contiguous();
+k = autograd::transpose(autograd::reshape(k,...), 1, 2).contiguous();
+v = autograd::transpose(autograd::reshape(v,...), 1, 2).contiguous();
+That's 3 explicit copy kernels. If your matmul kernel supports strided inputs, you can skip these.
+
+ 7. Gradient Accumulation Without Graph Rebuilding
+Each micro-step currently rebuilds the entire autograd graph. If your framework supports a no_sync() mode (like PyTorch's DistributedDataParallel.no_sync()), you can skip the backward hooks' AllReduce for all micro-steps except the last, avoiding redundant communication during accumulation.
+
+ 8. Mixed Precision (BF16 Compute)
+If you're currently running FP32 throughout (the code uses Float32 for AllReduce, Tensor::full, etc.), switching to BF16 for forward/backward with FP32 master weights would:
+
+~2× matmul throughput on Ampere/Hopper
+~2× reduction in AllReduce volume
+~2× reduction in memory bandwidth pressure
+Summary Table
+Optimization	Expected Speedup	Difficulty
+Overlap AllReduce + Next Layer Compute (Domino)	15-25%	High
+FlashAttention / Fused SDPA	20-40%	High
+Batch Replicated Gradient AllReduce	5-10%	Low
+Async Double-Buffered Data Loading	3-8%	Medium
+Fused Residual+LayerNorm Kernel	3-5%	Medium
+Remove .contiguous() Copies	2-4%	Low
+BF16 Mixed Precision	30-60%	Medium
+Gradient Accumulation no_sync	5-15%	Medium

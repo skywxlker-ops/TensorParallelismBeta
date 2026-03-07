@@ -1454,8 +1454,18 @@ void DTensor::sync() {
 }
 
 void DTensor::sync_async() {
-    // Async sync - enqueue all-reduce but DON'T wait (deferred wait)
-    // Store the work handle so we can wait later when data is actually needed
+    // Ensure the NCCL comm stream (cudaStreamNonBlocking) doesn't start reading the
+    // buffer before the GEMM on stream 0 has finished writing it.
+    // Without this, there is a data race: NCCL reads partially-written GEMM output,
+    // causing either incorrect results or NCCL spinning internally waiting for valid data.
+    // cudaEventDestroy is safe to call immediately: CUDA holds an internal ref until
+    // the stream dependency resolves.
+    cudaEvent_t compute_done;
+    cudaEventCreateWithFlags(&compute_done, cudaEventDisableTiming);
+    cudaEventRecord(compute_done, 0);                        // mark stream 0 progress after GEMM
+    cudaStreamWaitEvent(pg_->getStream(), compute_done, 0); // comm stream waits for GEMM
+    cudaEventDestroy(compute_done);
+
     pending_work_ = pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_, OwnTensor::Dtype::Float32, sum, false);
     has_pending_collective_ = true;
 }
@@ -1539,6 +1549,17 @@ void DTensor::register_backward_all_reduce_hook(op_t op) {
 
 // }
 
+
+void DTensor::wait_on_stream(cudaStream_t stream) {
+    // GPU-side wait: inserts cudaStreamWaitEvent so that subsequent kernels on `stream`
+    // will not execute until the pending NCCL AllReduce completes.
+    // Unlike wait(), this does NOT block the CPU — the GPU handles the dependency.
+    if (has_pending_collective_ && pending_work_) {
+        pending_work_->stream_wait(stream);
+        has_pending_collective_ = false;
+        pending_work_ = nullptr;
+    }
+}
 
 bool DTensor::has_pending_collective() const {
     return has_pending_collective_;
