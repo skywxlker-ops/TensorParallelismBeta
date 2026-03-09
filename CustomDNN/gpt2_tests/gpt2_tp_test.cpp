@@ -126,11 +126,8 @@ DTensor DAttention::forward(DTensor& input) {
 
     // Scaled dot-product attention
     // NVTX_PUSH("attn/qk_matmul_scale");
-    Tensor scale_t = Tensor::full(Shape{{1}},
-        TensorOptions().with_dtype(Dtype::Float32).with_device(q.device()),
-        1.0f / std::sqrt(static_cast<float>(head_dim_)));
     Tensor attn_weights = autograd::mul(
-        autograd::matmul(q, autograd::transpose(k, -2, -1)), scale_t);
+        autograd::matmul(q, autograd::transpose(k, -2, -1)), cached_scale_t_);
     // NVTX_POP(); // attn/qk_matmul_scale
 
     // Causal mask + softmax
@@ -553,7 +550,7 @@ int main() {
         // Create CSV log file (only on rank 0)
         std::ofstream log_file;
         if (rank == 0) {
-            log_file.open("../attn/attn_run_log_attn_shard_8.csv");
+            log_file.open("../attn/attn_run_log_attn_shard_9.csv");
             log_file << "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec, timer_data, timer_fwd, timer_loss, timer_bwd, timer_clip, timer_optim, timer_tok_emb, timer_pos_emb, timer_attn, timer_mlp, timer_ln_f, timer_lm_head\n";
             log_file << std::fixed << std::setprecision(6);
         }
@@ -600,8 +597,8 @@ int main() {
             optimizer.zero_grad();
             float loss_accum = 0.0f;
 
-            // Cache grad_scale outside the loop — same value every micro-step
-            static Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(device),
+            // Cache grad_scale outside the micro-step loop — same value every micro-step
+            Tensor grad_scale = Tensor::full(Shape{{1}}, TensorOptions().with_device(device),
                                                      1.0f / static_cast<float>(grad_accum_steps));
 
             // Accumulate loss on GPU to avoid per-micro-step CPU sync
@@ -663,17 +660,59 @@ int main() {
             }
 
             // Gradient Synchronization for Replicated Parameters
-            // (With weight tying, only wte + wpe + LayerNorm grads remain here)
+            // Batched: pack all replicated grads into one flat buffer, single AllReduce, unpack
             // NVTX_PUSH("grad_sync_replicated");
-            for (auto* p : params) {
-                if (p->get_layout().is_replicated() && p->mutable_tensor().has_grad()) {
-                    auto& t = p->mutable_tensor();
-                    OwnTensor::Tensor grad = t.grad_view();
-                    if (grad.is_valid() && grad.numel() > 0) {
-                        pg->all_reduce_async(grad.data<float>(), grad.data<float>(), grad.numel(), OwnTensor::Dtype::Float32, op_t::sum, false)->wait();
+            {
+                // 1. Collect pointers and sizes of all replicated grads
+                std::vector<float*> grad_ptrs;
+                std::vector<size_t> grad_sizes;
+                size_t total_numel = 0;
+                for (auto* p : params) {
+                    if (p->get_layout().is_replicated() && p->mutable_tensor().has_grad()) {
+                        OwnTensor::Tensor grad = p->mutable_tensor().grad_view();
+                        if (grad.is_valid() && grad.numel() > 0) {
+                            grad_ptrs.push_back(grad.data<float>());
+                            grad_sizes.push_back(grad.numel());
+                            total_numel += grad.numel();
+                        }
+                    }
+                }
 
-                        // Divide by world_size to get the average (in-place scale)
-                        grad *= (1.0f / world_size);
+                if (total_numel > 0) {
+                    // 2. Allocate flat buffer and pack
+                    float* flat_buf = nullptr;
+                    cudaMalloc(&flat_buf, total_numel * sizeof(float));
+                    size_t offset = 0;
+                    for (size_t i = 0; i < grad_ptrs.size(); i++) {
+                        cudaMemcpy(flat_buf + offset, grad_ptrs[i],
+                                   grad_sizes[i] * sizeof(float), cudaMemcpyDeviceToDevice);
+                        offset += grad_sizes[i];
+                    }
+
+                    // 3. Single AllReduce on the entire flat buffer
+                    pg->all_reduce_async(flat_buf, flat_buf, total_numel,
+                                         OwnTensor::Dtype::Float32, op_t::sum, false)->wait();
+
+                    // 4. Unpack back and scale by 1/world_size
+                    float inv_ws = 1.0f / world_size;
+                    offset = 0;
+                    for (size_t i = 0; i < grad_ptrs.size(); i++) {
+                        cudaMemcpy(grad_ptrs[i], flat_buf + offset,
+                                   grad_sizes[i] * sizeof(float), cudaMemcpyDeviceToDevice);
+                        offset += grad_sizes[i];
+                        // Scale in-place: reuse grad tensor
+                        // We need to scale each grad — grab it again
+                    }
+                    cudaFree(flat_buf);
+
+                    // Scale all replicated grads by 1/world_size
+                    for (auto* p : params) {
+                        if (p->get_layout().is_replicated() && p->mutable_tensor().has_grad()) {
+                            OwnTensor::Tensor grad = p->mutable_tensor().grad_view();
+                            if (grad.is_valid() && grad.numel() > 0) {
+                                grad *= inv_ws;
+                            }
+                        }
                     }
                 }
             }

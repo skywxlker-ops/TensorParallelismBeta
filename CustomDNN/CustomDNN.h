@@ -261,6 +261,7 @@ private:
     bool deferred_sync_ = false;
     std::unique_ptr<DTensor> weight_;
     std::unique_ptr<DTensor> bias_;
+    std::unique_ptr<DTensor> cached_output_;  // reused across forward calls
 };
 
 // =============================================================================
@@ -327,6 +328,7 @@ public:
     int64_t n_embd_;
     int64_t n_heads_;
     int64_t head_dim_;
+    OwnTensor::Tensor cached_scale_t_;
 };
 
 // =============================================================================

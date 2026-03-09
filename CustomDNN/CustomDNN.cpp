@@ -30,7 +30,8 @@ float clip_grad_norm_dtensor_nccl(
     bool is_inf_norm = std::isinf(norm_type);
     int rank = pg->get_rank();
 
-    // Setup GPU buffers
+    // Setup GPU buffers (static to avoid re-allocation each step)
+    // NOTE: assumes single-model usage — not safe with multiple concurrent models
     static float* d_layer_norms = nullptr;
     static float* d_global_stat = nullptr;
     static size_t current_capacity = 0;
@@ -162,8 +163,12 @@ DLinear::DLinear(const DeviceMesh& mesh,
 }
 
 DTensor DLinear::forward(DTensor& input) {
-    Layout out_layout(*mesh_, {batch_size_, seq_len_, out_local_});
-    DTensor output(*mesh_, pg_, out_layout, "DLinear_output", 0.0f);
+    // Lazily allocate output DTensor once, reuse on subsequent calls
+    if (!cached_output_) {
+        Layout out_layout(*mesh_, {batch_size_, seq_len_, out_local_});
+        cached_output_ = std::make_unique<DTensor>(*mesh_, pg_, out_layout, "DLinear_output", 0.0f);
+    }
+    DTensor& output = *cached_output_;
 
     // For row parallel, bias is added AFTER all-reduce to prevent duplicating the bias
     bool add_bias_in_linear = (has_bias_ && bias_ && !is_row_parallel_);
@@ -285,6 +290,11 @@ DAttention::DAttention(const DeviceMesh& mesh,
 
     register_module(c_attn_.get());
     register_module(c_proj_.get());
+
+    // Pre-allocate scale tensor: 1/sqrt(head_dim) on GPU 0 (will be on correct device after first use)
+    cached_scale_t_ = Tensor::full(Shape{{1}},
+        TensorOptions().with_dtype(Dtype::Float32).with_device(DeviceIndex(Device::CUDA, pg->get_rank() % 8)),
+        1.0f / std::sqrt(static_cast<float>(head_dim_)));
 }
 
 /* DTensor DAttention::forward(DTensor& input) {
@@ -357,8 +367,7 @@ DEmbedding::DEmbedding(const DeviceMesh& mesh,
 
 DTensor DEmbedding::forward(DTensor& input) {
     int rank = pg_->get_rank();
-    int num_devices;
-    cudaGetDeviceCount(&num_devices);
+    static int num_devices = [] { int n; cudaGetDeviceCount(&n); return n; }();
     int device_id = rank % num_devices;
 
     OwnTensor::Tensor input_tensor = input.mutable_tensor().to_cuda(device_id);
@@ -368,7 +377,6 @@ DTensor DEmbedding::forward(DTensor& input) {
     Layout out_layout(*mesh_, std::vector<int64_t>{input_shape[0], input_shape[1], embedding_dim_});
     DTensor output(*mesh_, pg_, out_layout, "DEmbedding_output", 0.0f);
     output.mutable_tensor() = local_out;
-    output.wait();
 
     return output;
 }
@@ -672,13 +680,30 @@ OwnTensor::Tensor vocab_parallel_cross_entropy(DTensor& logits_dt, OwnTensor::Te
             BT, local_v, 0
         );
 
-        // AllReduce SUM on rescaled local_sum_exp [BT] → correct global_sum_exp
-        pg->all_reduce_async(local_sum_exp.data<float>(), local_sum_exp.data<float>(),
-                             BT, Dtype::Float32, (op_t)0, false)->wait();
+        // Fused AllReduce SUM on [sum_exp | target_logit] as a single [2*BT] buffer
+        // Pre-allocated static buffer — avoids cudaMalloc/cudaFree per micro-step
+        {
+            static float* fused_buf = nullptr;
+            static int64_t fused_buf_size = 0;
+            if (2 * BT > fused_buf_size) {
+                if (fused_buf) cudaFree(fused_buf);
+                cudaMalloc(&fused_buf, 2 * BT * sizeof(float));
+                fused_buf_size = 2 * BT;
+            }
 
-        // AllReduce SUM on local_target_logit [BT]
-        pg->all_reduce_async(local_target_logit.data<float>(), local_target_logit.data<float>(),
-                             BT, Dtype::Float32, (op_t)0, false)->wait();
+            cudaMemcpy(fused_buf, local_sum_exp.data<float>(),
+                       BT * sizeof(float), cudaMemcpyDeviceToDevice);
+            cudaMemcpy(fused_buf + BT, local_target_logit.data<float>(),
+                       BT * sizeof(float), cudaMemcpyDeviceToDevice);
+
+            pg->all_reduce_async(fused_buf, fused_buf, 2 * BT,
+                                 Dtype::Float32, (op_t)0, false)->wait();
+
+            cudaMemcpy(local_sum_exp.data<float>(), fused_buf,
+                       BT * sizeof(float), cudaMemcpyDeviceToDevice);
+            cudaMemcpy(local_target_logit.data<float>(), fused_buf + BT,
+                       BT * sizeof(float), cudaMemcpyDeviceToDevice);
+        }
 
         // Normalize probs: probs[i] /= global_sum_exp[row]
         // probs are now on global_max basis, sum_exp is correct global sum
