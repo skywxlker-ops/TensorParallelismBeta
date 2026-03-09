@@ -115,3 +115,35 @@
 **What:** Added a comment documenting that the static GPU buffers in `clip_grad_norm_dtensor_nccl` assume single-model usage.
 
 **Why:** The static buffers are a valid optimization (avoids cudaMalloc/cudaFree per step, grows lazily). However, they would cause data races or incorrect results if two model instances called this function concurrently. The comment makes this assumption explicit for future maintainers.
+
+---
+
+# Phase 4: Kernels and Advanced Optimizations
+
+## 9. `.contiguous()` calls — KEPT (not removable)
+
+**File:** `CustomDNN/gpt2_tests/gpt2_tp_test.cpp` (lines 122-124)
+
+**Finding:** Investigation confirmed that while the matmul kernel fully supports strided tensors (uses stride-aware cuBLAS dispatch), the **softmax kernel assumes contiguous memory** — it indexes as `row * cols + col`. Removing `.contiguous()` after transpose would produce incorrect softmax results.
+
+**Action:** No change. Removing `.contiguous()` requires rewriting the softmax (and tril) kernels to be stride-aware. Deferred to a future PR.
+
+---
+
+## 10. Documented broken DBlock::forward
+
+**File:** `CustomDNN/gpt2_tests/gpt2_tp_test.cpp` (line ~185)
+
+**What:** Cleaned up the `DBlock::forward` implementation — removed the dead `ln_1_->forward()` call (whose result was unused) and added a clear WARNING comment explaining the limitation.
+
+**Why:** The function only runs the MLP branch, completely skipping attention. The GPT training loop drives attention and MLP separately (for compute/communication overlap), so this function is never called in practice. However, `test.cpp` instantiates `DBlock`, so the override must exist to satisfy the virtual interface.
+
+**How:** Removed the unused `ln_1_->forward()` call and added a comment documenting that this is an MLP-only placeholder.
+
+---
+
+## 11. Fused dual LayerNorm — DEFERRED
+
+**Finding:** The two `ln1`/`ln2` forward calls on the same input `x` each read the full tensor, compute mean/variance, normalize, and write output independently. A fused kernel would halve memory bandwidth by reading `x` once.
+
+**Action:** Deferred. This requires a custom CUDA kernel in the Tensor-Implementations layer that computes two independent LayerNorm outputs in a single pass. The existing LayerNorm forward delegates to a generic `nn::LayerNorm` class — fusing would need a new kernel alongside the existing one. Recommended as a standalone PR.

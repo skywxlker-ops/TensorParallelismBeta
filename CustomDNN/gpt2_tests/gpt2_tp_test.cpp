@@ -185,18 +185,17 @@ DTensor DMLP::forward(DTensor& input) {
 DTensor DBlock::forward(DTensor& input) {
     using namespace OwnTensor;
 
-    // 1. Attention branch: x = x + Attention(ln_1(x))
-    DTensor h = ln_1_->forward(input);
-    // DBlock no longer has attn_ — attention is handled at GPT level
-    // This is a placeholder; attention must be called externally
-    
-    // 2. MLP branch: x = x + MLP(ln_2(x))
+    // WARNING: This forward is incomplete — it only runs MLP, skipping attention.
+    // The GPT training loop (below) drives attention/MLP separately for overlap.
+    // This override exists only to satisfy the virtual interface for test.cpp.
+
+    // MLP-only path: x = x + MLP(ln_2(x))
     DTensor h2 = ln_2_->forward(input);
     h2 = mlp_->forward(h2);
-    
+
     DTensor output(input.get_device_mesh(), input.get_pg(), input.get_layout());
     output.mutable_tensor() = autograd::add(input.mutable_tensor(), h2.mutable_tensor());
-    
+
     return output;
 }
 
