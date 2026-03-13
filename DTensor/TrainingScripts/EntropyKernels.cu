@@ -305,3 +305,4 @@ void launch_vocab_parallel_embedding_bwd(
 
 } // namespace cuda
 } // namespace OwnTensor
+

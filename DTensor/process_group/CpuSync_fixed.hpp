@@ -8,6 +8,8 @@
 #include <nccl.h>
 #include <memory>
 #include <thread>
+#include "TensorLib.h"
+
 
 // CpuSync_fixed.hpp - Fixed version with lazy CUDA event creation
 // This fixes the "invalid resource handle" error when the event is created
@@ -93,6 +95,7 @@ public:
             return true;
         }
         cudaError_t err = cudaEventSynchronize(event_);
+        // cudaError_t err = cudaStreamWaitEvent(OwnTensor::cuda::getCurrentStream(), event_, 0);
         ncclResult_t async_error;
         ncclCommGetAsyncError(comm_, &async_error);
         std::lock_guard<std::mutex> lock(mutex_);

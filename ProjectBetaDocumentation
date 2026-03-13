@@ -1,0 +1,651 @@
+[Project Beta Documentation] - Adhitya Charan
+Index
+- Components
+    - Layout & Placement
+    - DTensor
+        - Constructor
+        - Sharding Functions (Shard, Rotate, Fused)
+        - Assembly & Replication
+    - Synchronization Functions
+        - Sync & Sync_w_autograd
+        - AllReduceSumBackward
+    - Distributed Components
+        - Column & Row Parallel Layers
+        - Vocabulary Parallel Embedding
+        - Vocabulary Parallel Cross Entropy
+    - Misc Functions (Linear, Autograd, Hooks)
+- Device Mesh
+    - Constructor & Initializers
+    - Coordinate Systems & Rank Map
+- Training & Deployment
+    - Training Scripts 
+	    - [Naive](#naive-tensor-parallelism) 
+		- [MLP](#mlp-tensor-parallelism)
+		- [GPT-2](#gpt-2-tensor-parallelism)
+    
+
+---
+
+## Training Scripts
+
+### Naive Tensor Parallelism
+This section demonstrates the fundamental mechanics of Tensor Parallelism through manual sharding and collective operations.
+
+**Logic Flow:**
+1.  **Input Replication**: The input $X$ is broadcasted to all ranks, ensuring every rank starts with the same data.
+2.  **Column-Parallel MatMul ($W_1$)**:
+    *   Weight $W_1$ is sharded along the output dimension (columns).
+    *   Each rank performs $H_{local} = X \cdot W_{1,local}$.
+    *   The intermediate result $H$ is naturally sharded across ranks.
+3.  **Row-Parallel MatMul ($W_2$)**:
+    *   Weight $W_2$ is sharded along the input dimension (rows).
+    *   Each rank performs $Y_{partial} = H_{local} \cdot W_{2,local}$.
+    *   This operation produces partial sums of the final output.
+4.  **Synchronization**: An All-Reduce (SUM) operation aggregates the partial sums from all ranks to produce the final synchronized output $Y$.
+
+**Pseudocode:**
+```markdown
+Load Global Input X on Root
+Broadcast X to all ranks (Replicated Layout)
+
+Define Weight W1 with Global Shape [C, F]
+Shard W1 along Dimension 1 (Columns) -> W1_local Shape [C, F/world_size]
+
+Compute H_local = MatMul(X, W1_local)
+# H_local is Sharded: [B, T, F/world_size]
+
+Define Weight W2 with Global Shape [F, C]
+Shard W2 along Dimension 0 (Rows) -> W2_local Shape [F/world_size, C]
+
+Compute Y_partial = MatMul(H_local, W2_local)
+# Y_partial is Local Partial Sum: [B, T, C]
+
+Sync Y = All-Reduce-Sum(Y_partial)
+# Y is now Replicated and Synchronized across all ranks
+```
+
+### MLP Tensor Parallelism
+Abstraction of the Naive approach into reusable components `DColumnLinear` and `DRowLinear` within an MLP block.
+
+**Logic Flow:**
+1.  **Pre-LayerNorm**: Standard LayerNorm applied to the replicated input.
+2.  **Column-Parallel Layer ($fc\_up$)**:
+    *   Weights are sharded by column.
+    *   Output is sharded.
+3.  **Activation (GELU)**: Applied element-wise to the sharded intermediate result.
+4.  **Row-Parallel Layer ($fc\_down$)**:
+    *   Weights are sharded by row.
+    *   Output is a partial sum.
+5.  **Output Synchronization**: Explicitly calling `.sync()` (All-Reduce) on the result of `fc_down` to unify the partial sums before the residual connection.
+
+**Pseudocode:**
+```markdown
+Structure MLP:
+    ln = LayerNorm(hidden_size)
+    fc_up = DColumnLinear(hidden_size, 4 * hidden_size)
+    fc_down = DRowLinear(4 * hidden_size, hidden_size)
+    
+    Method forward(x):
+        # x is Replicated
+        h = ln.forward(x)
+        h = fc_up.forward(h)   # Output is Sharded
+        h = gelu(h)            # Element-wise activation
+        h = fc_down.forward(h) # Output is Partial Sum
+        
+        h.sync()               # All-Reduce(SUM) to synchronize result
+        
+        return x + h           # Residual Addition
+```
+
+### GPT-2 Tensor Parallelism
+A full scale implementation integrating Vocabulary Parallelism and specialized gradient synchronization for end-to-end training.
+
+**Key Features:**
+*   **DEmbeddingVParallelFused**: Shards the vocabulary across ranks. Each rank only stores a fraction of the embedding table.
+*   **DLMHead**: A Column-Parallel output projection layer for language modeling.
+*   **Autograd Sync Nodes**: Uses `register_backward_node()` to automatically trigger All-Reduce operations during the backward pass, ensuring gradients are synchronized without manual intervention in the training loop.
+
+**Model Flow:**
+1.  **Token Embedding**: `wte` lookup (Parallel Vocabulary) + `wpe` (Position Embedding).
+2.  **Gradient Hook**: Registering a backward node on the combined embedding to sync gradients.
+3.  **Transformer Blocks**: Sequence of TP-enabled MLP and Attention blocks (MLPs use the pattern described in the MLP section).
+4.  **Language Model Head**: Final projection using `DLMHead` (Column-Parallel).
+
+**Pseudocode:**
+```markdown
+Structure GPT-2:
+    wte = DEmbeddingVParallelFused(vocab_size, hidden_size)
+    wpe = Embedding(context_length, hidden_size)
+    mlps = Sequential(MLP blocks...)
+    ln_f = LayerNorm(hidden_size)
+    lm_head = DLMHead(hidden_size, vocab_size)
+    
+    Method forward(idx):
+        tok_emb = wte.forward(idx)
+        pos_emb = wpe.forward(positions)
+        
+        current_x = tok_emb + pos_emb
+        current_x.register_backward_node() # Automatic All-Reduce on backward
+        
+        current_x = mlps.forward(current_x)
+        current_x = ln_f.forward(current_x)
+        
+        # Sync before LM Head if needed by architecture
+        current_x.register_backward_node()
+        
+        logits = lm_head.forward(current_x)
+        return logits
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Layout
+Constructors
+Pseudocode
+    Structure Layout:
+        Fields: mesh, global_shape, placement
+        
+        Initialization(mesh, global_shape, shard_dim):
+            Set self.mesh to mesh
+            Set self.global_shape to global_shape
+            If shard_dim is valid (>= 0):
+                Set self.placement to Shard(shard_dim)
+            Else:
+                Set self.placement to Replicate()
+            
+        Function get_local_shape(rank):
+            If placement is Replicate: 
+                Return global_shape
+            
+            Identify shard_dimension from placement
+            Determine world_size from mesh
+            Calculate base_size = global_shape[shard_dimension] / world_size
+            Calculate remainder = global_shape[shard_dimension] % world_size
+            
+            local_dim_size = base_size
+            If rank < remainder:
+                local_dim_size = local_dim_size + 1
+                
+            Create local_shape as copy of global_shape
+            Set local_shape[shard_dimension] to local_dim_size
+            Return local_shape
+]
+
+Placement
+Pseudocode
+    Type Shard implements Placement:
+        Contains: dimension_index
+        Method type(): Returns "SHARD"
+        
+    Type Replicate implements Placement:
+        Method type(): Returns "REPLICATE"
+]
+DTensor
+Constructor
+Pseudocode
+    Structure DTensor:
+        Fields: rank, mesh, pg, layout, global_shape, local_tensor
+        
+        Initialization(mesh, process_group, layout):
+            Set self.rank to process_group.rank
+            Set self.mesh to mesh
+            Set self.pg to process_group
+            Set self.layout to layout
+            Set self.global_shape to layout.global_shape
+            
+            Calculate local_shape using layout.get_local_shape(self.rank)
+            Initialize self.local_tensor on GPU with local_shape
+]
+
+Sharding Functions  
+Sharding Functions  
+Shard
+Pseudocode
+```markdown
+Function shard(dim, root, parent_tensor):
+    1. Setup:
+        Determine global tensor shape and rank-specific shard size.
+        Identify destination buffer for the sharded local tensor.
+        
+    2. Execution Path:
+        If dim is 0 (Row/Batch Shard):
+            Data is contiguous for this dimension.
+            Execute a single asynchronous Scatter (root to all ranks).
+            Copy the scattered chunk into the local DTensor sub-buffer.
+            
+        Else (Dim 1 or 2 - Non-contiguous Sharding):
+            If Rank is Root:
+                Allocate an intermediate Send_Buffer on GPU.
+                Launch specialized Sharding/Packing Kernels (shard_dim1_kernel or shard_dim2_kernel).
+                Wait for kernels to finish packing data into contiguous rank-ordered blocks.
+                Perform a single asynchronous Scatter of the packed buffer to all ranks.
+            Else (Other Ranks):
+                Perform asynchronous Scatter directly into local storage.
+                
+    3. Synchronization:
+        Record a NCCL event to track communication completion.
+        Ensure the local compute stream waits for the event before proceeding.
+```
+
+Kernel Logic: shard_dimX_kernel (Packing)
+    Objective: Map elements from a global non-contiguous layout to rank-specific contiguous blocks.
+    Pseudocode:
+```markdown
+For each Thread (idx) up to Total_Local_Elements:
+    1. Calculate local coordinates [d0, d1, d2] from idx using destination shape.
+    2. Map local index to global index based on rank and shard_dim:
+       If dim=1: global_d1 = (rank * local_D1) + local_d1
+       If dim=2: global_d2 = (rank * local_D2) + local_d2
+    3. Fetch element from source[global_d0, global_d1, global_d2]
+    4. Store element in destination[idx]
+```
+]
+
+Rotate Shard (rotate3D)
+Pseudocode
+    Function rotate3D(dim, direction):
+        1. Contextual Setup:
+           Retrieve current tensor dimensions (nx, ny, nz) and memory strides.
+           Determine target rotation axis.
+           
+        2. Transpose Phase:
+           Conceptually swap the non-rotation axes (e.g., if rotating around X, swap Y and Z).
+           Calculate new strides to simulate a transposed view without moving data yet.
+           
+        3. Fused Kernel Execution:
+           Launch 'fused_rotate_kernel' or 'reverse_kernel'.
+           Input: Original source data + Target view strides + Reverse flag.
+           Logic:
+               Map destination indices [x, y, z] to source strides.
+               If direction implies reversing an axis, flip the coordinate (new_i = DimSize - 1 - i).
+               Write source[calculated_offset] to destination[contiguous_idx].
+               
+        4. Modernization:
+           Replace existing local tensor with the newly rotated contiguous buffer.
+           Update global_shape metadata and Layout to reflect the new orientation.
+
+Kernel Logic: reverse_kernel
+    Objective: Flip a tensor along a specific dimension in-place or into a new buffer.
+    Pseudocode:
+        For each Thread (x, y, z) in 3D Block:
+            1. Identity Check: Ensure x, y, z < nx, ny, nz.
+            2. Reverse Mapping:
+               If dim=0: target_x = nx - 1 - x
+               Else If dim=1: target_y = ny - 1 - y
+               Else: target_z = nz - 1 - z
+            3. Data Transfer:
+               src_idx = (x * stride_x) + (y * stride_y) + z
+               dst_idx = (target_x * stride_x) + (target_y * stride_y) + target_z
+               destination[dst_idx] = source[src_idx]
+]
+
+Fused Shard (shard_fused_transpose)
+Pseudocode
+```markdown
+Function shard_fused_transpose(dim, root, parent_tensor):
+    1. Root Operation:
+       If Current Rank is Root:
+           If dim is 0: 
+               Perform raw NCCL Scatter (contiguous).
+           Else:
+               Launch 'fused_transpose_contiguous_kernel' (Fused Packing Kernel).
+               Kernel performs simultaneous transpose and packing into a flat transfer buffer.
+               Once packed, execute NCCL Scatter on the intermediate buffer.
+    
+    2. Non-Root Operation:
+       Receive scattered data into the local DTensor's memory space.
+       
+    3. Event Management:
+       Synchronize streams to bridge the gap between kernel-based packing and NCCL transmission.
+```
+
+Kernel Logic: fused_transpose_contiguous_kernel
+    Objective: Perform ND-transpose while flattening data for communication.
+    Pseudocode:
+```markdown
+For each Thread (idx) in Contiguous Output Range:
+    1. Calculate Multi-dimensional Coordinates [d0, d1, d2] from linear idx.
+    2. Identify Swap Axes (e.g., transpose(0, 2)).
+    3. Reverse map destination coordinates to source memory strides:
+       If swap(0, 2): src_idx = (d2 * s0) + (d1 * s1) + (d0 * s2)
+    4. Destination[idx] = Source[src_idx]
+```
+]
+
+Assemble 
+Pseudocode
+    Function assemble(dim, root, sharded_tensor):
+        Identify global_shape and shard_numel
+        Calculate rank-specific offset in the global buffer (rank * shard_numel)
+        1. Local Copy:
+            Asynchronously copy local sharded data into the global assembly buffer at calculated offset
+        2. Synchronize:
+            Wait for local copy to finish (cudaStreamSynchronize)
+        3. Global Sync (All-Gather):
+            Perform asynchronous All-Gather across all ranks to populate the full global buffer
+            Wait for all ranks to contribute their shards
+]
+
+Replicate
+Pseudocode
+    Function replicate(root):
+        Identify global_shape of the sharded tensor
+        Perform a full synchronous Broadcast from root across the process group
+        Populate the entire local tensor buffer with the broadcasted data
+        Update metadata to mark the layout as REPLICATED
+]
+
+Synchronization Functions
+Sync (All-Reduce)
+Pseudocode
+    Function sync(operation_type):
+        Perform an asynchronous All-Reduce across the process group
+        If operation_type is SUM:
+            Aggregate partial results by summing them across all devices
+        Block execution (wait) until communication is fully completed
+]
+
+Sync_w_autograd
+Pseudocode
+    Function sync_w_autograd(operation):
+        1. Forward Pass:
+            Execute 'sync' function (all-reduce) to aggregate results
+        2. Graph Registration:
+            If the tensor requires gradients:
+                Instantiate an 'AllReduceSumBackward' node
+                Set this node as the gradient function (grad_fn) for the result
+]
+
+AllReduceSumBackward
+Pseudocode
+    Structure AllReduceSumBackward (Autograd Node):
+        Method apply(incoming_gradients):
+            Extract the first gradient tensor
+            Perform an All-Reduce SUM to aggregate gradient contributions
+            Synchronize communication
+            Return the aggregated gradient to the previous graph layer
+]
+
+Device Mesh
+Constructor
+Pseudocode
+    Structure DeviceMesh:
+        Fields: mesh_shape, device_ids, process_groups
+        
+        Initialization(mesh_shape, device_ids):
+            Set self.mesh_shape to mesh_shape
+            Set self.device_ids to device_ids
+            Initialize self.process_groups as an empty collection
+            
+            Function initialize_process_groups():
+                For each dimension 'd' in the mesh (ndim):
+                    Identify which ranks share coordinates in all dimensions EXCEPT 'd'
+                    Create a local NCCL process group for these grouped ranks
+                    Add the new process group to self.process_groups
+]
+
+Get Coordinate
+Pseudocode
+    Function get_coordinate(rank):
+        Input: Flat rank ID (e.g., 5)
+        Output: N-D coordinate vector (e.g., [1, 1] for a 4x4 mesh)
+        
+        Initialize an empty coordinate list
+        Temporary_rank = rank
+        
+        Loop through mesh_shape in reverse order:
+            Dimension_size = size of the current dimension
+            Component = Temporary_rank % Dimension_size
+            Prepend Component to the coordinate list
+            Temporary_rank = Temporary_rank / Dimension_size
+            
+        Return the final coordinate sequence
+]
+
+Initialize_Process_Groups
+Pseudocode
+    Function initialize_process_groups():
+        Determine ndim from mesh_shape
+        For each dimension axis (d):
+            Calculate stride for this axis
+            Group ranks that are adjacent along this specific axis
+            Instantiate a ProcessGroupNCCL for each isolated clique
+            Store these groups for selective collective operations
+]
+
+get_rank
+Pseudocode
+    Function get_rank(coordinate_vector):
+        Input: Vector of N-D indices (e.g., [1, 1])
+        Output: Flattened rank integer (e.g., 5)
+        
+        Logic: Convert multi-dimensional indices to a flat index (Row-Major)
+        Initialize rank_sum = 0
+        Initialize multiplier = 1
+        
+        Loop through dimensions (i) in reverse order:
+            rank_sum = rank_sum + (coordinate_vector[i] * multiplier)
+            multiplier = multiplier * mesh_shape[i]
+            
+        Return rank_sum
+]
+
+get_process_group
+Pseudocode
+    Function get_process_group(mesh_dim):
+        Input: the dimension index (0 for Row, 1 for Column in 2D)
+        Output: The NCCL ProcessGroup associated with that dimension
+        
+        Execution Logic:
+            1. Validate that mesh_dim is within [0, ndim)
+            2. Retrieve the pre-computed ProcessGroupNCCL from the mesh's internal collection
+            3. This group contains all ranks that form a 'clique' along the specified dimension
+            4. Used for selective collectives (e.g., RowParallel sync uses get_process_group(1))
+]
+
+Distributed Module
+ColumnParallel & RowParallel (Linear)
+Pseudocode
+    Type ColumnParallel:
+        Forward(Input):
+            Shards weight matrix along output feature dimension (Dim 1)
+            Result = MatrixMultiplication(Input, Sharded_Weights) + Bias
+            Returns sharded output (each rank has a slice of the full output)
+
+    Type RowParallel:
+        Forward(Input):
+            Shards weight matrix along input feature dimension (Dim 0)
+            Partial_Result = MatrixMultiplication(Input, Sharded_Weights) + Bias
+            Synced_Result = Partial_Result.sync_w_autograd(SUM)
+            Returns full output (all-reduced across ranks)
+]
+
+Vocabulary Parallel Embedding
+Pseudocode
+    Structure DEmbeddingVParallel:
+        Initialization:
+            Partition the input Vocabulary Dimension (V) into shards [start_v, end_v).
+            Allocate local Weight matrix of size [V_local, Hidden_Dim].
+            
+        Forward(Token_IDs):
+            1. Kernel Launch (vocab_parallel_embedding_fwd_kernel):
+               Each thread processes a (BatchToken, HiddenDim) element.
+               Implicit Logic:
+                   Retrieve Token_ID for the current Batch position.
+                   Check if Token_ID is in local range [start_v, end_v).
+                   If True: Output weight_local[Token_ID - start_v, dim]
+                   Else: Output 0.0
+            2. Global Aggregation:
+               All-Reduce (SUM) across the vocabulary mesh.
+               This sums the one identified local embedding and all the zeros from other ranks.
+            
+        Backward(Grad_Output):
+            1. Kernel Launch (vocab_parallel_embedding_bwd_kernel):
+               Iterate through input Token_IDs.
+               For each token in the local shard [start_v, end_v):
+                   Update local weight gradients:
+                   grad_weight[Token_ID - start_v, dim] += incoming_gradient[bt, dim]
+            2. Optimization:
+               Uses CUDA 'atomicAdd' to prevent race conditions during gradient accumulation from multiple token occurrences in a batch.
+
+Kernel Logic: embedding_fwd_kernel
+    Objective: Sparse lookup across distributed shards.
+    Pseudocode:
+        For each Thread (bt, d):
+            TargetToken = global_input_tokens[bt]
+            If TargetToken is in [my_start, my_end):
+                local_row = TargetToken - my_start
+                out_buffer[bt, d] = local_weights[local_row, d]
+            Else:
+                out_buffer[bt, d] = 0
+]
+
+Vocabulary Parallel Cross Entropy
+Pseudocode
+```markdown
+Function vocab_parallel_cross_entropy(logits, targets):
+    1. Numerical Stability:
+       Find max(logits) locally.
+       Perform Global All-Reduce (MAX) -> Global_Max.
+       
+    2. Fused Forward Pass (fused_sum_exp_target_kernel):
+       For each row (b, t):
+           Subtract Global_Max for stability.
+           Accumulate Sum(Exp(logit - Global_Max)).
+           Identify and save the specific logit matching the ground-truth target.
+       Result: Local_SumExp and Local_TargetLogit.
+       
+    3. Cross-Replica Sync:
+       All-Reduce (SUM) Local_SumExp -> Global_SumExp.
+       All-Reduce (SUM) Local_TargetLogit -> Global_TargetLogit.
+       
+    4. Final Loss:
+       Loss = Log(Global_SumExp) - (Global_TargetLogit - Global_Max).
+       
+    5. Gradient Calculation (vocab_parallel_ce_backward_kernel):
+       Compute Softmax(logit) = Exp(logit - Global_Max) / Global_SumExp.
+       If logit matches Target: Grad = Softmax - 1.
+       Else: Grad = Softmax.
+       Scale by incoming grad_output and accumulate.
+```
+
+Kernel Logic: fused_sum_exp_target_kernel
+    Objective: Reduce multiple logit passes into a single performant sweep.
+    Pseudocode:
+```markdown
+1. Shared Memory Setup: Allocate space for block-level reductions.
+2. Local Accumulation (Striping):
+   Each thread iterates over a portion of the local vocabulary row.
+   Calculates: partial_sum += exp(logit - global_max)
+   Saves: target_logit = logit (if index matches globally)
+3. Block Reduction (Tree Sum):
+   Threads perform a binary-tree reduction in shared memory to finalize the row-wise sum.
+4. Result Write:
+   Thread 0 writes final sum_exp and target_logit to the global output buffer.
+```
+
+Kernel Logic: vocab_parallel_ce_backward_kernel
+    Objective: Efficient gradient calculation for sharded vocabulary.
+    Pseudocode:
+```markdown
+For each element (idx) in local shard:
+   1. Softmax: prob = exp(logit - global_max) / global_sum_exp
+   2. Target Correction:
+      If idx == target_index:
+          gradient = prob - 1.0
+      Else:
+          gradient = prob
+   3. Scaling:
+      output_grad[idx] = gradient * incoming_grad_accum
+```
+]
+
+Misc Functions
+Linear (Standard Path)
+Pseudocode
+    Function Linear(Input_DTensor, Weight_DTensor, Bias_DTensor):
+        Invoke 'mlp_forward::linear' kernel bridge
+        Perform raw matrix multiplication (X @ W) followed by bias addition
+        Store resulting tensor in the local DTensor buffer
+]
+
+Linear_w_autograd (Gradient Tracking Path)
+Pseudocode
+    Function linear_w_autograd(Input, Weights, Bias):
+        1. Overload Check:
+            If bias is provided: Use fused 'addmm' (Addition + Matrix Multiply)
+            Else: Use standard 'matmul'
+        2. Graph Construction:
+            Wrap the operation in the Autograd Engine
+            Register Input, Weights, and Bias as parents in the computation graph
+            The result will automatically track gradients during the backward pass
+]
+
+RegisterBackwardHook
+Pseudocode
+    Function register_backward_all_reduce_hook(operation):
+        Create a closure capturing the process group (pg) and operation type
+        Register a 'Post-Accumulation-Hook' on the underlying tensor
+        Execution Flow:
+            Immediately after gradients are calculated and stored (accumulated):
+            Trigger an asynchronous All-Reduce (SUM/MAX) across the mesh
+            Block execution (wait) until the gradient sync is complete
+]
+
+RegisterBackwardNode
+Pseudocode
+    Function register_backward_node():
+        Check if the tensor requires gradients
+        1. Node Creation:
+            Instantiate an 'AllReduceSumBackward' autograd node
+        2. Edge Linking:
+            If the tensor already has a gradient function:
+                Link the new node to point to the existing function (chaining)
+            Else:
+                Link the node to the leaf gradient edge
+        3. Assignment:
+            Overwrite the tensor's 'grad_fn' with this newly created node
+]
+
+
+
+
+    +----+------------------------+
+    |    |  k0    k3    k1    k2  |
+    +----+------------------------+
+    | q0 | q0k0, ****, ****, **** |
+    | q3 | q3k0, q3k3, q3k1, q3k2 |
+    | q1 | q1k0, ****, q1k1, **** |
+    | q2 | q2k0, ****, q2k1, q2k2 |
+    +----+------------------------+
+
+
+
+    def ptrr_scheduling(process_time: Tensor, group_size: int) -> Tensor: 
+   # Sort by processing time (descending) 
+   _, sorted_indices_descending = torch.sort( 
+       process_time, descending=True, stable=True 
+   ) 
+   # Reverse every other group for round-robin distribution 
+   sorted_indices_descending_reversed = torch.flip( 
+       sorted_indices_descending.view(-1, group_size), dims=[1] 
+   ).view(-1) 
+   # Create round-robin assignment 
+   tasks_in_group = torch.where( 
+       torch.arange(num_tasks, device=device) // group_size % 2 == 0, 
+       sorted_indices_descending, 
+       sorted_indices_descending_reversed, 
+   )
+
+

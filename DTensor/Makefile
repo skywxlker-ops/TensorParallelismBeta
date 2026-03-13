@@ -520,6 +520,22 @@ gpt2_entropy_parallel_test: $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 Entropy Parallel Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_entropy_parallel_test\n"
 
+# TP Embedding and Loss Test
+GPT2_TP_EMBEDDING_LOSS_TEST_SRCS = \
+    TrainingScripts/gpt2_tp_embedding_loss_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+GPT2_TP_EMBEDDING_LOSS_TEST_OBJS = $(GPT2_TP_EMBEDDING_LOSS_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
+gpt2_tp_embedding_loss_test: $(GPT2_TP_EMBEDDING_LOSS_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_TP_EMBEDDING_LOSS_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 TP Embedding and Loss Equivalence Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_tp_embedding_loss_test\n"
+
 
 GPT2_TP_TEST_SRCS = \
     gpt2_tp_test/gpt2_tp_test.cpp \
@@ -627,6 +643,22 @@ gpt2_tensor_parallel_test: $(GPT2_TENSOR_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(GPT2_TENSOR_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] GPT2 Tensor Parallel Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_tensor_parallel_test\n"
+
+TEST_PARALLEL_TEST_SRCS = \
+    /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/process_group/test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+TEST_PARALLEL_TEST_OBJS = $(TEST_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
+process_group_test: $(TEST_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: $@"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o examples/$@ $(TEST_PARALLEL_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Tensor Parallel Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./examples/gpt2_tensor_parallel_test\n"
+
+
 
 # DTensor Leak Tests
 DTENSOR_LEAK_TESTS_SRCS = \
