@@ -45,7 +45,7 @@ SRCS = main.cpp \
 	bridge/tensor_ops_bridge.cpp \
 	tensor/placement.cpp
 
-OBJS = $(SRCS:.cpp=.o) $(CUDA_OBJS) 
+OBJS = $(SRCS:.cpp=.o) $(CUDA_OBJS)
 
 .PHONY: all clean test test_mlp_forward
 
@@ -114,7 +114,7 @@ clean:
 # 	tensor/device_mesh.cpp \
 # 	process_group/process_group_nccl.cpp \
 # 	memory/cachingAllocator.cpp \
-# 	bridge/tensor_ops_bridge.cpp 
+# 	bridge/tensor_ops_bridge.cpp
 
 # TEST_DEVICE_MESH_OBJS = $(TEST_DEVICE_MESH_SRCS:.cpp=.o)
 
@@ -139,7 +139,7 @@ clean:
 # 	tensor/device_mesh.cpp \
 # 	process_group/process_group_nccl.cpp \
 # 	memory/cachingAllocator.cpp \
-# 	bridge/tensor_ops_bridge.cpp 
+# 	bridge/tensor_ops_bridge.cpp
 
 # MATMUL_BENCHMARK_OBJS = $(MATMUL_BENCHMARK_SRCS:.cpp=.o)
 
@@ -156,7 +156,7 @@ clean:
 # 	tensor/device_mesh.cpp \
 # 	process_group/process_group_nccl.cpp \
 # 	memory/cachingAllocator.cpp \
-# 	bridge/tensor_ops_bridge.cpp 
+# 	bridge/tensor_ops_bridge.cpp
 
 # ROW_BREAKDOWN_OBJS = $(ROW_BREAKDOWN_SRCS:.cpp=.o)
 
@@ -173,7 +173,7 @@ clean:
 # 	tensor/device_mesh.cpp \
 # 	process_group/process_group_nccl.cpp \
 # 	memory/cachingAllocator.cpp \
-# 	bridge/tensor_ops_bridge.cpp 
+# 	bridge/tensor_ops_bridge.cpp
 
 # TEST_MATMUL_OBJS = $(TEST_MATMUL_SRCS:.cpp=.o)
 
@@ -189,7 +189,7 @@ clean:
 # 	tensor/device_mesh.cpp \
 # 	process_group/process_group_nccl.cpp \
 # 	memory/cachingAllocator.cpp \
-# 	bridge/tensor_ops_bridge_own.cpp 
+# 	bridge/tensor_ops_bridge_own.cpp
 
 # ROW_BREAKDOWN_CUSTOM_OBJS = $(ROW_BREAKDOWN_CUSTOM_SRCS:.cpp=.o)
 
@@ -205,7 +205,7 @@ clean:
 # 	tensor/device_mesh.cpp \
 # 	process_group/process_group_nccl.cpp \
 # 	memory/cachingAllocator.cpp \
-# 	bridge/tensor_ops_bridge.cpp 
+# 	bridge/tensor_ops_bridge.cpp
 
 # GRADIENT_SYNC_OBJS = $(GRADIENT_SYNC_SRCS:.cpp=.o)
 
@@ -231,7 +231,7 @@ TP_MLP_SRCS = \
     process_group/processGroupNccl.cpp \
     memory/cachingAllocator.cpp \
     bridge/tensor_ops_bridge.cpp \
-	tensor/placement.cpp 
+	tensor/placement.cpp
 
 
 TP_MLP_OBJS = $(TP_MLP_SRCS:.cpp=.o) $(CUDA_OBJS)
@@ -335,7 +335,7 @@ dmlp_example: $(DMLP_EXAMPLE_OBJS) $(TENSOR_LIB_A)
 # 	@echo "[COMPILE C++] $<"
 # 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# # NEW CUDA rule  
+# # NEW CUDA rule
 $(CUDA_OBJS): %.o: %.cu
 	@echo "[COMPILE CUDA] $<"
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
@@ -352,7 +352,7 @@ SHARD_BENCH_SRCS = \
 
 SHARD_BENCH_OBJS = $(SHARD_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS)
 
-shard_benchmarking: $(SHARD_BENCH_OBJS) $(TENSOR_LIB_A) 
+shard_benchmarking: $(SHARD_BENCH_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating benchmark executable: $@"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o benchmarks/$@ $(SHARD_BENCH_OBJS) -Xlinker --start-group  $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] Shard Benchmarking build complete."
@@ -431,7 +431,7 @@ interconnect_benchmarks: $(INTERCONNECT_BENCH_OBJS) $(TENSOR_LIB_A)
 # 	tensor/device_mesh.cpp \
 # 	process_group/process_group_nccl.cpp \
 # 	memory/cachingAllocator.cpp \
-# 	bridge/tensor_ops_bridge.cpp 
+# 	bridge/tensor_ops_bridge.cpp
 
 # STRIPED_ATTN_OBJS = $(STRIPED_ATTN_SRCS:.cpp=.o)
 
@@ -552,13 +552,29 @@ gpt2_tp_test: $(GPT2_TP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 TP Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_test_exec \n"
 
+GPT2_TEST_SRCS = \
+    gpt2_tp_test/gpt2_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+GPT2_TEST_OBJS = $(GPT2_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+
+gpt2_test: $(GPT2_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: gpt2_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_test_exec $(GPT2_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./gpt2_test_exec \n"
+
+
 GPT2_TP_MLP_TEST_SRCS = \
     gpt2_tp_test/gpt2_tp_mlp_test.cpp \
     tensor/dtensor.cpp \
     tensor/device_mesh.cpp \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp \
-    
+
 # GPT2_CUDA_SRCS = dnn/dist_grad_norm_kernels.cu
 # CUDA_OBJS = $(GPT2_CUDA_SRCS:.cu = .o)
 
@@ -575,7 +591,7 @@ gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 # gpt2_tp_mlp_test: gpt2_tp_test/gpt2_tp_mlp_test.o $(CUDA_OBJS) $(OBJS) $(TENSOR_LIB_A)
 # 	@echo "\n[LINKING] Creating example executable: $@"
 # 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_tp_mlp_test_exec $(GPT2_TP_MLP_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
-#     @echo "[SUCCESS] GPT2 TP MLP Test build complete." 
+#     @echo "[SUCCESS] GPT2 TP MLP Test build complete."
 # 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_mlp_test_exec \n"
 
 # GPT2_TP_MLP_TEST_SRCS = \

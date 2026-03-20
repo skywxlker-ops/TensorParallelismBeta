@@ -47,11 +47,11 @@ public:
     Tensor grad = grads[0];
 
     // All-reduce gradient: sum contributions from all GPUs
-    // This is critical for correct gradient flow through tensor parallel sync
-    // points
-    pg_->all_reduce_async(grad.data(), const_cast<void *>(grad.data()),
-                          grad.numel(), grad.dtype(), ::sum, false)
-        ->wait();
+    // GPU-side sync only (non-blocking to CPU) for pipeline efficiency
+    auto work = pg_->all_reduce_async(grad.data(), const_cast<void *>(grad.data()),
+                          grad.numel(), grad.dtype(), ::sum, false);
+    work->event_record();
+    work->streamWait(OwnTensor::cuda::getCurrentStream());
 
     return {grad};
   }
@@ -220,11 +220,7 @@ DTensor::DTensor(const DeviceMesh &device_mesh,
   opts.device = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, local_gpu);
   opts.pinten = OwnTensor::Pinned_Flag(Pinned_Flag::Portable);
   OwnTensor::Shape shape{shape_};
-  // tensor_ = OwnTensor::Tensor(shape, opts);
-  // opts.with_req_grad(true);
 
-  // for (int d : layout_.get_global_shape()) size_ *= d;
-  // std::cout << "Rand called" << std::endl;
   tensor_ = OwnTensor::Tensor::randn<float>(shape, opts, seed, sd);
   // Tensor::rand on GPU produces uniform [0,1) via curandGenerateUniform,
   // ignoring lower/upper params. Scale to [-sd, sd] for proper init.
@@ -1547,25 +1543,22 @@ void DTensor::shard_fused_transpose(int dim, int root, DTensor &parent_tensor) {
 // };
 
 void DTensor::context_parallel_shard(std::vector<Tensor> &chunks,
-                                     bool load_balancing_enabled) {
+                                    LoadBalancer &load_balancer) {
 
   // autograd::GraphRecordMode::record_forward("ARITHMETIC:
   // context_parallel_shard");
 
-  if (load_balancing_enabled) {
-    HeadTail Loadbalancer;
-    Loadbalancer.set_world_size(world_size_);
-    Loadbalancer.set_load_balancing(load_balancing_enabled);
+     load_balancer.set_world_size(world_size_);
     if (tensor_.shape().dims.size() == 4)
-      Loadbalancer.set_chunk_dim(2);
+      load_balancer.set_chunk_dim(2);
     else if (tensor_.shape().dims.size() == 3)
-      Loadbalancer.set_chunk_dim(1);
+      load_balancer.set_chunk_dim(1);
     else
       throw std::runtime_error(
           "context_parallel_shard only supports 3D and 4D tensors");
 
-    Loadbalancer.loadbalance(tensor_);
-  }
+   load_balancer.loadbalance(tensor_);
+
   if (tensor_.shape().dims.size() == 4)
     chunks = tensor_.make_shards_inplace_axis(world_size_, 2);
   else if (tensor_.shape().dims.size() == 3)
@@ -1573,42 +1566,77 @@ void DTensor::context_parallel_shard(std::vector<Tensor> &chunks,
   else
     throw std::runtime_error(
         "context_parallel_shard only supports 3D and 4D tensors");
+
+
+
 }
 
-void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
-  std::vector<int64_t> global_shape = layout_.get_global_shape();
 
-  if (dim < 0 || dim >= (int)global_shape.size()) {
-    std::ostringstream oss;
-    oss << "DTensor::shard: Invalid shard dimension " << dim
-        << " for tensor with " << global_shape.size() << " dimensions";
-    throw std::runtime_error(oss.str());
-  }
+void DTensor::context_parallel_unshard(std::vector<Tensor> &chunks,
+                                     LoadBalancer &load_balancer) {
 
-  std::vector<int64_t> local_shape = layout_.get_local_shape(rank_);
-  size_t shard_numel = 1;
-  for (int d : local_shape)
-    shard_numel *= d;
+  // autograd::GraphRecordMode::record_forward("ARITHMETIC:
+  // context_parallel_shard");
 
-  cudaMemcpyAsync(tensor_.data<float>() + rank_ * shard_numel,
-                  sharded_tensor.tensor_.data<float>(),
-                  shard_numel * sizeof(float), cudaMemcpyDeviceToDevice,
-                  stream_);
+    if (tensor_.shape().dims.size() == 4)
+      chunks = tensor_.make_shards_inplace_axis(world_size_, 2);
+    else if (tensor_.shape().dims.size() == 3)
+      chunks = tensor_.make_shards_inplace_axis(world_size_, 1);
+    else
+      throw std::runtime_error(
+          "context_parallel_shard only supports 3D and 4D tensors");
 
-  cudaStreamSynchronize(stream_);
+    load_balancer.set_world_size(world_size_);
+    if (tensor_.shape().dims.size() == 4)
+      load_balancer.set_chunk_dim(2);
+    else if (tensor_.shape().dims.size() == 3)
+      load_balancer.set_chunk_dim(1);
+    else
+      throw std::runtime_error(
+          "context_parallel_shard only supports 3D and 4D tensors");
 
-  pg_->all_gather_async(tensor_.data<float>() + rank_ * shard_numel,
-                        tensor_.data<float>(), shard_numel,
-                        OwnTensor::Dtype::Float32, false)
-      ->wait();
+   load_balancer.unloadbalance(tensor_);
+
+
 }
+
+
+
+// void DTensor::assemble(int dim, int root, DTensor &sharded_tensor) {
+//   std::vector<int64_t> global_shape = layout_.get_global_shape();
+
+//   if (dim < 0 || dim >= (int)global_shape.size()) {
+//     std::ostringstream oss;
+//     oss << "DTensor::shard: Invalid shard dimension " << dim
+//         << " for tensor with " << global_shape.size() << " dimensions";
+//     throw std::runtime_error(oss.str());
+//   }
+
+//   std::vector<int64_t> local_shape = layout_.get_local_shape(rank_);
+//   size_t shard_numel = 1;
+//   for (int d : local_shape)
+//     shard_numel *= d;
+
+//   cudaMemcpyAsync(tensor_.data<float>() + rank_ * shard_numel,
+//                   sharded_tensor.tensor_.data<float>(),
+//                   shard_numel * sizeof(float), cudaMemcpyDeviceToDevice,
+//                   stream_);
+
+//   cudaStreamSynchronize(stream_);
+
+//   pg_->all_gather_async(tensor_.data<float>() + rank_ * shard_numel,
+//                         tensor_.data<float>(), shard_numel,
+//                         OwnTensor::Dtype::Float32, false)
+//       ->wait();
+// }
 
 void DTensor::sync() {
   // autograd::GraphRecordMode::record_forward("ARITHMETIC: DTensor_sync");
-  // Blocking sync - enqueue all-reduce and wait for completion
-  pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_,
-                        OwnTensor::Dtype::Float32, sum, false)
-      ->wait();
+  // GPU-side sync only (non-blocking to CPU) for pipeline efficiency
+  auto work = pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_,
+                        OwnTensor::Dtype::Float32, sum, false);
+  work->event_record();
+  work->streamWait(OwnTensor::cuda::getCurrentStream());
   has_pending_collective_ = false;
   pending_work_ = nullptr;
 }
@@ -1629,10 +1657,11 @@ void DTensor::sync_w_autograd(op_t op) {
   // across GPUs Backward: automatically all-reduces gradient dY before flowing
   // to previous ops
 
-  // 1. Forward: Blocking all-reduce
-  pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_,
-                        OwnTensor::Dtype::Float32, op, false)
-      ->wait();
+  // 1. Forward: GPU-side sync only (non-blocking to CPU)
+  auto work = pg_->all_reduce_async(tensor_.data<float>(), tensor_.data<float>(), size_,
+                        OwnTensor::Dtype::Float32, op, false);
+  work->event_record();
+  work->streamWait(OwnTensor::cuda::getCurrentStream());
 
   // 2. Set up backward graph if tensor requires grad
   if (tensor_.requires_grad()) {
@@ -1660,7 +1689,7 @@ void DTensor::sync_w_autograd(op_t op) {
 void DTensor::wait() {
   // Wait for any pending async collective to complete
   if (has_pending_collective_ && pending_work_) {
-    pending_work_->wait();
+    // pending_work_->wait();
     has_pending_collective_ = false;
     pending_work_ = nullptr;
   }
@@ -1676,9 +1705,10 @@ void DTensor::register_backward_all_reduce_hook(op_t op) {
 
   tensor_.register_post_acc_hook(std::make_unique<LambdaPostAccHook>(
       [pg, size, op, name](const Tensor &grad) {
-        pg->all_reduce_async(grad.data(), const_cast<void *>(grad.data()), size,
-                             OwnTensor::Dtype::Float32, op, false)
-            ->wait();
+        auto work = pg->all_reduce_async(grad.data(), const_cast<void *>(grad.data()), size,
+                             OwnTensor::Dtype::Float32, op, false);
+        work->event_record();
+        work->streamWait(OwnTensor::cuda::getCurrentStream());
       }));
 }
 

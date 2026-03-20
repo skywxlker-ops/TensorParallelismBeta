@@ -1,6 +1,7 @@
 # Compiled Object files
 *.o
 *.obj
+.claude/
 
 # Static Libraries
 *.a
@@ -35,7 +36,7 @@ DTensor/gpt2_tp_mlp_test_exec
 DTensor/tests/summa
 *.nvcudmp
 *.nsys-rep
-
+*.md
 *.bin
 *.npy
 *.nsys-rep
@@ -48,7 +49,9 @@ DTensor/tests/summa
 DTensor/gpt2_tp_mlp_test_exec
 
 # Ignore all training logs
-DTensor/TP_MLP_Training_logs/
+DTensor/TP_MLP_Training_logs/*
+DTensor/TP_Training_logs/*
+Megatron-LM/Megatron_TP_Training_logs/*
 DTensor/gpt2_tp_test/TP_MLP_Torch_LogsDTensor/tests/dtensor_leak_tests/dtensor_leak_tests
 *.bin
 *.npy
@@ -56,3 +59,5 @@ DTensor/gpt2_tp_test/TP_MLP_Torch_LogsDTensor/tests/dtensor_leak_tests/dtensor_l
 *_exec
 DTensor/Data_Loader/
 DTensor/TP_MLP_Training_logs/
+DTensor/examples/gpt2_tp_embedding_loss_test
+DTensor/examples/gpt2_tp_embedding_loss_test

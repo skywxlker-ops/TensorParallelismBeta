@@ -333,13 +333,11 @@ public:
       return;
     if (ln.weight.has_grad()) {
       pg->all_reduce_async(ln.weight.grad(), ln.weight.grad(),
-                           ln.weight.numel(), Dtype::Float32, sum, false)
-          ->wait();
+                           ln.weight.numel(), Dtype::Float32, sum, false);
     }
     if (has_bias_ && ln.bias.is_valid() && ln.bias.has_grad()) {
       pg->all_reduce_async(ln.bias.grad(), ln.bias.grad(), ln.bias.numel(),
-                           Dtype::Float32, sum, false)
-          ->wait();
+                           Dtype::Float32, sum, false);
     }
     DModule::all_reduce_gradients(pg);
   }
@@ -554,8 +552,8 @@ public:
     if (use_bias_ && bias && bias->mutable_tensor().has_grad()) {
       pg->all_reduce_async(
             bias->mutable_tensor().grad(), bias->mutable_tensor().grad(),
-            bias->mutable_tensor().numel(), Dtype::Float32, sum, false)
-          ->wait();
+            bias->mutable_tensor().numel(), Dtype::Float32, sum, false);
+          // ->wait();
     }
     DModule::all_reduce_gradients(pg);
   }
@@ -660,8 +658,8 @@ public:
     if (weight->mutable_tensor().has_grad()) {
       pg->all_reduce_async(
             weight->mutable_tensor().grad(), weight->mutable_tensor().grad(),
-            weight->mutable_tensor().numel(), Dtype::Float32, sum, false)
-          ->wait();
+            weight->mutable_tensor().numel(), Dtype::Float32, sum, false);
+          // ->wait();
     }
     DModule::all_reduce_gradients(pg);
   }
@@ -1459,11 +1457,12 @@ inline DTensor dmse_loss(DTensor &pred, DTensor &target) {
 
 // class ContextParallel : public DModule {
 // public:
+
 //   ContextParallel(const DeviceMesh &mesh, std::shared_ptr<ProcessGroupNCCL>
-//   pg,
-//                   int64_t batch_size, int64_t seq_len, int64_t hidden_size)
+//   pg, int64_t batch_size, int64_t seq_len, int64_t hidden_size)
 //       : mesh_(&mesh), pg_(pg), batch_size_(batch_size), seq_len_(seq_len),
 //         hidden_size_(hidden_size) {}
+//   };
 
 }
  // namespace dnn
@@ -1498,7 +1497,7 @@ public:
     Tensor grad_weight = Tensor::zeros(weight_ref_.shape(), weight_ref_.opts());
 
     // Single fused kernel: scatter-add upstream grads into weight grad
-    OwnTensor::cuda::launch_vocab_parallel_embedding_bwd(
+    OwnTensor::cuda::launch_vocab_parallel_embedding_bwd_float4(
         saved_input_.data<int64_t>(), grad_output.data<float>(),
         grad_weight.data<float>(), B_, T_, C_, start_v_, end_v_, 0);
 
@@ -1600,16 +1599,18 @@ public:
         TensorOptions().with_dtype(Dtype::Float32).with_device(input.device()));
 
     // Single fused kernel: shard-check + lookup + zero-fill
-    OwnTensor::cuda::launch_vocab_parallel_embedding_fwd(
+    OwnTensor::cuda::launch_vocab_parallel_embedding_fwd_float4(
         input_i64.data<int64_t>(), weight->mutable_tensor().data<float>(),
         output.data<float>(), B, T, embedding_dim_, vocab_start_, vocab_end_,
         0);
 
     // All-reduce partial embeddings across ranks (SUM)
-    pg_->all_reduce_async(output.data<float>(), output.data<float>(),
+    // GPU-side sync only (non-blocking to CPU) for pipeline efficiency
+    auto work = pg_->all_reduce_async(output.data<float>(), output.data<float>(),
                           output.numel(), OwnTensor::Dtype::Float32, (op_t)0,
-                          false)
-        ->wait();
+                          false);
+    work->event_record();
+    work->streamWait(OwnTensor::cuda::getCurrentStream());
 
     // Custom autograd: connect output → weight gradient
     if (weight->mutable_tensor().requires_grad()) {
@@ -1633,23 +1634,19 @@ private:
 
 class VocabParallelCrossEntropyNodeV2 : public Node {
 private:
-  Tensor logits_;     // [B, T, V_local]
-  Tensor targets_;    // [BT] as float
-  Tensor sum_exp_;    // [BT] (global)
-  Tensor max_logits_; // [BT] (global)
+  Tensor softmax_probs_; // [B, T, V_local] (Cached from forward pass)
+  Tensor targets_;       // [BT] as float
   int64_t start_v_;
   int64_t B_, T_, V_;
 
 public:
-  VocabParallelCrossEntropyNodeV2(const Tensor &logits, const Tensor &targets,
-                                  const Tensor &sum_exp,
-                                  const Tensor &max_logits, int64_t start_v)
-      : Node(1), logits_(logits.detach()), targets_(targets.detach()),
-        sum_exp_(sum_exp.detach()), max_logits_(max_logits.detach()),
+  VocabParallelCrossEntropyNodeV2(const Tensor &softmax_probs, const Tensor &targets,
+                                  int64_t start_v)
+      : Node(1), softmax_probs_(softmax_probs.detach()), targets_(targets.detach()),
         start_v_(start_v) {
-    B_ = logits.shape().dims[0];
-    T_ = logits.shape().dims[1];
-    V_ = logits.shape().dims[2];
+    B_ = softmax_probs.shape().dims[0];
+    T_ = softmax_probs.shape().dims[1];
+    V_ = softmax_probs.shape().dims[2];
   }
 
   const char *name() const override {
@@ -1662,24 +1659,30 @@ public:
     float scale = 1.0f / (B_ * T_);
 
     // Allocate output gradient
-    Tensor grad_logits = Tensor::zeros(logits_.shape(), logits_.opts());
+    Tensor grad_logits = Tensor::zeros(softmax_probs_.shape(), softmax_probs_.opts());
 
-    // Single fused kernel: softmax + scale + sparse_subtract
-    // Reads grad_output[0] from device — NO cudaMemcpy needed
-    OwnTensor::cuda::launch_vocab_parallel_ce_backward(
-        logits_.data<float>(), targets_.data<float>(), sum_exp_.data<float>(),
-        max_logits_.data<float>(),
-        grad_output.data<float>(), // Device pointer!
-        grad_logits.data<float>(), B_, T_, V_, start_v_, scale, 0);
+    bool is_aligned = (reinterpret_cast<uintptr_t>(softmax_probs_.data<float>()) % 16 == 0) &&
+                      (reinterpret_cast<uintptr_t>(grad_logits.data<float>()) % 16 == 0);
+
+    // Fused float4 kernel: prob * scale - (is_target ? scale : 0)
+    if (V_ % 4 == 0 && is_aligned) {
+        OwnTensor::cuda::launch_vocab_parallel_ce_backward_float4(
+            softmax_probs_.data<float>(), targets_.data<float>(),
+            grad_output.data<float>(), // Device pointer!
+            grad_logits.data<float>(), B_, T_, V_, start_v_, scale, 0);
+    } else {
+        OwnTensor::cuda::launch_vocab_parallel_ce_backward(
+            softmax_probs_.data<float>(), targets_.data<float>(),
+            grad_output.data<float>(), // Device pointer!
+            grad_logits.data<float>(), B_, T_, V_, start_v_, scale, 0);
+    }
 
     return {grad_logits};
   }
 
   void release_saved_variables() override {
-    logits_ = Tensor();
+    softmax_probs_ = Tensor();
     targets_ = Tensor();
-    sum_exp_ = Tensor();
-    max_logits_ = Tensor();
   }
 };
 
@@ -1736,10 +1739,24 @@ Tensor vocab_parallel_cross_entropy_v2(DTensor &logits_dt, Tensor &targets) {
       Shape{{BT * 2}},
       TensorOptions().with_dtype(Dtype::Float32).with_device(device));
 
-  OwnTensor::cuda::launch_fused_sum_exp_target(
-      local_logits.data<float>(), global_max_flat.data<float>(),
-      targets_flat.data<float>(), packed.data<float>(), B, T, V_local, start_v,
-      0);
+  // Allocate softmax_probs buffer early so the first kernel can write exponentiated logits into it
+  Tensor softmax_probs = Tensor::empty(local_logits.shape(), local_logits.opts());
+
+  // Check memory alignment for float4 optimizations (must be 16-byte aligned)
+  bool is_aligned = (reinterpret_cast<uintptr_t>(local_logits.data<float>()) % 16 == 0) &&
+                    (reinterpret_cast<uintptr_t>(softmax_probs.data<float>()) % 16 == 0);
+
+  if (V_local % 4 == 0 && is_aligned) {
+      OwnTensor::cuda::launch_fused_sum_exp_target_float4(
+          local_logits.data<float>(), global_max_flat.data<float>(),
+          targets_flat.data<float>(), packed.data<float>(),
+          softmax_probs.data<float>(), B, T, V_local, start_v, 0);
+  } else {
+      OwnTensor::cuda::launch_fused_sum_exp_target(
+          local_logits.data<float>(), global_max_flat.data<float>(),
+          targets_flat.data<float>(), packed.data<float>(),
+          softmax_probs.data<float>(), B, T, V_local, start_v, 0);
+  }
 
   // === Step 4: All-reduce SUM for packed [sum_exp | target_logit] (2 of 2) ===
   pg->all_reduce(packed.data<float>(), packed.data<float>(), BT * 2,
@@ -1759,9 +1776,21 @@ Tensor vocab_parallel_cross_entropy_v2(DTensor &logits_dt, Tensor &targets) {
   Tensor loss_per_token = log_sum_exp - (global_target_logit - global_max_flat);
   Tensor loss = OwnTensor::reduce_mean(loss_per_token, {0}, false);
 
-  // === Step 6: Custom autograd with V2 fused backward node ===
+  // === Step 6: Compute Softmax Probabilities for Backward Pass ===
+  // probs = exp_logits / global_sum_exp (done in-place heavily utilizing the precomputed exps)
+  if (V_local % 4 == 0 && is_aligned) {
+      OwnTensor::cuda::launch_compute_softmax_probs_float4(
+          softmax_probs.data<float>(), global_sum_exp.data<float>(),
+          B, T, V_local, 0);
+  } else {
+      OwnTensor::cuda::launch_compute_softmax_probs(
+          softmax_probs.data<float>(), global_sum_exp.data<float>(),
+          B, T, V_local, 0);
+  }
+
+  // === Step 7: Custom autograd with V2 fused backward node ===
   auto grad_fn = std::make_shared<VocabParallelCrossEntropyNodeV2>(
-      local_logits, targets_flat, global_sum_exp, global_max_flat, start_v);
+      softmax_probs, targets_flat, start_v);
   grad_fn->set_next_edge(0, autograd::get_grad_edge(local_logits));
   loss.set_grad_fn(grad_fn);
   loss.set_requires_grad(true);

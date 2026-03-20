@@ -19,13 +19,13 @@ class Work{
 
 public:
 
-    //will only get the stream as argument. 
+    //will only get the stream as argument.
     explicit Work(cudaStream_t stream, ncclComm_t comm = nullptr) : stream_(stream), comm_(comm), completed_(true), success_(false), event_(nullptr) {
         // Event will be created lazily in event_record() to ensure it's on the correct device
         // std::cout << "Using CpuSync_fixed.hpp Work class" << std::endl;
     }
 
-    ~Work() {   
+    ~Work() {
         // event may be destroyed after use; only if it was created
         if (event_ != nullptr) {
             cudaError_t err = cudaEventDestroy(event_);
@@ -62,7 +62,7 @@ public:
                 return false;
             }
         }
-        
+
         cudaError_t err = cudaEventRecord(event_, stream_);
         if (err != cudaSuccess) {
             std::cerr << "[Work::event_record] cudaEventRecord FAILED: " << cudaGetErrorString(err) << std::endl;
@@ -94,7 +94,7 @@ public:
             success_ = true;
             return true;
         }
-        cudaError_t err = cudaEventSynchronize(event_);
+        cudaError_t err = cudaStreamWaitEvent(OwnTensor::cuda::getCurrentStream(), event_, 0);
         // cudaError_t err = cudaStreamWaitEvent(OwnTensor::cuda::getCurrentStream(), event_, 0);
         ncclResult_t async_error;
         ncclCommGetAsyncError(comm_, &async_error);
@@ -110,13 +110,13 @@ public:
             last_err = err;
             return false;
         }
-        
+
         success_ = true;
         return true;
     }
 
     //will return the success.
-    bool is_success(){ 
+    bool is_success(){
         // std::unique_lock<std::mutex> lock(mutex_);
         std::lock_guard<std::mutex> lock(mutex_);
         return success_;
@@ -132,7 +132,7 @@ public:
         ncclResult_t async_error;
         ncclCommGetAsyncError(comm_, &async_error);
         std::lock_guard<std::mutex> lock(mutex_);
-        
+
         completed_ = true;
         if (async_error != ncclSuccess) {
             nccl_status = async_error;
@@ -144,7 +144,7 @@ public:
             cuda_error = cudaGetErrorString(last_err);
             return true;
         }
-        
+
         success_ = (nccl_status == ncclSuccess);
         return true;
     }
@@ -191,7 +191,7 @@ public:
         return event_;
     }
 
-    
+
 private:
     std::mutex mutex_;
     cudaEvent_t event_;
@@ -203,5 +203,5 @@ private:
     std::string cuda_error;
     ncclComm_t comm_;
 
- 
+
 };

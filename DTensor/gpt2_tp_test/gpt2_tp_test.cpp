@@ -152,7 +152,7 @@ public:
       : ln(config.n_embd),
         // DColumnLinear: weight_data, use_bias, sd, seed, sync_input,
         // use_backward_hook MUST sync backward partial gradients! Set
-        // use_backward_hook = true!
+        // use_backward_hook = true
         fc_up(mesh, pg, config.batch_size, config.context_length, config.n_embd,
               4 * config.n_embd, {}, true, 0.02f, seed, false, true),
 
@@ -197,7 +197,6 @@ public:
     h = gelu.forward(h);
     h = fc_down.forward(h);
 
-    // Forward sync for RowParallel Layer!
     // We MUST sum the partial features across ranks BEFORE adding to the
     // residual.
     // h.sync();
@@ -524,49 +523,58 @@ int main(int argc, char **argv) {
     // Get all parameters
     // auto params = model.parameters(); // Already got above
 
+    // Extract underlying Tensors from DTensor* params for nn::clip_grad_norm_
+    // No allreduce needed: replicated param grads are identical across TP ranks,
+    // and sharded param grads are clipped locally per-shard.
+    std::vector<Tensor> tensor_params;
+    tensor_params.reserve(params.size());
+    for (auto* p : params) {
+      tensor_params.push_back(p->mutable_tensor());
+    }
+
     // Create optimizer
-    dnn::AdamW optimizer(max_lr, 0.9f, 0.95f, 1e-8f, 0.1f);
+    nn::AdamW optimizer(tensor_params, max_lr, 0.9f, 0.95f, 1e-8f, 0.1f);
 
     // Create data loaders
     std::string data_root =
-        "/home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Data_Loader/Data/";
+    "/home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Data_Loader/Data/";
     DataLoaderLite train_loader(B, T, 0, 1, "train", data_root, true,
-                                100000000);
-    DataLoaderLite val_loader(B, T, 0, 1, "val", data_root, true, 100000000);
+      100000000);
+      DataLoaderLite val_loader(B, T, 0, 1, "val", data_root, true, 100000000);
 
-    CudaTimer timer_step, timer_data, timer_fwd, timer_loss, timer_bwd,
-        timer_clip, timer_optim;
+      CudaTimer timer_step, timer_data, timer_fwd, timer_loss, timer_bwd,
+      timer_clip, timer_optim;
 
-    if (rank == 0) {
-      std::cout << "\nStarting training..." << std::endl;
-    }
+      if (rank == 0) {
+        std::cout << "\nStarting training..." << std::endl;
+      }
 
-    // Create CSV log file
-    // Enable dynamic log filename generation
-    std::string log_filename;
-    std::string config_filename;
-    std::ofstream log_file;
+      // Create CSV log file
+      // Enable dynamic log filename generation
+      std::string log_filename;
+      std::string config_filename;
+      std::ofstream log_file;
 
-    if (rank == 0) {
-      std::filesystem::create_directories("TP_Training_logs");
-      int log_idx = 1;
+      if (rank == 0) {
+        std::filesystem::create_directories("TP_Training_logs");
+        int log_idx = 1;
 
       while (true) {
-          log_filename = "TP_Training_logs/TP_Training_log" +
-                         std::to_string(log_idx) + ".csv";
-          bool exists = std::filesystem::exists(log_filename);
+        log_filename = "TP_Training_logs/TP_Training_log" +
+        std::to_string(log_idx) + ".csv";
+        bool exists = std::filesystem::exists(log_filename);
 
-          if (!exists) {
+        if (!exists) {
             break;
           }
           log_idx++;
-      }
+        }
 
       // while (true) {
-      //   log_filename = "TP_Training_logs/TP_Training_log" +
-      //                  std::to_string(log_idx) + ".csv";
-      //   // bool exists = std::filesystem::exists(log_filename);
-      //   // std::cout << "[DEBUG] Checking log file: " << log_filename
+        //   log_filename = "TP_Training_logs/TP_Training_log" +
+        //                  std::to_string(log_idx) + ".csv";
+        //   // bool exists = std::filesystem::exists(log_filename);
+        //   // std::cout << "[DEBUG] Checking log file: " << log_filename
       //   //           << " (Absolute: " << std::filesystem::absolute(log_filename)
       //   //           << ")"
       //   //           << " -> Exists: " << (exists ? "YES" : "NO") << std::endl;
@@ -578,11 +586,11 @@ int main(int argc, char **argv) {
       //   }
       //   log_idx++;
 
-        std::cout << "Saving logs to: " << log_filename << std::endl;
+      std::cout << "Saving logs to: " << log_filename << std::endl;
 
 
 
-        // Save configuration
+      // Save configuration
       config_filename = "TP_Training_logs/TP_Training_log" + std::to_string(log_idx) + "_config.txt";
       std::ofstream config_file(config_filename);
       config_file << "Configuration:\n";
@@ -618,13 +626,14 @@ int main(int argc, char **argv) {
     float val_loss_accum_log = -1.0f; // -1 indicates no validation this step
 
     Layout input_layout(
-        mesh, {config.batch_size, config.context_length, config.n_embd});
-    DTensor x(mesh, pg, input_layout, "GPT input");
-    for (int step = 0; step < max_steps; ++step) {
+      mesh, {config.batch_size, config.context_length, config.n_embd});
+      DTensor x(mesh, pg, input_layout, "GPT input");
+
+      for (int step = 0; step < max_steps; ++step) {
       try {
         timer_step.start_timer();
 
-        // Validation every VAL_FREQ steps
+          // Validation every VAL_FREQ steps
         if (step % VAL_FREQ == 0 || step == max_steps - 1) {
           val_loader.reset();
           float val_loss_accum = 0.0f;
@@ -770,8 +779,9 @@ int main(int argc, char **argv) {
 
         // Training step with component timing
         double time_data = 0, time_forward = 0, time_loss = 0,
-               time_backward = 0, time_allreduce = 0, time_clip = 0,
-               time_optim = 0;
+        time_backward = 0, time_allreduce = 0, time_clip = 0,
+        time_optim = 0;
+
 
         optimizer.zero_grad();
         float loss_accum = 0.0f;
@@ -826,7 +836,7 @@ int main(int argc, char **argv) {
           wte_grad += lm_grad_T;
         }
 
-        // TEMP DEBUGGING: Print parameter gradients to check cross-rank sync
+        // // TEMP DEBUGGING: Print parameter gradients to check cross-rank sync
         // if ((grad_accum_steps + 1) % 1 == 0) {
         //   for (int r = 0; r < world_size; ++r) {
         //     if (rank == r) {
@@ -871,7 +881,7 @@ int main(int argc, char **argv) {
 
         // --- Gradient Clipping ---
         timer_clip.start_timer();
-        float norm = dnn::clip_grad_norm_dtensor_nccl(params, 1.0f, pg);
+        float norm = nn::clip_grad_norm_(tensor_params, 1.0f);
 
         time_clip = timer_clip.get_elapsed_seconds();
 
@@ -881,7 +891,8 @@ int main(int argc, char **argv) {
 
         // --- Optimizer Step ---
         timer_optim.start_timer();
-        optimizer.step(params);
+        optimizer.step();
+
         time_optim = timer_optim.get_elapsed_seconds();
 
         double dt = timer_step.get_elapsed_seconds();
@@ -965,3 +976,5 @@ int main(int argc, char **argv) {
     return 1;
   }
 }
+
+

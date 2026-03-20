@@ -1,3 +1,4 @@
+#pragma once
 #include "../process_group/ProcessGroupNCCL.h"
 #include <cuda_runtime.h>
 #include <iostream>
@@ -74,8 +75,10 @@ public:
   // Uses OwnTensor transpose
 
 
-  
-  void context_parallel_shard(std::vector<Tensor> &chunks, bool load_balancing_enabled) ;
+
+  void context_parallel_shard(std::vector<Tensor> &chunks, LoadBalancer &load_balancer); ;
+  void context_parallel_unshard(std::vector<Tensor> &chunks, LoadBalancer &load_balancer) ;
+
 
   // void assemble(int dim, int root, DTensor &sharded_tensor);
   void sync();       // All-reduce with wait (blocking)
@@ -90,7 +93,7 @@ public:
   // void wait_backward_hook();
   bool has_pending_collective() const; // Check if async collective pending
 
-  void assemble(int dim, int root, DTensor &sharded_tensor);
+  // void assemble(int dim, int root, DTensor &sharded_tensor);
 
   // void permute_striped(int dim = 0);
 
@@ -166,7 +169,8 @@ public:
   int64_t chunkdim;
   LoadBalancer() = default;
   LoadBalancer(int64_t chunkdim_) { chunkdim = chunkdim_; }
-
+  virtual void loadbalance(Tensor &tensor) = 0;
+  virtual void unloadbalance(Tensor &tensor) = 0;
   void set_world_size(int64_t world_size_) { world_size = world_size_; }
   void set_load_balancing(bool enable) { loadbalancing_enabled = enable; }
   void set_chunk_dim(int64_t dim) { chunkdim = dim; }
@@ -176,14 +180,14 @@ public:
 class HeadTail : public LoadBalancer {
   private:
   cudaStream_t stream_ = nullptr;
-  
+
   public:
   HeadTail() = default;
   HeadTail(int64_t world_size_) { world_size = world_size_; };
   void set_stream(cudaStream_t stream) { stream_ = stream; };
-  void loadbalance(Tensor &tensor);
-  void unloadbalance(Tensor &tensor) ;
-    
+  void loadbalance(Tensor &tensor) override;
+  void unloadbalance(Tensor &tensor) override;
+
   };
 // void launch_reverse_kernel(float* d_src, float* d_dst, int nx, int ny, int
 // nz, int dim, cudaStream_t stream);
