@@ -52,6 +52,7 @@ DTensor/gpt2_tp_mlp_test_exec
 DTensor/TP_MLP_Training_logs/*
 DTensor/TP_Training_logs/*
 Megatron-LM/Megatron_TP_Training_logs/*
+DTensor/CP_Training_logs/*
 DTensor/gpt2_tp_test/TP_MLP_Torch_LogsDTensor/tests/dtensor_leak_tests/dtensor_leak_tests
 *.bin
 *.npy

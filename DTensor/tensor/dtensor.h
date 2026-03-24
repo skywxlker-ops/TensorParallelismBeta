@@ -23,6 +23,9 @@
 
 using namespace OwnTensor;
 
+// Forward declaration: LoadBalancer is defined later in this file
+class LoadBalancer;
+
 class DTensor {
 public:
   DTensor(); // Default constructor for member initialization

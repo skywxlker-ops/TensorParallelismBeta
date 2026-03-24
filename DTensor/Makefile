@@ -105,7 +105,8 @@ clean:
 	rm -f TrainingScripts/*.o
 	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom benchmarks/shard_benchmarking
 	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
-
+	rm -f /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/gpt2_cp_test/gpt2_cp_test.o
+	
 .PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom gradient_sync_example shard_benchmarking
 
 # TEST_DEVICE_MESH_SRCS = \
@@ -221,7 +222,7 @@ clean:
 
 # Tensor Parallel MLP Example
 
-CUDA_SRCS =  process_group/fused_transpose_kernel.cu process_group/shard_fused_transpose_kernel.cu dnn/dist_grad_norm_kernels.cu
+CUDA_SRCS =  process_group/fused_transpose_kernel.cu process_group/shard_fused_transpose_kernel.cu dnn/dist_grad_norm_kernels.cu tensor/headtail_kernel.cu
 CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
 
 TP_MLP_SRCS = \
@@ -586,6 +587,38 @@ gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_tp_mlp_test_exec $(GPT2_TP_MLP_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] GPT2 TP MLP Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_mlp_test_exec \n"
+
+# GPT2 Context Parallel Test
+GPT2_CP_TEST_SRCS = \
+    gpt2_cp_test/gpt2_cp_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+
+gpt2_cp_test: $(GPT2_CP_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: gpt2_cp_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_cp_test_exec $(GPT2_CP_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Context Parallel Test build complete."
+	@echo "\nRun with: mpirun -np <N> ./gpt2_cp_test_exec \n"
+
+# SDPA Backward Comparison Test (single GPU, no MPI needed)
+SDPA_TEST_SRCS = \
+    tests/test_sdpa_backward.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+SDPA_TEST_OBJS = $(SDPA_TEST_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+test_sdpa_backward: $(SDPA_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: test_sdpa_backward_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_sdpa_backward_exec $(SDPA_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] SDPA Backward Test build complete."
+	@echo "\nRun with: ./test_sdpa_backward_exec \n"
 
     # Example target for the failing test
 # gpt2_tp_mlp_test: gpt2_tp_test/gpt2_tp_mlp_test.o $(CUDA_OBJS) $(OBJS) $(TENSOR_LIB_A)

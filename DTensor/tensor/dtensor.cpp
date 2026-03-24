@@ -13,6 +13,7 @@
 #include "autograd/ops_template.h"
 #include "device/DeviceCore.h"
 #include "dtensor.h"
+#include "headtail_kernel.cuh"
 #include "mlp/layers.h"
 #include "process_group/CpuSync_fixed.hpp"
 
@@ -64,112 +65,112 @@ public:
 // Ring Rotator implementations for Ring Attention and sequential communications
 // =============================================================================
 
-enum class RotateMethod { ALL_TO_ALL, ALL_GATHER };
+// enum class RotateMethod { ALL_TO_ALL, ALL_GATHER };
 
-class RingRotater {
-public:
-  virtual ~RingRotater() = default;
-  virtual void exchange_buffers(OwnTensor::Tensor &curr_buffer) = 0;
-  virtual OwnTensor::Tensor next_buffer() = 0;
-};
+// class RingRotater {
+// public:
+//   virtual ~RingRotater() = default;
+//   virtual void exchange_buffers(OwnTensor::Tensor &curr_buffer) = 0;
+//   virtual OwnTensor::Tensor next_buffer() = 0;
+// };
 
-class AllToAllRotater : public RingRotater {
-private:
-  std::shared_ptr<ProcessGroupNCCL> pg_;
-  int seq_dim_;
-  OwnTensor::Tensor buffer_;
-  std::shared_ptr<Work> work_;
+// class AllToAllRotater : public RingRotater {
+// private:
+//   std::shared_ptr<ProcessGroupNCCL> pg_;
+//   int seq_dim_;
+//   OwnTensor::Tensor buffer_;
+//   std::shared_ptr<Work> work_;
 
-public:
-  AllToAllRotater(std::shared_ptr<ProcessGroupNCCL> pg, int seq_dim)
-      : pg_(pg), seq_dim_(seq_dim) {}
+// public:
+//   AllToAllRotater(std::shared_ptr<ProcessGroupNCCL> pg, int seq_dim)
+//       : pg_(pg), seq_dim_(seq_dim) {}
 
-  void exchange_buffers(OwnTensor::Tensor &curr_buffer) override {
-    OwnTensor::Tensor contig_buffer = curr_buffer.contiguous();
-    int size = pg_->get_worldsize();
-    int rank = pg_->get_rank();
+//   void exchange_buffers(OwnTensor::Tensor &curr_buffer) override {
+//     OwnTensor::Tensor contig_buffer = curr_buffer.contiguous();
+//     int size = pg_->get_worldsize();
+//     int rank = pg_->get_rank();
 
-    // Ring rotation: send to (rank + 1) % size, receive from (rank - 1 + size)
-    // % size
-    int dst = (rank + 1) % size;
-    int src = (rank - 1 + size) % size;
+//     // Ring rotation: send to (rank + 1) % size, receive from (rank - 1 + size)
+//     // % size
+//     int dst = (rank + 1) % size;
+//     int src = (rank - 1 + size) % size;
 
-    // Allocate buffer for received data
-    buffer_ = OwnTensor::Tensor(contig_buffer.shape(), contig_buffer.dtype(),
-                                contig_buffer.device());
+//     // Allocate buffer for received data
+//     buffer_ = OwnTensor::Tensor(contig_buffer.shape(), contig_buffer.dtype(),
+//                                 contig_buffer.device());
 
-    work_ = pg_->sendrecv_async(contig_buffer.data(), buffer_.data(), src, dst,
-                                contig_buffer.numel(), contig_buffer.dtype(),
-                                false);
-  }
+//     work_ = pg_->sendrecv_async(contig_buffer.data(), buffer_.data(), src, dst,
+//                                 contig_buffer.numel(), contig_buffer.dtype(),
+//                                 false);
+//   }
 
-  OwnTensor::Tensor next_buffer() override {
-    if (!work_) {
-      throw std::runtime_error("No pending work in AllToAllRotater");
-    }
-    work_->wait();
-    work_.reset();
-    return buffer_;
-  }
-};
+//   OwnTensor::Tensor next_buffer() override {
+//     if (!work_) {
+//       throw std::runtime_error("No pending work in AllToAllRotater");
+//     }
+//     work_->wait();
+//     work_.reset();
+//     return buffer_;
+//   }
+// };
 
-class AllGatherRotater : public RingRotater {
-private:
-  std::shared_ptr<ProcessGroupNCCL> pg_;
-  int seq_dim_;
-  OwnTensor::Tensor aggregated_buffer_;
-  int idx_ = 0;
-  std::shared_ptr<Work> work_;
+// class AllGatherRotater : public RingRotater {
+// private:
+//   std::shared_ptr<ProcessGroupNCCL> pg_;
+//   int seq_dim_;
+//   OwnTensor::Tensor aggregated_buffer_;
+//   int idx_ = 0;
+//   std::shared_ptr<Work> work_;
 
-public:
-  AllGatherRotater(std::shared_ptr<ProcessGroupNCCL> pg, int seq_dim)
-      : pg_(pg), seq_dim_(seq_dim) {}
+// public:
+//   AllGatherRotater(std::shared_ptr<ProcessGroupNCCL> pg, int seq_dim)
+//       : pg_(pg), seq_dim_(seq_dim) {}
 
-  void exchange_buffers(OwnTensor::Tensor &curr_buffer) override {
-    idx_++;
-    if (aggregated_buffer_.numel() == 0) {
-      int size = pg_->get_worldsize();
-      OwnTensor::Shape agg_shape = curr_buffer.shape();
-      agg_shape.dims[0] *= size; // Aggregating along the first dimension
+//   void exchange_buffers(OwnTensor::Tensor &curr_buffer) override {
+//     idx_++;
+//     if (aggregated_buffer_.numel() == 0) {
+//       int size = pg_->get_worldsize();
+//       OwnTensor::Shape agg_shape = curr_buffer.shape();
+//       agg_shape.dims[0] *= size; // Aggregating along the first dimension
 
-      aggregated_buffer_ = OwnTensor::Tensor(agg_shape, curr_buffer.dtype(),
-                                             curr_buffer.device());
+//       aggregated_buffer_ = OwnTensor::Tensor(agg_shape, curr_buffer.dtype(),
+//                                              curr_buffer.device());
 
-      // All-gather shards from all ranks in the group
-      work_ = pg_->all_gather_async(
-          curr_buffer.contiguous().data(), aggregated_buffer_.data(),
-          curr_buffer.numel(), curr_buffer.dtype(), false);
-    }
-  }
+//       // All-gather shards from all ranks in the group
+//       work_ = pg_->all_gather_async(
+//           curr_buffer.contiguous().data(), aggregated_buffer_.data(),
+//           curr_buffer.numel(), curr_buffer.dtype(), false);
+//     }
+//   }
 
-  OwnTensor::Tensor next_buffer() override {
-    if (work_) {
-      work_->wait();
-      work_.reset();
-    }
+//   OwnTensor::Tensor next_buffer() override {
+//     if (work_) {
+//       work_->wait();
+//       work_.reset();
+//     }
 
-    int size = pg_->get_worldsize();
-    int rank = pg_->get_rank();
-    // Calculate the relative index for the ring shift sequence
-    int slice_idx = (rank - idx_ + size) % size;
+//     int size = pg_->get_worldsize();
+//     int rank = pg_->get_rank();
+//     // Calculate the relative index for the ring shift sequence
+//     int slice_idx = (rank - idx_ + size) % size;
 
-    int64_t chunk_size = aggregated_buffer_.shape().dims[0] / size;
-    // Slice the aggregated buffer to get the specific shard for this step
-    return aggregated_buffer_.narrow(0, slice_idx * chunk_size, chunk_size);
-  }
-};
+//     int64_t chunk_size = aggregated_buffer_.shape().dims[0] / size;
+//     // Slice the aggregated buffer to get the specific shard for this step
+//     return aggregated_buffer_.narrow(0, slice_idx * chunk_size, chunk_size);
+//   }
+// };
 
-std::unique_ptr<RingRotater>
-create_rotater(std::shared_ptr<ProcessGroupNCCL> pg, int seq_dim,
-               RotateMethod method) {
-  if (method == RotateMethod::ALL_TO_ALL) {
-    return std::make_unique<AllToAllRotater>(pg, seq_dim);
-  } else if (method == RotateMethod::ALL_GATHER) {
-    return std::make_unique<AllGatherRotater>(pg, seq_dim);
-  } else {
-    throw std::runtime_error("Unknown rotation method");
-  }
-}
+// std::unique_ptr<RingRotater>
+// create_rotater(std::shared_ptr<ProcessGroupNCCL> pg, int seq_dim,
+//                RotateMethod method) {
+//   if (method == RotateMethod::ALL_TO_ALL) {
+//     return std::make_unique<AllToAllRotater>(pg, seq_dim);
+//   } else if (method == RotateMethod::ALL_GATHER) {
+//     return std::make_unique<AllGatherRotater>(pg, seq_dim);
+//   } else {
+//     throw std::runtime_error("Unknown rotation method");
+//   }
+// }
 
 // CachingAllocator gAllocator;
 // using namespace OwnTensor;
@@ -1770,102 +1771,79 @@ bool DTensor::has_pending_collective() const { return has_pending_collective_; }
 void HeadTail::loadbalance(Tensor &tensor) {
 
   if (chunkdim < 0 || chunkdim >= (int)tensor.shape().dims.size()) {
-    throw std::runtime_error("DTensor::permute_striped: Invalid dimension");
+    throw std::runtime_error("HeadTail::loadbalance: Invalid dimension");
   }
 
-  int seq_len = tensor.shape().dims[chunkdim];
-  int d = world_size;
-  int n = seq_len / d;
+  int64_t seq_len = tensor.shape().dims[chunkdim];
 
-  if (seq_len % d != 0) {
+  if (seq_len % 2 != 0) {
     std::ostringstream oss;
-    oss << "DTensor::permute_striped: Sequence length (" << seq_len
-        << ") must be divisible by world_size (" << d << ")";
+    oss << "HeadTail::loadbalance: Sequence length (" << seq_len
+        << ") must be even";
     throw std::runtime_error(oss.str());
   }
 
-  int outer_size = 1; // Product of dims before 'dim'
-  int inner_size = 1; // Product of dims after 'dim'
-  for (int i = 0; i < chunkdim; i++)
-    outer_size *= tensor.shape().dims[i];
-  for (int i = chunkdim + 1; i < (int)tensor.shape().dims.size(); i++)
-    inner_size *= tensor.shape().dims[i];
+  // Compute outer_size = product of dims before chunkdim
+  // Compute inner_size = product of dims after chunkdim
+  auto dims = tensor.shape().dims;
+  int64_t outer_size = 1;
+  for (int i = 0; i < chunkdim; i++) outer_size *= dims[i];
+  int64_t inner_size = 1;
+  for (int i = chunkdim + 1; i < (int)dims.size(); i++) inner_size *= dims[i];
 
-  std::vector<float> host_data(tensor.numel());
-  cudaMemcpyAsync(host_data.data(), tensor.data<float>(),
-                  tensor.numel() * sizeof(float), cudaMemcpyDeviceToHost,
-                  stream_);
-  cudaStreamSynchronize(stream_);
-  std::vector<float> permuted_data(tensor.numel());
+  // Allocate temp buffer for the permuted result
+  Tensor result = Tensor::empty(tensor.shape(), tensor.opts());
 
-  for (int outer = 0; outer < outer_size; outer++) {
-    for (int seq = 0; seq < seq_len; seq++) {
+  // HeadTail permutation via CUDA kernel:
+  //   output[2k]   = input[k]          (head)
+  //   output[2k+1] = input[T-1-k]      (tail, reversed)
+  // Result: [0, T-1, 1, T-2, 2, T-3, ...]
+  launch_headtail_loadbalance(
+      tensor.data<float>(),
+      result.data<float>(),
+      outer_size, seq_len, inner_size,
+      stream_);
 
-      int source_seq = (seq % n) * d + (seq / n);
-
-      for (int inner = 0; inner < inner_size; inner++) {
-        int src_idx =
-            outer * seq_len * inner_size + source_seq * inner_size + inner;
-        int dst_idx = outer * seq_len * inner_size + seq * inner_size + inner;
-        permuted_data[dst_idx] = host_data[src_idx];
-      }
-    }
-  }
-
-  cudaMemcpyAsync(tensor.data<float>(), permuted_data.data(),
-                  tensor.numel() * sizeof(float), cudaMemcpyHostToDevice,
+  // Copy permuted data back to the original tensor's GPU buffer
+  cudaMemcpyAsync(tensor.data<float>(), result.data<float>(),
+                  tensor.numel() * sizeof(float), cudaMemcpyDeviceToDevice,
                   stream_);
   cudaStreamSynchronize(stream_);
 }
 
 void HeadTail::unloadbalance(Tensor &tensor) {
   if (chunkdim < 0 || chunkdim >= (int)tensor.shape().dims.size()) {
-    throw std::runtime_error(
-        "DTensor::unpermute_striped: Invalid chunkdimension");
+    throw std::runtime_error("HeadTail::unloadbalance: Invalid dimension");
   }
 
-  int seq_len = tensor.shape().dims[chunkdim];
-  int d = world_size;
-  int n = seq_len / d;
+  int64_t seq_len = tensor.shape().dims[chunkdim];
 
-  if (seq_len % d != 0) {
+  if (seq_len % 2 != 0) {
     std::ostringstream oss;
-    oss << "DTensor::unpermute_striped: Sequence length (" << seq_len
-        << ") must be divisible by world_size (" << d << ")";
+    oss << "HeadTail::unloadbalance: Sequence length (" << seq_len
+        << ") must be even";
     throw std::runtime_error(oss.str());
   }
 
-  int outer_size = 1;
-  int inner_size = 1;
-  for (int i = 0; i < chunkdim; i++)
-    outer_size *= tensor.shape().dims[i];
-  for (int i = chunkdim + 1; i < (int)tensor.shape().dims.size(); i++)
-    inner_size *= tensor.shape().dims[i];
+  auto dims = tensor.shape().dims;
+  int64_t outer_size = 1;
+  for (int i = 0; i < chunkdim; i++) outer_size *= dims[i];
+  int64_t inner_size = 1;
+  for (int i = chunkdim + 1; i < (int)dims.size(); i++) inner_size *= dims[i];
 
-  std::vector<float> host_data(tensor.numel());
-  cudaMemcpyAsync(host_data.data(), tensor.data<float>(),
-                  tensor.numel() * sizeof(float), cudaMemcpyDeviceToHost,
-                  stream_);
-  cudaStreamSynchronize(stream_);
-  std::vector<float> unpermuted_data(tensor.numel());
+  Tensor result = Tensor::empty(tensor.shape(), tensor.opts());
 
-  for (int outer = 0; outer < outer_size; outer++) {
-    for (int seq = 0; seq < seq_len; seq++) {
+  // Inverse HeadTail permutation via CUDA kernel:
+  //   output[k]       = input[2k]       (recover head)
+  //   output[T-1-k]   = input[2k+1]    (recover tail)
+  launch_headtail_unloadbalance(
+      tensor.data<float>(),
+      result.data<float>(),
+      outer_size, seq_len, inner_size,
+      stream_);
 
-      int source_seq = (seq % d) * n + (seq / d);
-
-      for (int inner = 0; inner < inner_size; inner++) {
-        int src_idx =
-            outer * seq_len * inner_size + source_seq * inner_size + inner;
-        int dst_idx = outer * seq_len * inner_size + seq * inner_size + inner;
-        unpermuted_data[dst_idx] = host_data[src_idx];
-      }
-    }
-  }
-
-  // Copy unpermuted data back to GPU
-  cudaMemcpyAsync(tensor.data<float>(), unpermuted_data.data(),
-                  tensor.numel() * sizeof(float), cudaMemcpyHostToDevice,
+  cudaMemcpyAsync(tensor.data<float>(), result.data<float>(),
+                  tensor.numel() * sizeof(float), cudaMemcpyDeviceToDevice,
                   stream_);
   cudaStreamSynchronize(stream_);
 }
