@@ -40,6 +40,7 @@ public:
         std::vector<bool> saved_causal_flags,    // causal flag per ring step
         std::vector<Tensor> saved_lse_per_step,  // LSE per ring step [B,H,T/n,1]
         Tensor merged_lse,                       // final merged LSE [B,H,T/n,1]
+        Tensor merged_out,                       // final merged out [B,H,T/n,D]
         // Process group and config
         std::shared_ptr<ProcessGroupNCCL> pg,
         float attn_scale,
@@ -55,6 +56,7 @@ public:
           saved_causal_flags_(saved_causal_flags),
           saved_lse_per_step_(saved_lse_per_step),
           merged_lse_(merged_lse),
+          merged_out_(merged_out),
           pg_(pg),
           attn_scale_(attn_scale),
           is_causal_(is_causal),
@@ -103,16 +105,16 @@ public:
             step_k.set_requires_grad(true);
             step_v.set_requires_grad(true);
 
-            Tensor weighted_grad = grad_local;
+            Tensor lse_diff = Tensor::zeros(merged_lse_.shape(), merged_lse_.opts());
             if (saved_lse_per_step_[i].is_valid() && merged_lse_.is_valid()) {
-                Tensor lse_diff = saved_lse_per_step_[i] - merged_lse_;
-                Tensor weight = OwnTensor::exp(lse_diff);
-                weighted_grad = grad_local * weight;
+                lse_diff = saved_lse_per_step_[i] - merged_lse_;
             }
 
-            std::vector<Tensor> step_grads = sdpa_backward_op(
+            std::vector<Tensor> step_grads = sdpa_backward_op_manual(
                 step_q, step_k, step_v,
-                weighted_grad,
+                grad_local,
+                merged_out_,
+                lse_diff,
                 use_causal,
                 attn_scale_);
 
@@ -190,6 +192,7 @@ public:
         saved_v_chunks_.clear();
         saved_lse_per_step_.clear();
         merged_lse_ = Tensor();
+        merged_out_ = Tensor();
     }
 
 private:
@@ -199,6 +202,7 @@ private:
     std::vector<bool> saved_causal_flags_;
     std::vector<Tensor> saved_lse_per_step_;
     Tensor merged_lse_;
+    Tensor merged_out_;
 
     std::shared_ptr<ProcessGroupNCCL> pg_;
     float attn_scale_;
@@ -244,12 +248,23 @@ private:
         Shape full_shape({{B, H, T_full, D}});
         Tensor full = Tensor::empty(full_shape, local.opts());
 
-        size_t chunk_bytes = static_cast<size_t>(B * H * T_local * D) * sizeof(float);
+        // Per-(b,h)-slice copy with correct strides (see ContextParallel.h)
+        size_t slice_bytes = static_cast<size_t>(T_local * D) * sizeof(float);
         for (int r = 0; r < world_size_; ++r) {
-            float* src = gathered_flat.data<float>() + r * (B * H * T_local * D);
-            float* dst = full.data<float>() + r * (B * H * T_local * D);
-            cudaMemcpyAsync(dst, src, chunk_bytes,
-                           cudaMemcpyDeviceToDevice, 0);
+            for (int64_t b = 0; b < B; ++b) {
+                for (int64_t h = 0; h < H; ++h) {
+                    float* src = gathered_flat.data<float>()
+                        + r * (B * H * T_local * D)
+                        + b * (H * T_local * D)
+                        + h * (T_local * D);
+                    float* dst = full.data<float>()
+                        + b * (H * T_full * D)
+                        + h * (T_full * D)
+                        + r * (T_local * D);
+                    cudaMemcpyAsync(dst, src, slice_bytes,
+                                   cudaMemcpyDeviceToDevice, 0);
+                }
+            }
         }
         cudaStreamSynchronize(0);
 

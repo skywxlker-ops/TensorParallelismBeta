@@ -256,12 +256,25 @@ public:
         Shape full_shape({{B, H, T_full, D}});
         Tensor full_output = Tensor::empty(full_shape, merged_out.opts());
 
-        size_t chunk_bytes = static_cast<size_t>(B * H * T_local * D) * sizeof(float);
+        // Per-(b,h)-slice copy: source layout is [world_size, B, H, T_local, D]
+        // (from all_gather), destination is [B, H, T_full, D].
+        // A flat copy would scramble batch/head dims with sequence.
+        size_t slice_bytes = static_cast<size_t>(T_local * D) * sizeof(float);
         for (int r = 0; r < world_size_; ++r) {
-            float* src = gathered_flat.data<float>() + r * (B * H * T_local * D);
-            float* dst = full_output.data<float>() + r * (B * H * T_local * D);
-            cudaMemcpyAsync(dst, src, chunk_bytes,
-                           cudaMemcpyDeviceToDevice, 0);
+            for (int64_t b = 0; b < B; ++b) {
+                for (int64_t h = 0; h < H; ++h) {
+                    float* src = gathered_flat.data<float>()
+                        + r * (B * H * T_local * D)
+                        + b * (H * T_local * D)
+                        + h * (T_local * D);
+                    float* dst = full_output.data<float>()
+                        + b * (H * T_full * D)
+                        + h * (T_full * D)
+                        + r * (T_local * D);
+                    cudaMemcpyAsync(dst, src, slice_bytes,
+                                   cudaMemcpyDeviceToDevice, 0);
+                }
+            }
         }
         cudaStreamSynchronize(0);
 
@@ -282,6 +295,7 @@ public:
                 saved_causal_flags,
                 saved_lse_per_step,
                 merged_lse,
+                merged_out,
                 pg_,
                 attn_scale_,
                 is_causal_,
