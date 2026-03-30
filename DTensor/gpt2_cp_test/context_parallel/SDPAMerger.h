@@ -69,9 +69,7 @@ public:
             return;
         }
 
-        // Online merge formula (numerically stable):
-        //   out = out - sigmoid(block_lse - lse) * (out - block_out)
-        //   lse = lse - log(sigmoid(lse - block_lse))
+;
         //
         // Using raw tensor ops (not autograd) since the merger is a numerical
         // correction that does not need to be differentiated through directly.

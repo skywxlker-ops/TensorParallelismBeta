@@ -2,11 +2,11 @@ CXX = /home/blu-bridge25/.local/bin/mpic++
 
 NVCC_LINKER = /usr/local/cuda/bin/nvcc
 NVCC = /usr/local/cuda/bin/nvcc
-NVCC_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -G -arch=sm_86 -ccbin=$(CXX)
+NVCC_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -arch=sm_86 -ccbin=$(CXX)
 
 CXXFLAGS += -fPIC -std=c++17 -O3 -g -DWITH_CUDA
 
-NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -G -arch=sm_86 -ccbin=/home/blu-bridge25/.local/bin/mpic++
+NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -arch=sm_86 -ccbin=/home/blu-bridge25/.local/bin/mpic++
 
 TARGET = main
 
@@ -106,7 +106,7 @@ clean:
 	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom benchmarks/shard_benchmarking
 	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
 	rm -f /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/gpt2_cp_test/gpt2_cp_test.o
-	
+
 .PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom gradient_sync_example shard_benchmarking
 
 # TEST_DEVICE_MESH_SRCS = \
@@ -604,6 +604,38 @@ gpt2_cp_test: $(GPT2_CP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 Context Parallel Test build complete."
 	@echo "\nRun with: mpirun -np <N> ./gpt2_cp_test_exec \n"
 
+# CP vs Standard SDPA Comparison Test (2 GPUs, MPI)
+CP_SDPA_COMPARE_SRCS = \
+    gpt2_cp_test/cp_sdpa_compare_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+CP_SDPA_COMPARE_OBJS = $(CP_SDPA_COMPARE_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
+cp_sdpa_compare_test: $(CP_SDPA_COMPARE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: cp_sdpa_compare_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o cp_sdpa_compare_test_exec $(CP_SDPA_COMPARE_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] CP SDPA Compare Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./cp_sdpa_compare_test_exec \n"
+
+# Attention Block Gradient Test (2 GPUs, MPI)
+ATTN_BLOCK_GRAD_TEST_SRCS = \
+    gpt2_cp_test/attn_block_grad_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+ATTN_BLOCK_GRAD_TEST_OBJS = $(ATTN_BLOCK_GRAD_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
+attn_block_grad_test: $(ATTN_BLOCK_GRAD_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: attn_block_grad_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o attn_block_grad_test_exec $(ATTN_BLOCK_GRAD_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Attention Block Gradient Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./attn_block_grad_test_exec \n"
+
 # SDPA Backward Comparison Test (single GPU, no MPI needed)
 SDPA_TEST_SRCS = \
     tests/test_sdpa_backward.cpp \
@@ -760,3 +792,19 @@ launcher: $(TENSOR_LIB_A)
 	@echo "---------------------------------------------------------"
 	@echo "--- Cleaning up binaries ---"
 	@rm -f worker_bin launcher_bin
+
+# Attention Discrepancy Test
+TEST_ATTN_DISCREP_SRCS = \
+    gpt2_cp_test/test_attn_discrepancy.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+TEST_ATTN_DISCREP_OBJS = $(TEST_ATTN_DISCREP_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+
+test_attn_discrepancy: $(TEST_ATTN_DISCREP_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: test_attn_discrep_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_attn_discrep_exec $(TEST_ATTN_DISCREP_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Attention Discrepancy Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./test_attn_discrep_exec \n"

@@ -538,9 +538,8 @@ int main(int argc, char **argv) {
     // Create data loaders
     std::string data_root =
     "/home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Data_Loader/Data/";
-    DataLoaderLite train_loader(B, T, 0, 1, "train", data_root, true,
-      100000000);
-      DataLoaderLite val_loader(B, T, 0, 1, "val", data_root, true, 100000000);
+        DataLoaderLite train_loader(B, T, 0, 1, "train", data_root, true, 100000000, rank);
+        DataLoaderLite val_loader(B, T, 0, 1, "val",   data_root, true, 100000000, rank);
 
       CudaTimer timer_step, timer_data, timer_fwd, timer_loss, timer_bwd,
       timer_clip, timer_optim;
@@ -897,15 +896,15 @@ int main(int argc, char **argv) {
 
         double dt = timer_step.get_elapsed_seconds();
 
-        // Compute throughput
-        int64_t tokens_processed =
-            static_cast<int64_t>(B) * T * grad_accum_steps;
-        double tokens_per_sec = static_cast<double>(tokens_processed) / dt;
-        long long total_sec = static_cast<long long>((max_steps - step) * dt);
+          // Compute throughput
+          int64_t tokens_processed =
+              static_cast<int64_t>(B) * T * grad_accum_steps;
+          double tokens_per_sec = static_cast<double>(tokens_processed) / dt;
+          long long total_sec = static_cast<long long>((max_steps - step) * dt);
 
-        int h = total_sec / 3600;
-        int m = (total_sec % 3600) / 60;
-        int s = total_sec % 60;
+          int h = total_sec / 3600;
+          int m = (total_sec % 3600) / 60;
+          int s = total_sec % 60;
 
         // Print training info
         if (rank == 0) {
@@ -976,5 +975,3 @@ int main(int argc, char **argv) {
     return 1;
   }
 }
-
-

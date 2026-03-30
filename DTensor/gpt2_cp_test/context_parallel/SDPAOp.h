@@ -82,7 +82,8 @@ inline SDPAResult sdpa_forward(
     // Step 3: Apply causal mask + softmax (autograd-tracked)
     Tensor attn_probs;
     if (is_causal) {
-        attn_probs = autograd::fused_tril_softmax(scores, 0);
+        attn_probs = autograd::fused_tril_softmax(scores, 0, -1e9);
+
     } else {
         attn_probs = autograd::softmax(scores, -1);
     }
@@ -125,7 +126,7 @@ inline std::vector<Tensor> sdpa_backward_op(
 
     Tensor attn_probs;
     if (is_causal) {
-        attn_probs = autograd::fused_tril_softmax(scores, 0);
+        attn_probs = autograd::fused_tril_softmax(scores, 0, -1e9);
     } else {
         attn_probs = autograd::softmax(scores, -1);
     }
@@ -170,44 +171,44 @@ inline std::vector<Tensor> sdpa_backward_op_manual(
     Shape scale_shape({{1}});
     TensorOptions scale_opts = TensorOptions().with_dtype(q.dtype()).with_device(q.device());
     Tensor scale_tensor = Tensor::full(scale_shape, scale_opts, scale);
-    
+
     Tensor q_scaled = autograd::mul(q_d, scale_tensor);
     Tensor scores = autograd::matmul(q_scaled, k_t);
-    
+
     Tensor P_local;
     if (is_causal) {
-        P_local = autograd::fused_tril_softmax(scores, 0);
+        P_local = autograd::fused_tril_softmax(scores, 0, -1e9);
     } else {
         P_local = autograd::softmax(scores, -1);
     }
-    
+
     // 2. Compute P_global
     Tensor weight = OwnTensor::exp(lse_diff.detach());
     Tensor P_global = autograd::mul(P_local, weight);
-    
+
     // 3. Compute dV = P_global^T @ dO
     Tensor P_global_t = autograd::transpose(P_global, -2, -1);
     Tensor dV = autograd::matmul(P_global_t, dO);
-    
+
     // 4. Compute dP_global = dO @ V^T
     Tensor v_t = autograd::transpose(v_d, -2, -1);
     Tensor dP_global = autograd::matmul(dO, v_t);
-    
+
     // 5. Compute D_global = sum(dO * O, dim=-1, keepdim=true)
     Tensor dO_mul_O = autograd::mul(dO, O);
     int64_t last_dim = dO_mul_O.ndim() - 1;
     Tensor D_global = reduce_sum(dO_mul_O, {last_dim}, true);
-    
+
     // 6. Compute dS = P_global * (dP_global - D_global)
     Tensor dP_minus_D = autograd::sub(dP_global, D_global);
     Tensor dS = autograd::mul(P_global, dP_minus_D);
-    
+
     // 7. Compute dQ and dK
     Tensor dS_scaled = autograd::mul(dS, scale_tensor);
     Tensor dQ = autograd::matmul(dS_scaled, k_d);
-    
+
     Tensor dS_scaled_t = autograd::transpose(dS_scaled, -2, -1);
     Tensor dK = autograd::matmul(dS_scaled_t, q_d);
-    
+
     return {dQ, dK, dV};
 }

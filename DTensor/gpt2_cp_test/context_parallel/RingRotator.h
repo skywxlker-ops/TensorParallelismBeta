@@ -105,9 +105,17 @@ private:
 
 
 // ---------------------------------------------------------------------------
-// AlltoAll Ring Rotator (optimized)
+// AlltoAll Ring Rotator
 //
-// Pre-allocates receive buffer. Uses sendrecv for ring shift.
+// Implements ring rotation via ncclAlltoAll using the shifted permutation
+// pattern dsts = [1, 2, ..., n-1, 0].
+//
+// Each rank builds a send buffer with world_size chunks. Only the chunk
+// destined for next_rank contains the actual KV data; all other chunks
+// are zeroed. After the collective, we extract the data from the
+// prev_rank slot of the receive buffer.
+//
+// This is deadlock-free and topology-aware (NCCL optimizes the routing).
 // ---------------------------------------------------------------------------
 class AlltoAllRingRotator : public RingRotatorBase {
 public:
@@ -116,23 +124,37 @@ public:
 
     void exchange_buffers(Tensor& curr_buffer) override {
         int next_rank = (rank_ + 1) % world_size_;
-        int prev_rank = (rank_ - 1 + world_size_) % world_size_;
 
-        size_t count = static_cast<size_t>(curr_buffer.numel());
+        size_t per_rank_count = static_cast<size_t>(curr_buffer.numel());
         Dtype dtype = curr_buffer.dtype();
+        size_t elem_size = Tensor::dtype_size(dtype);
 
-        // Pre-allocate receive buffer once
+        // Pre-allocate the scatter/gather buffers once (world_size chunks each)
         if (!buffer_allocated_) {
+            Shape agg_shape({{static_cast<int64_t>(per_rank_count * world_size_)}});
+            send_buffer_ = Tensor::zeros(agg_shape, curr_buffer.opts());
+            recv_agg_buffer_ = Tensor::zeros(agg_shape, curr_buffer.opts());
             recv_buffer_ = Tensor::empty(curr_buffer.shape(), curr_buffer.opts());
             buffer_allocated_ = true;
+            per_rank_numel_ = per_rank_count;
         }
 
-        pending_work_ = pg_->sendrecv_async(
-            curr_buffer.data<float>(),
-            recv_buffer_.data<float>(),
-            next_rank,
-            prev_rank,
-            count,
+        // Zero the send buffer, then place curr_buffer into the next_rank slot
+        // dsts = [1, 2, ..., n-1, 0]:  rank i sends its data to rank (i+1)%N
+        cudaMemsetAsync(send_buffer_.data(), 0,
+                        per_rank_count * world_size_ * elem_size, 0);
+
+        uint8_t* dst_slot = static_cast<uint8_t*>(send_buffer_.data())
+                            + next_rank * per_rank_count * elem_size;
+        cudaMemcpyAsync(dst_slot, curr_buffer.data(),
+                        per_rank_count * elem_size,
+                        cudaMemcpyDeviceToDevice, 0);
+
+        // Launch ncclAlltoAll: rank j receives the j-th chunk from every rank
+        pending_work_ = pg_->alltoall_async(
+            send_buffer_.data(),
+            recv_agg_buffer_.data(),
+            per_rank_count,
             dtype);
     }
 
@@ -145,12 +167,29 @@ public:
         if (!recv_buffer_.is_valid()) {
             throw std::runtime_error("AlltoAllRingRotator::next_buffer: no buffer available");
         }
+
+        // Extract the data from the prev_rank slot
+        // After alltoall, slot j in recv_agg_buffer_ contains data sent by rank j
+        // The rank that sent us data is prev_rank = (rank_ - 1 + N) % N
+        int prev_rank = (rank_ - 1 + world_size_) % world_size_;
+        size_t elem_size = Tensor::dtype_size(recv_buffer_.dtype());
+
+        const uint8_t* src_slot = static_cast<const uint8_t*>(recv_agg_buffer_.data())
+                                  + prev_rank * per_rank_numel_ * elem_size;
+        cudaMemcpyAsync(recv_buffer_.data(), src_slot,
+                        per_rank_numel_ * elem_size,
+                        cudaMemcpyDeviceToDevice, 0);
+        cudaStreamSynchronize(0);
+
         return recv_buffer_;
     }
 
 private:
-    Tensor recv_buffer_;
+    Tensor send_buffer_;       // world_size chunks for alltoall input
+    Tensor recv_agg_buffer_;   // world_size chunks for alltoall output
+    Tensor recv_buffer_;       // single-chunk output for the caller
     bool buffer_allocated_;
+    size_t per_rank_numel_ = 0;
     std::shared_ptr<Work> pending_work_;
 };
 

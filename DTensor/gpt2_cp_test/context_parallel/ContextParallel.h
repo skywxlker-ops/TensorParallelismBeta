@@ -107,9 +107,15 @@ public:
         // not expressible as tril. Force-disable until custom mask SDPA is added.
         bool lb_active = load_balance_ && !is_causal_;
 
-        Tensor q_work = q;
-        Tensor k_work = k;
-        Tensor v_work = v;
+        // Input Q, K, V may be non-contiguous (e.g. from autograd::transpose
+        // which swaps strides without copying data). Make contiguous BEFORE
+        // sharding so that make_shards_inplace_axis produces views with
+        // standard decreasing strides. Without this, the post-shard
+        // contiguous() call produces wrong data because it cannot handle
+        // non-standard stride ordering (stride[1] < stride[2]).
+        Tensor q_work = q.contiguous();
+        Tensor k_work = k.contiguous();
+        Tensor v_work = v.contiguous();
 
         if (lb_active) {
             load_balancer_.set_world_size(world_size_);
@@ -128,10 +134,13 @@ public:
         std::vector<Tensor> v_chunks = v_work.make_shards_inplace_axis(
             static_cast<size_t>(world_size_), 2);
 
-        // Each rank gets its local chunk
-        Tensor local_q = q_chunks[rank_];  // [B, H, T/n, D]
-        Tensor local_k = k_chunks[rank_];  // [B, H, T/n, D]
-        Tensor local_v = v_chunks[rank_];  // [B, H, T/n, D]
+        // Each rank gets its local chunk — contiguous() is still needed
+        // because make_shards_inplace_axis creates views where the outer
+        // dimension strides are larger than the sharded extent
+        // (e.g. stride[1] = T*D instead of T_local*D).
+        Tensor local_q = q_chunks[rank_].contiguous();  // [B, H, T/n, D]
+        Tensor local_k = k_chunks[rank_].contiguous();  // [B, H, T/n, D]
+        Tensor local_v = v_chunks[rank_].contiguous();  // [B, H, T/n, D]
 
         // ----- Phase 2: Ring Attention Loop -----
         // Create rotator for K,V communication
@@ -180,6 +189,9 @@ public:
                     kv_send_buf.data<float>() + k_numel,
                     curr_v.data<float>(),
                     k_bytes, cudaMemcpyDeviceToDevice, 0);
+
+                // kv_send_buf = Tensor::cat({curr_k,curr_v}, 0);
+
                 kv_rotator->exchange_buffers(kv_send_buf);
             }
 
@@ -201,8 +213,8 @@ public:
             }
 
             // Save for backward before computing
-            saved_k_chunks[i] = curr_k;
-            saved_v_chunks[i] = curr_v;
+            saved_k_chunks[i] = curr_k.clone();
+            saved_v_chunks[i] = curr_v.clone();
             saved_causal_flags[i] = use_causal;
 
             // Step 4: Compute SDPA for this (Q, K, V) pair

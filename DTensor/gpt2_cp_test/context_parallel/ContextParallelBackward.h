@@ -73,10 +73,10 @@ public:
         }
 
         // ----- Phase 0: Shard the full gradient to local chunk -----
-        Tensor grad_output_full = grads[0];
+        Tensor grad_output_full = grads[0].contiguous();
         std::vector<Tensor> grad_chunks = grad_output_full.make_shards_inplace_axis(
             static_cast<size_t>(world_size_), 2);
-        Tensor grad_local = grad_chunks[rank_];  // [B, H, T/n, D]
+        Tensor grad_local = grad_chunks[rank_].contiguous();  // [B, H, T/n, D]
 
         // ----- Phase 1: Gradient Buffer Init -----
         Tensor grad_q = Tensor::zeros(saved_q_.shape(), saved_q_.opts());
@@ -130,42 +130,98 @@ public:
         }
 
         // ----- Phase 3: Communicate dK, dV back to source ranks -----
-        Tensor local_grad_k = grad_k_accum[0];
-        Tensor local_grad_v = grad_v_accum[0];
+        // Each grad_k_accum[i] belongs to the rank whose K chunk was used at step i.
+        // That source rank is (rank_ - i + world_size_) % world_size_.
+        // We must send grad_k_accum[i] there and receive contributions destined for
+        // our own K chunk from all other ranks.
+        // Dispatch on rotator_type_ to use the same collective as the forward pass.
 
-        for (int i = 1; i < world_size_; ++i) {
-            int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
+        Tensor local_grad_k = Tensor::zeros(grad_k_accum[0].shape(), grad_k_accum[0].opts());
+        Tensor local_grad_v = Tensor::zeros(grad_v_accum[0].shape(), grad_v_accum[0].opts());
 
-            Tensor dk_flat = grad_k_accum[i].flatten();
-            Tensor dv_flat = grad_v_accum[i].flatten();
-            Tensor dkv_concat = Tensor::flatten_concat({dk_flat, dv_flat});
+        if (rotator_type_ == 1) {
+            // AlltoAll: build a send buffer [world_size * kv_count] where slot dest
+            // holds (grad_k_accum[i], grad_v_accum[i]) for dest = (rank_-i+n)%n.
+            // After alltoall, each rank's recv buffer slot j contains rank j's
+            // contribution to our K/V chunk. Sum all slots to get local_grad_k/v.
+            int64_t k_count = grad_k_accum[0].numel();
+            int64_t kv_count = k_count * 2;
+            size_t byte_count = static_cast<size_t>(k_count) * sizeof(float);
 
-            Tensor recv_buf = Tensor::empty(dkv_concat.shape(), dkv_concat.opts());
+            Shape agg_shape({{kv_count * world_size_}});
+            Tensor send_buf = Tensor::zeros(agg_shape, grad_k_accum[0].opts());
+            Tensor recv_buf = Tensor::zeros(agg_shape, grad_k_accum[0].opts());
 
-            int dest_rank = source_rank;
-            int recv_from = ((rank_ + i) % world_size_);
+            for (int i = 0; i < world_size_; ++i) {
+                int dest = ((rank_ - i) % world_size_ + world_size_) % world_size_;
+                float* dk_slot = send_buf.data<float>() + static_cast<int64_t>(dest) * kv_count;
+                float* dv_slot = dk_slot + k_count;
+                cudaMemcpyAsync(dk_slot, grad_k_accum[i].data<float>(),
+                                byte_count, cudaMemcpyDeviceToDevice, 0);
+                cudaMemcpyAsync(dv_slot, grad_v_accum[i].data<float>(),
+                                byte_count, cudaMemcpyDeviceToDevice, 0);
+            }
+            cudaStreamSynchronize(0);
 
-            size_t count = static_cast<size_t>(dkv_concat.numel());
-
-            auto work = pg_->sendrecv_async(
-                dkv_concat.data<float>(),
-                recv_buf.data<float>(),
-                dest_rank,
-                recv_from,
-                count,
-                dkv_concat.dtype());
-
+            auto work = pg_->alltoall_async(
+                send_buf.data(), recv_buf.data(),
+                static_cast<size_t>(kv_count),
+                grad_k_accum[0].dtype());
             if (work) {
                 work->wait();
             }
 
-            Tensor recv_flat = recv_buf.flatten();
-            int64_t k_numel = local_grad_k.numel();
-            Tensor recv_dk = recv_flat.narrow(0, 0, k_numel).reshape(local_grad_k.shape());
-            Tensor recv_dv = recv_flat.narrow(0, k_numel, k_numel).reshape(local_grad_v.shape());
+            // Sum all received slots — each slot r contains rank r's dK/dV
+            // contribution to our K/V chunk.
+            for (int r = 0; r < world_size_; ++r) {
+                int64_t slot_off = static_cast<int64_t>(r) * kv_count;
+                Tensor slot_dk = recv_buf.narrow(0, slot_off, k_count)
+                                         .reshape(local_grad_k.shape());
+                Tensor slot_dv = recv_buf.narrow(0, slot_off + k_count, k_count)
+                                         .reshape(local_grad_v.shape());
+                local_grad_k = local_grad_k + slot_dk;
+                local_grad_v = local_grad_v + slot_dv;
+            }
+        } else {
+            // P2P (sendrecv): send grad_k_accum[i] to source rank, receive
+            // contributions from the rank whose queries attended our K chunk.
+            local_grad_k = grad_k_accum[0];
+            local_grad_v = grad_v_accum[0];
 
-            local_grad_k = local_grad_k + recv_dk;
-            local_grad_v = local_grad_v + recv_dv;
+            for (int i = 1; i < world_size_; ++i) {
+                int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
+
+                Tensor dk_flat = grad_k_accum[i].flatten();
+                Tensor dv_flat = grad_v_accum[i].flatten();
+                Tensor dkv_concat = Tensor::flatten_concat({dk_flat, dv_flat});
+
+                Tensor recv_buf = Tensor::empty(dkv_concat.shape(), dkv_concat.opts());
+
+                int dest_rank = source_rank;
+                int recv_from = ((rank_ + i) % world_size_);
+
+                size_t count = static_cast<size_t>(dkv_concat.numel());
+
+                auto work = pg_->sendrecv_async(
+                    dkv_concat.data<float>(),
+                    recv_buf.data<float>(),
+                    dest_rank,
+                    recv_from,
+                    count,
+                    dkv_concat.dtype());
+
+                if (work) {
+                    work->wait();
+                }
+
+                Tensor recv_flat = recv_buf.flatten();
+                int64_t k_numel = local_grad_k.numel();
+                Tensor recv_dk = recv_flat.narrow(0, 0, k_numel).reshape(local_grad_k.shape());
+                Tensor recv_dv = recv_flat.narrow(0, k_numel, k_numel).reshape(local_grad_v.shape());
+
+                local_grad_k = local_grad_k + recv_dk;
+                local_grad_v = local_grad_v + recv_dv;
+            }
         }
 
         // ----- Phase 4: Unshard gradients -----
@@ -173,7 +229,8 @@ public:
         Tensor full_grad_k = all_gather_along_seq(local_grad_k);
         Tensor full_grad_v = all_gather_along_seq(local_grad_v);
 
-        if (load_balance_) {
+        bool lb_active = load_balance_ && !is_causal_;
+        if (lb_active) {
             HeadTail lb;
             lb.set_world_size(world_size_);
             lb.set_chunk_dim(2);
@@ -185,6 +242,7 @@ public:
 
         return {full_grad_q, full_grad_k, full_grad_v};
     }
+
 
     void release_saved_variables() override {
         saved_q_ = Tensor();
@@ -271,3 +329,6 @@ private:
         return full;
     }
 };
+
+
+
