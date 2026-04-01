@@ -9,6 +9,7 @@
 
 #include "gpt2_cp_test/context_parallel/RingRotator.h"
 #include "gpt2_cp_test/context_parallel/SDPAOp.h"
+#include "gpt2_cp_test/context_parallel/FusedSDPAOp.h"
 #include "gpt2_cp_test/context_parallel/SDPAMerger.h"
 
 #include <memory>
@@ -90,6 +91,8 @@ public:
         }
 
         // ----- Phase 2: Ring Loop (backward) -----
+        const int64_t T_local_bwd = saved_q_.shape().dims[2];
+
         for (int i = 0; i < world_size_; ++i) {
             if (!saved_k_chunks_[i].is_valid()) {
                 continue;
@@ -101,22 +104,22 @@ public:
             Tensor step_k = saved_k_chunks_[i].clone();
             Tensor step_v = saved_v_chunks_[i].clone();
 
-            step_q.set_requires_grad(true);
-            step_k.set_requires_grad(true);
-            step_v.set_requires_grad(true);
+            // Compute causal offsets matching the forward ring step
+            int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
+            int q_off = rank_ * static_cast<int>(T_local_bwd);
+            int k_off = source_rank * static_cast<int>(T_local_bwd);
 
-            Tensor lse_diff = Tensor::zeros(merged_lse_.shape(), merged_lse_.opts());
-            if (saved_lse_per_step_[i].is_valid() && merged_lse_.is_valid()) {
-                lse_diff = saved_lse_per_step_[i] - merged_lse_;
-            }
-
-            std::vector<Tensor> step_grads = sdpa_backward_op_manual(
+            // Fused backward: P_ij = exp(s_ij - merged_lse_i) directly
+            // (equivalent to sdpa_backward_op_manual with lse_diff = step_lse - merged_lse,
+            //  since exp(s_ij - step_lse) * exp(step_lse - merged_lse) = exp(s_ij - merged_lse))
+            std::vector<Tensor> step_grads = sdpa_fused_backward(
                 step_q, step_k, step_v,
                 grad_local,
                 merged_out_,
-                lse_diff,
+                merged_lse_,
                 use_causal,
-                attn_scale_);
+                attn_scale_,
+                q_off, k_off);
 
             if (step_grads[0].is_valid()) {
                 grad_q = grad_q + step_grads[0];

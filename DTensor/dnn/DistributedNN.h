@@ -11,7 +11,7 @@
 #include <sstream>
 #include <vector>
 
-#include "TrainingScripts/EntropyKernels.h"
+#include "dnn/EntropyKernels.h"
 #include "dnn/dist_grad_norm_kernels.h"
 #include "mlp/WeightInit.h"
 #include "ops/helpers/GradNormKernels.h"

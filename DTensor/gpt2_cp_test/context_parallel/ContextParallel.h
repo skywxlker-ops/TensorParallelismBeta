@@ -10,6 +10,7 @@
 
 #include "gpt2_cp_test/context_parallel/RingRotator.h"
 #include "gpt2_cp_test/context_parallel/SDPAOp.h"
+#include "gpt2_cp_test/context_parallel/FusedSDPAOp.h"
 #include "gpt2_cp_test/context_parallel/SDPAMerger.h"
 #include "gpt2_cp_test/context_parallel/ContextParallelBackward.h"
 
@@ -155,6 +156,9 @@ public:
         std::vector<bool> saved_causal_flags(world_size_, false);
         std::vector<Tensor> saved_lse_per_step(world_size_);
 
+        // Sequence length of each rank's local chunk (used for causal offsets)
+        int64_t T_local_fwd = local_q.shape().dims[2];
+
         // Pre-allocate KV send buffer (reused across ring steps)
         int64_t k_numel = local_k.numel();
         int64_t kv_numel = k_numel * 2;
@@ -200,9 +204,9 @@ public:
             // because HeadTail creates cross-chunk masks (even rows=zeros,
             // odd rows=ones) that cannot be expressed as tril with any offset.
             // Custom attention mask support in SDPA is needed to enable both.
+            int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
             bool use_causal = false;
             if (is_causal_) {
-                int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
                 if (source_rank == rank_) {
                     use_causal = true;
                 } else if (source_rank > rank_) {
@@ -217,9 +221,14 @@ public:
             saved_v_chunks[i] = curr_v.clone();
             saved_causal_flags[i] = use_causal;
 
-            // Step 4: Compute SDPA for this (Q, K, V) pair
-            SDPAResult result = sdpa_forward(local_q, curr_k, curr_v,
-                                              use_causal, attn_scale_);
+            // Step 4: Compute fused SDPA for this (Q, K, V) pair
+            // q_offset / k_offset give correct global positions for causal masking
+            // across ring steps where Q and K/V come from different sequence chunks.
+            int q_off = rank_ * static_cast<int>(T_local_fwd);
+            int k_off = source_rank * static_cast<int>(T_local_fwd);
+            SDPAResult result = sdpa_fused_forward(local_q, curr_k, curr_v,
+                                                    use_causal, attn_scale_,
+                                                    q_off, k_off);
 
             // Save per-step LSE for correct backward merger rescaling
             saved_lse_per_step[i] = result.lse;

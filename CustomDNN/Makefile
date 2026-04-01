@@ -68,7 +68,7 @@ DTENSOR_CU_SRCS := \
     $(DTENSOR_DIR)/process_group/fused_transpose_kernel.cu \
     $(DTENSOR_DIR)/process_group/shard_fused_transpose_kernel.cu \
     $(DTENSOR_DIR)/nn/dist_grad_norm_kernels.cu \
-    $(DTENSOR_DIR)/TrainingScripts/EntropyKernels.cu
+    $(DTENSOR_DIR)/dnn/EntropyKernels.cu
 
 # CustomDNN sources
 CUSTOM_SRCS := CustomDNN.cpp

@@ -242,7 +242,7 @@ CUDA_LDFLAGS = -L/usr/local/cuda-12.6/include
 %.o: %.cu
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
-TrainingScripts/EntropyKernels.o: TrainingScripts/EntropyKernels.cu
+dnn/EntropyKernels.o: dnn/EntropyKernels.cu
 	@echo "[COMPILE CUDA] $<"
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
@@ -513,7 +513,7 @@ GPT2_ENTROPY_PARALLEL_TEST_SRCS = \
     process_group/processGroupNccl.cpp \
     tensor/placement.cpp
 
-GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+GPT2_ENTROPY_PARALLEL_TEST_OBJS = $(GPT2_ENTROPY_PARALLEL_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 gpt2_entropy_parallel_test: $(GPT2_ENTROPY_PARALLEL_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: $@"
@@ -529,7 +529,7 @@ GPT2_TP_EMBEDDING_LOSS_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_TP_EMBEDDING_LOSS_TEST_OBJS = $(GPT2_TP_EMBEDDING_LOSS_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+GPT2_TP_EMBEDDING_LOSS_TEST_OBJS = $(GPT2_TP_EMBEDDING_LOSS_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 gpt2_tp_embedding_loss_test: $(GPT2_TP_EMBEDDING_LOSS_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: $@"
@@ -545,7 +545,7 @@ GPT2_TP_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
 
 gpt2_tp_test: $(GPT2_TP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: gpt2_tp_test_exec"
@@ -560,7 +560,7 @@ GPT2_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_TEST_OBJS = $(GPT2_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+GPT2_TEST_OBJS = $(GPT2_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
 
 gpt2_test: $(GPT2_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: gpt2_test_exec"
@@ -579,7 +579,7 @@ GPT2_TP_MLP_TEST_SRCS = \
 # GPT2_CUDA_SRCS = dnn/dist_grad_norm_kernels.cu
 # CUDA_OBJS = $(GPT2_CUDA_SRCS:.cu = .o)
 
-GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o  Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o  Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
 
 
 gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
@@ -596,7 +596,7 @@ GPT2_CP_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
 
 gpt2_cp_test: $(GPT2_CP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: gpt2_cp_test_exec"
@@ -612,7 +612,7 @@ CP_SDPA_COMPARE_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-CP_SDPA_COMPARE_OBJS = $(CP_SDPA_COMPARE_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+CP_SDPA_COMPARE_OBJS = $(CP_SDPA_COMPARE_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
 
 cp_sdpa_compare_test: $(CP_SDPA_COMPARE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: cp_sdpa_compare_test_exec"
@@ -628,7 +628,7 @@ ATTN_BLOCK_GRAD_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-ATTN_BLOCK_GRAD_TEST_OBJS = $(ATTN_BLOCK_GRAD_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+ATTN_BLOCK_GRAD_TEST_OBJS = $(ATTN_BLOCK_GRAD_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 attn_block_grad_test: $(ATTN_BLOCK_GRAD_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: attn_block_grad_test_exec"
@@ -652,6 +652,34 @@ test_sdpa_backward: $(SDPA_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] SDPA Backward Test build complete."
 	@echo "\nRun with: ./test_sdpa_backward_exec \n"
 
+# Fused SDPA Test (single GPU, no MPI needed)
+# Tests FlashAttention-style fused kernel vs unfused autograd path.
+FUSED_SDPA_KERNEL_OBJ     = gpt2_cp_test/context_parallel/FusedSDPAKernel.o
+FUSED_SDPA_BWD_KERNEL_OBJ = gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.o
+
+gpt2_cp_test/context_parallel/FusedSDPAKernel.o: gpt2_cp_test/context_parallel/FusedSDPAKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.o: gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+FUSED_SDPA_TEST_SRCS = \
+    gpt2_cp_test/test_fused_sdpa.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+FUSED_SDPA_TEST_OBJS = $(FUSED_SDPA_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
+
+test_fused_sdpa: $(FUSED_SDPA_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: test_fused_sdpa_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_fused_sdpa_exec $(FUSED_SDPA_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Fused SDPA Test build complete."
+	@echo "\nRun with: ./test_fused_sdpa_exec \n"
+
     # Example target for the failing test
 # gpt2_tp_mlp_test: gpt2_tp_test/gpt2_tp_mlp_test.o $(CUDA_OBJS) $(OBJS) $(TENSOR_LIB_A)
 # 	@echo "\n[LINKING] Creating example executable: $@"
@@ -668,7 +696,7 @@ test_sdpa_backward: $(SDPA_TEST_OBJS) $(TENSOR_LIB_A)
 #     bridge/tensor_ops_bridge.cpp \
 #     tensor/placement.cpp
 
-# GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+# GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 # gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 # 	@echo "\n[LINKING] Creating example executable: gpt2_tp_mlp_test_"
@@ -801,7 +829,7 @@ TEST_ATTN_DISCREP_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-TEST_ATTN_DISCREP_OBJS = $(TEST_ATTN_DISCREP_SRCS:.cpp=.o) $(CUDA_OBJS) TrainingScripts/EntropyKernels.o
+TEST_ATTN_DISCREP_OBJS = $(TEST_ATTN_DISCREP_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 test_attn_discrepancy: $(TEST_ATTN_DISCREP_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: test_attn_discrep_exec"

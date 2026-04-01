@@ -15,7 +15,11 @@
 #include <iostream>
 #include <iomanip>
 #include <cmath>
+#include <chrono>
 #include <vector>
+#include <string>
+#include <sstream>
+#include <cstdio>
 #include <mpi.h>
 #include <cuda_runtime.h>
 
@@ -375,6 +379,191 @@ int main(int argc, char** argv) {
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
+
+    // =========================================================================
+    // TIMING: Full CP ring-attention vs Megatron TEDotProductAttention
+    //
+    // Each rank holds T_local = T/2 tokens.  forward_cp runs the full ring
+    // attention: 2 ring steps (local SDPA + NCCL K/V rotation each) + merge.
+    // Equivalent to what Megatron's TEDotProductAttention does on 2 GPUs.
+    //
+    // Megatron reference: B=4 H=6 T_local=512 D=64, t_attn total=49.47ms
+    //   over 48 calls (16 grad_accum x 3 layers) => 1.031 ms per call.
+    // =========================================================================
+    if (rank == 0) {
+        std::cout << "\n--- TIMING: Full CP ring-attn vs Megatron TEDotProductAttn ---" << std::endl;
+    }
+
+    {
+        // Use GPT-2 medium config: B=4, H=6, T_local=512 (T_full=1024), D=64
+        const int64_t Bt = 4, Ht = 6, Tl = 512, Dt = 64;
+        const float   sc = 1.0f / std::sqrt(static_cast<float>(Dt));
+        const int     NWARM = 5, NITERS = 20;
+
+        Shape qkv_t({{Bt, Ht, Tl, Dt}});
+        TensorOptions opts_t = TensorOptions()
+            .with_dtype(Dtype::Float32)
+            .with_device(device)
+            .with_req_grad(false);
+
+        Tensor qt = Tensor::randn<float>(qkv_t, opts_t, 77, 0.3f);
+        Tensor kt = Tensor::randn<float>(qkv_t, opts_t, 78, 0.3f);
+        Tensor vt = Tensor::randn<float>(qkv_t, opts_t, 79, 0.3f);
+
+        // Warm-up
+        for (int w = 0; w < NWARM; ++w) {
+            ContextParallel cp_w(mesh, pg, sc, true, RotatorType::AlltoAll, false);
+            cp_w.forward_cp(qt, kt, vt);
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        // Timed run
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < NITERS; ++i) {
+            ContextParallel cp_i(mesh, pg, sc, true, RotatorType::AlltoAll, false);
+            cp_i.forward_cp(qt, kt, vt);
+        }
+        cudaDeviceSynchronize();
+        MPI_Barrier(MPI_COMM_WORLD);
+        auto t1 = std::chrono::high_resolution_clock::now();
+
+        const double ms_cp = std::chrono::duration<double, std::milli>(t1 - t0).count() / NITERS;
+
+        const double megatron_ms = 49.478 / (16 * 3);  // per call
+
+        if (rank == 0) {
+            std::cout << std::fixed << std::setprecision(3);
+            std::cout << "  Config                      : B=" << Bt
+                      << " H=" << Ht << " T_local=" << Tl << " D=" << Dt
+                      << " (T_full=" << Tl * world_size << ", cp=" << world_size << " GPUs)" << std::endl;
+            std::cout << "  Our CP forward_cp (FP32)    : " << ms_cp
+                      << " ms  [full ring-attn: " << world_size
+                      << "x SDPA + " << world_size << "x NCCL K/V comm + merge]" << std::endl;
+            std::cout << "  Megatron TEDotProduct (BF16): " << megatron_ms
+                      << " ms  [full ring-attn: 2x SDPA + 2x ring comm, cuDNN FA]" << std::endl;
+            std::cout << "  Megatron speedup vs ours    : "
+                      << (ms_cp / megatron_ms) << "x" << std::endl;
+            std::cout << "  (Megatron uses BF16 tensor cores + cuDNN FlashAttn; ours is FP32 from scratch)" << std::endl;
+        }
+
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+
+    // =========================================================================
+    // TIMING: Full CP forward + backward vs Megatron forward-only
+    //
+    // Megatron's t_attn timer wraps only the TEDotProductAttention forward call
+    // (lines 204-214 in megatronCP.py).  Backward is not included.
+    // So for a fair end-to-end comparison we also time our full fwd+bwd.
+    // =========================================================================
+    if (rank == 0) {
+        std::cout << "\n--- TIMING: Full CP fwd+bwd (our FP32) ---" << std::endl;
+    }
+
+    {
+        const int64_t Bt = 4, Ht = 6, Tl = 512, Dt = 64;
+        const float   sc = 1.0f / std::sqrt(static_cast<float>(Dt));
+        const int     NWARM = 3, NITERS = 20;
+
+        Shape qkv_t({{Bt, Ht, Tl, Dt}});
+        TensorOptions opts_rg = TensorOptions()
+            .with_dtype(Dtype::Float32)
+            .with_device(device)
+            .with_req_grad(true);
+        TensorOptions opts_ng = opts_rg.with_req_grad(false);
+
+        // Warm-up
+        for (int w = 0; w < NWARM; ++w) {
+            Tensor qw = Tensor::randn<float>(qkv_t, opts_rg, 90 + w, 0.3f);
+            Tensor kw = Tensor::randn<float>(qkv_t, opts_rg, 91 + w, 0.3f);
+            Tensor vw = Tensor::randn<float>(qkv_t, opts_rg, 92 + w, 0.3f);
+            ContextParallel cp_w(mesh, pg, sc, true, RotatorType::AlltoAll, false);
+            Tensor out_w = cp_w.forward_cp(qw, kw, vw);
+            Tensor ones_w = Tensor::ones(out_w.shape(), opts_ng);
+            out_w.backward(&ones_w);
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        // Timed forward-only
+        auto tf0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < NITERS; ++i) {
+            Tensor qi = Tensor::randn<float>(qkv_t, opts_ng, 200 + i, 0.3f);
+            Tensor ki = Tensor::randn<float>(qkv_t, opts_ng, 201 + i, 0.3f);
+            Tensor vi = Tensor::randn<float>(qkv_t, opts_ng, 202 + i, 0.3f);
+            ContextParallel cp_i(mesh, pg, sc, true, RotatorType::AlltoAll, false);
+            cp_i.forward_cp(qi, ki, vi);
+        }
+        cudaDeviceSynchronize();
+        MPI_Barrier(MPI_COMM_WORLD);
+        auto tf1 = std::chrono::high_resolution_clock::now();
+        const double ms_fwd_only = std::chrono::duration<double, std::milli>(tf1 - tf0).count() / NITERS;
+
+        // Timed fwd+bwd
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < NITERS; ++i) {
+            Tensor qi = Tensor::randn<float>(qkv_t, opts_rg, 100 + i, 0.3f);
+            Tensor ki = Tensor::randn<float>(qkv_t, opts_rg, 101 + i, 0.3f);
+            Tensor vi = Tensor::randn<float>(qkv_t, opts_rg, 102 + i, 0.3f);
+            ContextParallel cp_i(mesh, pg, sc, true, RotatorType::AlltoAll, false);
+            Tensor out_i = cp_i.forward_cp(qi, ki, vi);
+            Tensor ones_i = Tensor::ones(out_i.shape(), opts_ng);
+            out_i.backward(&ones_i);
+        }
+        cudaDeviceSynchronize();
+        MPI_Barrier(MPI_COMM_WORLD);
+        auto t1 = std::chrono::high_resolution_clock::now();
+
+        const double ms_fwdbwd = std::chrono::duration<double, std::milli>(t1 - t0).count() / NITERS;
+
+        // Run Megatron fwd+bwd bench on rank 0 only (torchrun spawns its own processes)
+        double meg_fwd_ms = -1.0, meg_bwd_ms = -1.0;
+        if (rank == 0) {
+            const char* bench_cmd =
+                "torchrun --nproc_per_node=2 "
+                "/home/blu-bridge25/TP/TensorParallelismBeta/Megatron-LM/megatron_attn_bench.py "
+                "2>/dev/null";
+            FILE* pipe = popen(bench_cmd, "r");
+            if (pipe) {
+                char line[128];
+                while (fgets(line, sizeof(line), pipe)) {
+                    std::string s(line);
+                    if (s.rfind("FWD_MS=", 0) == 0)
+                        meg_fwd_ms = std::stod(s.substr(7));
+                    else if (s.rfind("BWD_MS=", 0) == 0)
+                        meg_bwd_ms = std::stod(s.substr(7));
+                }
+                pclose(pipe);
+            }
+        }
+
+        if (rank == 0) {
+            std::cout << std::fixed << std::setprecision(3);
+            std::cout << "  Config                       : B=" << Bt
+                      << " H=" << Ht << " T_local=" << Tl << " D=" << Dt
+                      << " (T_full=" << Tl * world_size << ", cp=" << world_size << " GPUs)" << std::endl;
+            std::cout << std::endl;
+            std::cout << "                                  Our (FP32)     Megatron (BF16, cuDNN FA)" << std::endl;
+            std::cout << "  Forward only                :  " << std::setw(7) << ms_fwd_only
+                      << " ms      ";
+            if (meg_fwd_ms > 0) std::cout << std::setw(7) << meg_fwd_ms << " ms";
+            else                 std::cout << "  N/A";
+            std::cout << std::endl;
+            std::cout << "  Backward only               :  " << std::setw(7) << (ms_fwdbwd - ms_fwd_only)
+                      << " ms      ";
+            if (meg_bwd_ms > 0) std::cout << std::setw(7) << meg_bwd_ms << " ms";
+            else                 std::cout << "  N/A";
+            std::cout << std::endl;
+            std::cout << "  Forward + Backward          :  " << std::setw(7) << ms_fwdbwd
+                      << " ms      ";
+            if (meg_fwd_ms > 0 && meg_bwd_ms > 0)
+                std::cout << std::setw(7) << (meg_fwd_ms + meg_bwd_ms) << " ms";
+            else
+                std::cout << "  N/A";
+            std::cout << std::endl;
+        }
+
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
 
     if (rank == 0) {
         std::cout << "\n=== Test Complete ===" << std::endl;
