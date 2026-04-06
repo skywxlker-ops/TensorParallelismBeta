@@ -1,0 +1,8 @@
+{
+  "rank": 0,
+  "version": 3,
+  "shape": [256],
+  "dtype": "float32",
+  "tensor_name": "DTensorMain",
+  "timestamp": "2025-11-04T20:28:11"
+}

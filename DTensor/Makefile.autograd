@@ -1,0 +1,168 @@
+# Makefile.autograd
+# Includes variables for linking cgadimpl dependencies (Nova, MLIR, LLVM)
+
+# Paths
+LLVM_PROJECT_BUILD := /home/blu-bridge25/llvm-project/build
+NOVA_INSTALL_DIR   := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/install
+NOVA_BUILD_DIR     := /home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/Nova-Compiler/build
+
+# Autograd Include Paths
+AUTOGRAD_INCLUDES := \
+    -I$(NOVA_INSTALL_DIR)/include \
+    -I$(LLVM_PROJECT_BUILD)/include \
+    -I/home/blu-bridge25/llvm-project/llvm/include \
+    -I/home/blu-bridge25/llvm-project/mlir/include
+
+# Autograd Library Paths
+AUTOGRAD_LIB_PATHS := \
+    -L$(NOVA_INSTALL_DIR)/lib \
+    -L$(NOVA_BUILD_DIR)/lib/Runtime/Core \
+    -L$(NOVA_BUILD_DIR)/lib/Runtime/Executor \
+    -L$(LLVM_PROJECT_BUILD)/lib
+
+# -----------------------------------------------------------
+# Libraries (Order Matters: Dependent -> Dependency)
+# -----------------------------------------------------------
+
+# 1. Nova Compiler Libraries
+NOVA_LIBS := \
+   # 1. Nova Libraries (Order matters!)
+NOVA_LIBS := \
+    -lNovaPipelines \
+    -lNovaCompilerAPI \
+    -lMLIRNova \
+    -lMLIRNovaToTosaTransforms \
+    -lMLIRNovaToLinalgTransforms \
+    -lMLIRNovaToArithTransforms \
+    -lCompilerTransforms \
+    -lAffineTransforms \
+    -lNovaRuntimeCore \
+    -lNovaRuntimeExecutor
+
+# 2. MLIR Conversion/Transforms
+MLIR_TRANSFORMS_LIBS := \
+    -lMLIRReconcileUnrealizedCasts \
+    -lMLIRTosaToTensor \
+    -lMLIRTosaToLinalg \
+    -lMLIRTosaTransforms \
+    -lMLIRLinalgTransforms \
+    -lMLIRLinalgUtils \
+    -lMLIRBufferizationTransforms \
+    -lMLIRBufferizationToMemRef \
+    -lMLIRBufferizationPipelines \
+    -lMLIRArithTransforms \
+    -lMLIRArithToLLVM \
+    -lMLIRArithAttrToLLVMConversion \
+    -lMLIRMathToLLVM \
+    -lMLIRTensorTransforms \
+    -lMLIRTensorUtils \
+    -lMLIRMemRefTransforms \
+    -lMLIRMemRefUtils \
+    -lMLIRVectorTransforms \
+    -lMLIRAffineTransforms \
+    -lMLIRAffineUtils \
+    -lMLIRAffineAnalysis \
+    -lMLIRSCFTransforms \
+    -lMLIRSCFUtils \
+    -lMLIRSCFToControlFlow \
+    -lMLIRControlFlowToLLVM \
+    -lMLIRGPUTransforms \
+    -lMLIRGPUToNVVMTransforms \
+    -lMLIRMemRefToLLVM \
+    -lMLIRFuncToLLVM \
+    -lMLIRLLVMCommonConversion \
+    -lMLIRLLVMIRTransforms \
+    -lMLIRNVVMToLLVMIRTranslation \
+    -lMLIROpenMPToLLVMIRTranslation \
+    -lMLIRROCDLToLLVMIRTranslation \
+    -lMLIRSPIRVToLLVMIRTranslation \
+    -lMLIRToLLVMIRTranslationRegistration \
+    -lMLIRBuiltinToLLVMIRTranslation \
+    -lMLIRLLVMToLLVMIRTranslation
+
+# 3. MLIR Dialects
+MLIR_DIALECT_LIBS := \
+    -lMLIRLinalgDialect \
+    -lMLIRIndexDialect \
+    -lMLIRSparseTensorDialect \
+    -lMLIRBufferizationDialect \
+    -lMLIRTosaDialect \
+    -lMLIRArithDialect \
+    -lMLIRMathDialect \
+    -lMLIRMemRefDialect \
+    -lMLIRComplexDialect \
+    -lMLIRQuantDialect \
+    -lMLIRSCFDialect \
+    -lMLIRControlFlowDialect \
+    -lMLIRTensorDialect \
+    -lMLIRAffineDialect \
+    -lMLIRFuncDialect \
+    -lMLIRLLVMDialect \
+    -lMLIRUBDialect \
+    -lMLIRPDLDialect \
+    -lMLIRPDLInterpDialect \
+    -lMLIRVectorDialect \
+    -lMLIRROCDLDialect \
+    -lMLIRSPIRVDialect \
+    -lMLIRSPIRVImageInterfaces \
+    -lMLIRSPIRVUtils
+
+# 3b. MLIR Interfaces (Crucial for linking)
+MLIR_INTERFACES_LIBS := \
+    -lMLIRControlFlowInterfaces \
+    -lMLIRFunctionInterfaces \
+    -lMLIRCallInterfaces \
+    -lMLIRDataLayoutInterfaces \
+    -lMLIRViewLikeInterface \
+    -lMLIRDestinationStyleOpInterface \
+    -lMLIRVectorInterfaces \
+    -lMLIRInferIntRangeInterface \
+    -lMLIRInferIntRangeCommon \
+    -lMLIRMaskableOpInterface \
+    -lMLIRMaskingOpInterface \
+    -lMLIRIndexingMapOpInterface \
+    -lMLIRMemorySlotInterfaces \
+    -lMLIRShapedOpInterfaces \
+    -lMLIRLoopLikeInterface \
+    -lMLIRParallelCombiningOpInterface \
+    -lMLIRSubsetOpInterface \
+    -lMLIRCastInterfaces
+
+# 4. MLIR Core & Support
+MLIR_CORE_LIBS := \
+    -lMLIRDialect \
+    -lMLIRIR \
+    -lMLIRArithUtils \
+    -lMLIRDialectUtils \
+    -lMLIRQuantUtils \
+    -lMLIRArithValueBoundsOpInterfaceImpl \
+    -lMLIRTransforms \
+    -lMLIRTransformUtils \
+    -lMLIRPass \
+    -lMLIRSupport \
+    -lMLIRSideEffectInterfaces \
+    -lMLIRInferTypeOpInterface \
+    -lMLIRAnalysis \
+    -lMLIRPresburger \
+    -lMLIRValueBoundsOpInterface \
+    -lMLIRAsmParser \
+    -lMLIRParser \
+    -lMLIRBytecodeWriter \
+    -lMLIRBytecodeReader \
+    -lMLIRRewrite \
+    -lMLIRRewritePDL \
+    -lMLIRPDLToPDLInterp \
+
+# 5. LLVM Libraries
+LLVM_LIBS := \
+    -lLLVMAnalysis \
+    -lLLVMCore \
+    -lLLVMTargetParser \
+    -lLLVMSupport \
+    -lLLVMDemangle \
+    -lLLVMBinaryFormat \
+    -lLLVMBitstreamReader \
+    -lLLVMRemarks
+
+# Aggregated Variable
+AUTOGRAD_LIBS := $(NOVA_LIBS) $(MLIR_TRANSFORMS_LIBS) $(MLIR_DIALECT_LIBS) $(MLIR_INTERFACES_LIBS) $(MLIR_CORE_LIBS) $(LLVM_LIBS)
