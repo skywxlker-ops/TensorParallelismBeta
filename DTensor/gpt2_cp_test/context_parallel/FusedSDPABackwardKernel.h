@@ -24,18 +24,15 @@
 // ---------------------------------------------------------------------------
 
 void launch_flash_attn_bwd_f32(
-    const float* Q,      // [BH, T_q, D]
-    const float* K,      // [BH, T_k, D]
-    const float* V,      // [BH, T_k, D]
-    const float* O,      // [BH, T_q, D]  -- merged forward output
-    const float* dO,     // [BH, T_q, D]  -- incoming gradient
-    const float* LSE,    // [BH, T_q]     -- merged log-sum-exp (flat)
-    float*       dQ,     // [BH, T_q, D]  -- output gradient for Q
-    float*       dK,     // [BH, T_k, D]  -- output gradient for K
-    float*       dV,     // [BH, T_k, D]  -- output gradient for V
-    float*       D_buf,  // [BH, T_q]     -- scratch (caller-allocated)
-    int BH, int T_q, int T_k, int D,
-    float scale,
-    bool  is_causal,
-    int   q_offset,
-    int   k_offset);
+    const float *Q,   // [BH, T_q, D]
+    const float *K,   // [BH, T_k, D]
+    const float *V,   // [BH, T_k, D]
+    const float *O,   // [BH, T_q, D]  -- merged forward output
+    const float *dO,  // [BH, T_q, D]  -- incoming gradient
+    const float *LSE, // [BH, T_q]     -- merged log-sum-exp (flat)
+    float *dQ,        // [BH, T_q, D]  -- output gradient for Q
+    float *dK,        // [BH, T_k, D]  -- output gradient for K
+    float *dV,        // [BH, T_k, D]  -- output gradient for V
+    float *D_buf,     // [BH, T_q]     -- scratch (caller-allocated)
+    int BH, int T_q, int T_k, int D, float scale, bool is_causal, int q_offset,
+    int k_offset);

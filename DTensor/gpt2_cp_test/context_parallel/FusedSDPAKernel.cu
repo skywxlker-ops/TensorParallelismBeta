@@ -178,10 +178,10 @@ __global__ void flash_attn_fwd_kernel(
 // flash_attn_fwd_kernel_generic
 //
 // Non-templated fallback for head dims that are not 32, 64, or 128.
-// Uses fixed-max arrays (MAX_D=256) and loops to runtime D.
-// Correct for any D <= 256, no #pragma unroll.
+// Uses fixed-max arrays (MAX_D=512) and loops to runtime D.
+// Correct for any D <= 512, no #pragma unroll.
 // ---------------------------------------------------------------------------
-static constexpr int MAX_D = 256;
+static constexpr int MAX_D = 512;
 
 __global__ void flash_attn_fwd_kernel_generic(
     const float* __restrict__ Q,
@@ -283,7 +283,7 @@ __global__ void flash_attn_fwd_kernel_generic(
 // Dispatcher: selects the HEAD_DIM template specialisation and launches the
 // kernel with the correct shared-memory allocation.
 // D=32, 64, 128 use the unrolled template path.
-// All other D <= 256 use the generic runtime-loop path.
+// All other D <= 512 use the generic runtime-loop path.
 // ---------------------------------------------------------------------------
 void launch_flash_attn_fwd_f32(
     const float* Q,
@@ -297,6 +297,9 @@ void launch_flash_attn_fwd_f32(
     int   q_offset,
     int   k_offset)
 {
+    if (D > MAX_D) {
+        return;
+    }
     const dim3 grid(( T_q + BLOCK_Q - 1) / BLOCK_Q, BH);
     const dim3 block(BLOCK_Q);
     const int  smem_bytes = 2 * BLOCK_K * D * sizeof(float);
@@ -315,7 +318,11 @@ void launch_flash_attn_fwd_f32(
             Q, K, V, O, LSE, T_q, T_k, scale, is_causal, q_offset, k_offset);
         break;
     default:
-        // Generic path: any D <= 256, no unroll.
+        // Generic path: any D <= 512, no unroll.
+        // Set extended shared memory limit so kernels with D > 64 can run.
+        cudaFuncSetAttribute(flash_attn_fwd_kernel_generic,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                             smem_bytes);
         flash_attn_fwd_kernel_generic<<<grid, block, smem_bytes>>>(
             Q, K, V, O, LSE, T_q, T_k, D, scale, is_causal, q_offset, k_offset);
         break;

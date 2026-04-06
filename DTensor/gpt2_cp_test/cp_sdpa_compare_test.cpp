@@ -536,25 +536,46 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Run PyTorch fwd+bwd bench on rank 0 only
+        double pt_fwd_ms = -1.0, pt_fwdbwd = -1.0;
+        if (rank == 0) {
+            const char* pt_bench_cmd =
+                "python3 /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/pytorch_attn_bench.py 2>/dev/null";
+            FILE* pipe = popen(pt_bench_cmd, "r");
+            if (pipe) {
+                char line[128];
+                double bwd = 0.0;
+                while (fgets(line, sizeof(line), pipe)) {
+                    std::string s(line);
+                    if (s.rfind("PT_FWD_MS=", 0) == 0)
+                        pt_fwd_ms = std::stod(s.substr(10));
+                    else if (s.rfind("PT_BWD_MS=", 0) == 0)
+                        bwd = std::stod(s.substr(10));
+                }
+                pclose(pipe);
+                if (pt_fwd_ms > 0 && bwd > 0) pt_fwdbwd = pt_fwd_ms + bwd;
+            }
+        }
+
         if (rank == 0) {
             std::cout << std::fixed << std::setprecision(3);
             std::cout << "  Config                       : B=" << Bt
                       << " H=" << Ht << " T_local=" << Tl << " D=" << Dt
                       << " (T_full=" << Tl * world_size << ", cp=" << world_size << " GPUs)" << std::endl;
             std::cout << std::endl;
-            std::cout << "                                  Our (FP32)     Megatron (BF16, cuDNN FA)" << std::endl;
+            std::cout << "                                  Our C++ (TF32)  PyTorch (TF32)  Megatron (BF16, cuDNN FA)" << std::endl;
             std::cout << "  Forward only                :  " << std::setw(7) << ms_fwd_only
-                      << " ms      ";
+                      << " ms      " << std::setw(7) << pt_fwd_ms << " ms";
             if (meg_fwd_ms > 0) std::cout << std::setw(7) << meg_fwd_ms << " ms";
             else                 std::cout << "  N/A";
             std::cout << std::endl;
             std::cout << "  Backward only               :  " << std::setw(7) << (ms_fwdbwd - ms_fwd_only)
-                      << " ms      ";
+                      << " ms      " << std::setw(7) << (pt_fwdbwd - pt_fwd_ms) << " ms";
             if (meg_bwd_ms > 0) std::cout << std::setw(7) << meg_bwd_ms << " ms";
             else                 std::cout << "  N/A";
             std::cout << std::endl;
             std::cout << "  Forward + Backward          :  " << std::setw(7) << ms_fwdbwd
-                      << " ms      ";
+                      << " ms      " << std::setw(7) << pt_fwdbwd << " ms";
             if (meg_fwd_ms > 0 && meg_bwd_ms > 0)
                 std::cout << std::setw(7) << (meg_fwd_ms + meg_bwd_ms) << " ms";
             else

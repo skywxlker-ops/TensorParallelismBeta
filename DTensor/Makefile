@@ -33,7 +33,7 @@ LIB_PATHS = \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib \
     $(AUTOGRAD_LIB_PATHS)
 
-LIBS = -lmpi -lnccl -lcudart -lcublas -lcurand -lgomp -lstdc++ $(AUTOGRAD_LIBS) -lz -lpthread -ldl
+LIBS = -lmpi -lnccl -lcudart -lcublas -lcurand -lgomp -lstdc++ $(AUTOGRAD_LIBS) -lz -lpthread -ldl -lnvToolsExt
 
 LDFLAGS = -L/home/blu-bridge25/.local/lib -Xlinker -rpath -Xlinker /home/blu-bridge25/.local/lib
 
@@ -106,6 +106,10 @@ clean:
 	rm -f benchmarks/*.o benchmarks/nccl_benchmark benchmarks/matmul_benchmark benchmarks/row_parallel_breakdown benchmarks/row_parallel_breakdown_custom benchmarks/shard_benchmarking
 	rm -f tensor/dtensor_custom.o bridge/tensor_ops_bridge_custom.o
 	rm -f /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/gpt2_cp_test/gpt2_cp_test.o
+	rm -f gpt2_cp_test/context_parallel/*.o
+	rm -f gpt2_cp_test/*.o
+	rm -f dnn/*.o
+	rm -f cp_sdpa_compare_test_exec
 
 .PHONY: test_device_mesh nccl_benchmark test_matmul matmul_benchmark row_parallel_breakdown row_parallel_breakdown_custom gradient_sync_example shard_benchmarking
 
@@ -242,9 +246,29 @@ CUDA_LDFLAGS = -L/usr/local/cuda-12.6/include
 %.o: %.cu
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
+dnn/AttentionKernels.o: dnn/AttentionKernels.cu dnn/AttentionKernels.h
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
 dnn/EntropyKernels.o: dnn/EntropyKernels.cu
 	@echo "[COMPILE CUDA] $<"
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+dnn/FusedAdamWKernel.o: dnn/FusedAdamWKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+dnn/VectorizedLayerNormKernel.o: dnn/VectorizedLayerNormKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+dnn/FusedLMHeadKernel.o: dnn/FusedLMHeadKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+dnn/FusedLayerNormOp.o: dnn/FusedLayerNormOp.cpp
+	@echo "[COMPILE CXX] $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 # tensor_parallel_mlp: $(TP_MLP_OBJS) $(TENSOR_LIB_A)
 # 	@echo "\n[LINKING] Creating example executable: $@"
@@ -588,6 +612,18 @@ gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 TP MLP Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./gpt2_tp_mlp_test_exec \n"
 
+# Explicitly list the CUDA kernels for Context Parallel tests
+FUSED_SDPA_KERNEL_OBJ = gpt2_cp_test/context_parallel/FusedSDPAKernel.o
+FUSED_SDPA_BWD_KERNEL_OBJ = gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.o
+
+$(FUSED_SDPA_KERNEL_OBJ): gpt2_cp_test/context_parallel/FusedSDPAKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+$(FUSED_SDPA_BWD_KERNEL_OBJ): gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
 # GPT2 Context Parallel Test
 GPT2_CP_TEST_SRCS = \
     gpt2_cp_test/gpt2_cp_test.cpp \
@@ -596,7 +632,7 @@ GPT2_CP_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
+GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/FusedAdamWKernel.o dnn/VectorizedLayerNormKernel.o dnn/FusedLayerNormOp.o dnn/AttentionKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
 
 gpt2_cp_test: $(GPT2_CP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: gpt2_cp_test_exec"
@@ -612,7 +648,7 @@ CP_SDPA_COMPARE_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-CP_SDPA_COMPARE_OBJS = $(CP_SDPA_COMPARE_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
+CP_SDPA_COMPARE_OBJS = $(CP_SDPA_COMPARE_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/AttentionKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
 
 cp_sdpa_compare_test: $(CP_SDPA_COMPARE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: cp_sdpa_compare_test_exec"
@@ -620,7 +656,35 @@ cp_sdpa_compare_test: $(CP_SDPA_COMPARE_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] CP SDPA Compare Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./cp_sdpa_compare_test_exec \n"
 
+# CP Ring Attention Benchmark (2 GPUs, MPI) — autoresearch eval harness
+CP_RING_BENCH_SRCS = \
+    gpt2_cp_test/cp_ring_attn_bench.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+CP_RING_BENCH_OBJS = $(CP_RING_BENCH_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/AttentionKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
+
+cp_ring_attn_bench: $(CP_RING_BENCH_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: cp_ring_attn_bench_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o cp_ring_attn_bench_exec $(CP_RING_BENCH_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] CP Ring Attention Benchmark build complete."
+	@echo "\nRun with: mpirun -np 2 ./cp_ring_attn_bench_exec \n"
+
 # Attention Block Gradient Test (2 GPUs, MPI)
+ATTN_TC_TEST_OBJS = dnn/AttnTCTest.o dnn/AttentionKernels.o
+
+dnn/AttnTCTest.o: dnn/AttnTCTest.cpp dnn/AttentionKernels.h
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+attn_tc_test: $(ATTN_TC_TEST_OBJS)
+	@echo "\n[LINKING] Creating executable: attn_tc_test_exec"
+	$(NVCC) $(NVCC_FLAGS) -o attn_tc_test_exec $(ATTN_TC_TEST_OBJS) -lcudart
+	@echo "[SUCCESS] AttnTCTest build complete."
+	@echo "\nRun with: ./attn_tc_test_exec\n"
+
 ATTN_BLOCK_GRAD_TEST_SRCS = \
     gpt2_cp_test/attn_block_grad_test.cpp \
     tensor/dtensor.cpp \
@@ -679,6 +743,59 @@ test_fused_sdpa: $(FUSED_SDPA_TEST_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_fused_sdpa_exec $(FUSED_SDPA_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] Fused SDPA Test build complete."
 	@echo "\nRun with: ./test_fused_sdpa_exec \n"
+
+# Fused AdamW test (single GPU, no MPI)
+FUSED_ADAMW_TEST_SRCS = \
+    gpt2_cp_test/test_fused_adamw.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+FUSED_ADAMW_TEST_OBJS = $(FUSED_ADAMW_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) \
+    dnn/FusedAdamWKernel.o \
+    Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+
+test_fused_adamw: $(FUSED_ADAMW_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: test_fused_adamw_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_fused_adamw_exec $(FUSED_ADAMW_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Fused AdamW test build complete."
+	@echo "\nRun with: ./test_fused_adamw_exec \n"
+
+# Vectorized LayerNorm test (single GPU, no MPI)
+VECT_LN_TEST_SRCS = \
+    gpt2_cp_test/test_vectorized_layernorm.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+VECT_LN_TEST_OBJS = $(VECT_LN_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) \
+    dnn/VectorizedLayerNormKernel.o \
+    Tensor-Implementations/src/Kernels/cuda/LayerNormKernels.o
+
+test_vectorized_layernorm: $(VECT_LN_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: test_vectorized_layernorm_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_vectorized_layernorm_exec $(VECT_LN_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Vectorized LayerNorm test build complete."
+	@echo "\nRun with: ./test_vectorized_layernorm_exec \n"
+
+# Fused LM Head test (single GPU, no MPI)
+LM_HEAD_TEST_SRCS = \
+    gpt2_cp_test/test_lm_head_opt.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+LM_HEAD_TEST_OBJS = $(LM_HEAD_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) \
+    dnn/FusedLMHeadKernel.o
+
+test_lm_head_opt: $(LM_HEAD_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: test_lm_head_opt_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_lm_head_opt_exec $(LM_HEAD_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] LM Head opt test build complete."
+	@echo "\nRun with: ./test_lm_head_opt_exec \n"
 
     # Example target for the failing test
 # gpt2_tp_mlp_test: gpt2_tp_test/gpt2_tp_mlp_test.o $(CUDA_OBJS) $(OBJS) $(TENSOR_LIB_A)

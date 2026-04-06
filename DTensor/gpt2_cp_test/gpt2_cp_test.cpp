@@ -10,9 +10,18 @@
 
 #include <cuda_runtime.h>
 #include <mpi.h>
+#include <nvToolsExt.h>
 
 // Tensor library includes
 #include "TensorLib.h"
+
+// NVTX wrapper (TensorLib already includes nvToolsExt.h internally)
+class EmitNVTX {
+public:
+  EmitNVTX(const char *name) { nvtxRangePushA(name); }
+  ~EmitNVTX() { nvtxRangePop(); }
+};
+#define emit_nvtx(name) EmitNVTX nvtx_tmp_##__LINE__(name)
 #include "autograd/AutogradOps.h"
 #include "autograd/operations/EmbeddingOps.h"
 #include "autograd/operations/LossOps.h"
@@ -30,7 +39,7 @@
 // Context Parallel
 #include "gpt2_cp_test/context_parallel/ContextParallel.h"
 
-#include "autograd/GraphRecorder.h"
+#include "dnn/FusedLayerNormOp.h"
 
 using namespace OwnTensor;
 using namespace OwnTensor::dnn;
@@ -215,11 +224,13 @@ public:
   }
 
   Tensor forward(const Tensor &x) override {
+    emit_nvtx("CPAttention");
     int64_t B = x.shape().dims[0];
     int64_t T = x.shape().dims[1];
     int64_t C = x.shape().dims[2];
 
-    Tensor h = ln.forward(x);
+    Tensor h = dnn::fused_layer_norm(x, ln.weight, ln.bias,
+                                     static_cast<int>(x.shape().dims[2]), ln.eps);
 
     Tensor qkv = c_attn.forward(h);
     std::vector<Tensor> inp = qkv.make_shards_inplace_axis(3, 2);
@@ -285,7 +296,9 @@ public:
   }
 
   Tensor forward(const Tensor &x) override {
-    Tensor h = ln.forward(x);
+    emit_nvtx("MLP");
+    Tensor h = dnn::fused_layer_norm(x, ln.weight, ln.bias,
+                                     static_cast<int>(x.shape().dims.back()), ln.eps);
     h = fc_up.forward(h);
     h = autograd::gelu(h);
     h = fc_down.forward(h);
@@ -386,6 +399,7 @@ public:
   }
 
   Tensor forward(const Tensor &idx) override {
+    emit_nvtx("GPT_Forward");
     int64_t T = idx.shape().dims[1];
 
     // Token embedding
@@ -416,7 +430,7 @@ public:
 
     // Final LayerNorm
     timer_ln_f.start_timer();
-    x = ln_f.forward(x);
+    x = dnn::fused_layer_norm(x, ln_f.weight, ln_f.bias, config.n_embd, ln_f.eps);
     t_ln_f += timer_ln_f.get_elapsed_seconds();
 
     // LM Head
@@ -446,6 +460,10 @@ int main(int argc, char **argv) {
     std::cout << "=== GPT-2 Context Parallel Training Script ===" << std::endl;
   }
 
+  bool nysys_report = false;
+  //nsys profile -t cuda -o my_report ./path/to/your_executable
+  //nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report /path/to/my_report.nsys-rep
+  //nsys profile -t cuda -o my_report ./your_executable && nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report my_report.nsys-rep
   try {
     // Configuration
     GPTConfig config;
@@ -508,7 +526,11 @@ int main(int argc, char **argv) {
 
     // const int max_steps    = (static_cast<int>(num_params) / global_batch ) *
     // 5;
-    const int max_steps = 6768;
+    int max_steps = 6768;
+    if (nysys_report)
+    {
+      max_steps = 1;
+    }
     // const int max_steps    = 1;
     const int warmup_steps = max_steps / 10;
 
@@ -763,31 +785,43 @@ int main(int argc, char **argv) {
           time_data += timer_data.get_elapsed_seconds();
 
           // Record autograd graph on step 0, micro 0, rank 0
-          std::unique_ptr<autograd::GraphRecordGuard> graph_guard;
-          if (step == 0 && micro == 0 && rank == 0) {
-              graph_guard =
-              std::make_unique<autograd::GraphRecordGuard>(true);
-          }
+          // std::unique_ptr<autograd::GraphRecordGuard> graph_guard;
+          // if (step == 0 && micro == 0 && rank == 0) {
+          //     graph_guard =
+          //     std::make_unique<autograd::GraphRecordGuard>(true);
+          // }
 
           // Forward
           timer_fwd.start_timer();
-          Tensor logits = model.forward(x_in);
+          Tensor logits;
+          {
+            emit_nvtx("Model_Forward");
+            logits = model.forward(x_in);
+          }
           time_forward += timer_fwd.get_elapsed_seconds();
 
           // Loss
           timer_loss.start_timer();
-          Tensor loss = autograd::sparse_cross_entropy_loss(logits, y_in);
-          loss_accum_gpu = loss_accum_gpu + loss.detach();
+          Tensor loss;
+          {
+            emit_nvtx("Loss_Computation");
+            loss = autograd::sparse_cross_entropy_loss(logits, y_in);
+            loss_accum_gpu = loss_accum_gpu + loss.detach();
+          }
           time_loss += timer_loss.get_elapsed_seconds();
 
           // Backward
           timer_bwd.start_timer();
-          loss.backward(&grad_scale);
+          {
+            emit_nvtx("Backward_Pass");
+            loss.backward(&grad_scale);
+          }
           time_backward += timer_bwd.get_elapsed_seconds();
 
           // Guard destructor auto-prints forward + backward sequences
           // graph_guard.reset();
         }
+
 
         // Weight tying: accumulate lm_head grad into wte
         if (model.config.weight_tying && model.lm_head->weight.has_grad()) {
