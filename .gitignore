@@ -1,0 +1,101 @@
+# Compiled Object files
+*.o
+*.obj
+.claude/
+
+# Static Libraries
+*.a
+*.lib
+
+# Shared Libraries
+*.so
+*.dylib
+*.dll
+
+# Executables
+*.exe
+*.out
+*.app
+
+
+# Build directories
+build/
+
+# VSCode
+.vscode/
+
+
+
+*.o
+*.log
+*.csv
+DTensor/examples/gpt2_tensor_parallel_test
+DTensor/examples/gpt2_mlp_parallel_test
+DTensor/examples/gpt2_entropy_parallel_test
+DTensor/gpt2_tp_mlp_test_exec
+DTensor/tests/summa
+*.nvcudmp
+*.nsys-rep
+*.md
+*.bin
+*.npy
+*.nsys-rep
+*.sqlite
+*.pt
+*_exec
+**/log_tp/
+
+
+# Ignore the specific test executable
+DTensor/gpt2_tp_mlp_test_exec
+
+# Ignore all training logs
+DTensor/TP_MLP_Training_logs/*
+DTensor/TP_Training_logs/*
+Megatron-LM/Megatron_TP_Training_logs/*
+DTensor/CP_Training_logs/*
+DTensor/gpt2_tp_test/TP_MLP_Torch_LogsDTensor/tests/dtensor_leak_tests/dtensor_leak_tests
+*.bin
+*.npy
+*.txt
+*_exec
+DTensor/Data_Loader/
+DTensor/TP_MLP_Training_logs/
+DTensor/examples/gpt2_tp_embedding_loss_test
+
+# --- NEW ADDITIONS FOR CLEAN REPO SYNC ---
+# Editor and tool config files
+.cursorrules
+.mcp.json
+.opencode.json
+.windsurfrules
+.gitmodules
+
+# Random scripts and temporary files
+comp_ce.py
+join_timings.py
+merge_timings.py
+mlp_test.py
+push_changes.sh
+update_github.sh
+show_dir.sh
+launcher.cpp
+paste.cpp
+rendezvous.hpp
+
+# Images and markdown artifacts
+*.png
+walkthrough.md*
+
+# Unclean or temporary directories
+CustomDNN/
+Megatron-LM/
+ProjectBetaDocumentation/
+gpt/
+gpt2/
+misc/
+zfjlsjdaf/
+
+# Depending on your repo restructuring, you could also ignore DTensor/ if its contents were lifted to root.
+# However, leaving it un-ignored is safer so you can git rm properly if it's currently tracked.
+# DTensor/
