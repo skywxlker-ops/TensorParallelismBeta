@@ -82,6 +82,10 @@ struct GPTConfig {
   int64_t n_heads = 1;
   bool weight_tying = true;
   bool load_balancing = false;
+  // When false: CP layers keep output local [B,T/n,C]; loss requires allreduce.
+  // When true:  CP layers allgather output to full [B,T,C]; loss is scalar-identical
+  //             across ranks, no allreduce needed.
+  bool cp_unshard = false;
 };
 
 // =============================================================================
@@ -192,13 +196,17 @@ public:
   CudaTimer timer_attn;
   double t_attn = 0.0;
 
+  // unshard: when false, CP output stays [B,H,T/n,D]; downstream layers get
+  //          [B,T/n,C]. No AllGather is issued.
+  // x is always pre-sharded [B,T/n,C] by GPT::forward before entering any layer.
   CPAttention(int64_t n_embd, int64_t n_heads, int64_t n_layers,
               DeviceIndex device, std::shared_ptr<ProcessGroupNCCL> pg,
               const DeviceMesh &mesh, uint64_t seed = 1234,
-              bool load_balancing = false)
+              bool load_balancing = false, bool unshard = true)
       : ln(n_embd), c_attn(n_embd, 3 * n_embd, true),
         c_proj(n_embd, n_embd, true), n_embd_(n_embd), n_heads_(n_heads),
-        head_dim_(n_embd / n_heads) {
+        head_dim_(n_embd / n_heads), unshard_(unshard),
+        rank_(pg->get_rank()), world_size_(pg->get_worldsize()) {
     init_linear_gpt2(c_attn, 0.02f, seed);
     float proj_std = 0.02f / std::sqrt(2.0f * static_cast<float>(n_layers));
     init_linear_gpt2(c_proj, proj_std, seed + 1);
@@ -211,7 +219,7 @@ public:
     //   past chunks (source_rank < rank_): full attention
     //   future chunks (source_rank > rank_): skipped
     cp_ = std::make_shared<ContextParallel>(
-        mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::AlltoAll,
+        mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::P2P,
         /*load_balance=*/load_balancing);
 
     ln.to(device);
@@ -229,6 +237,19 @@ public:
     int64_t T = x.shape().dims[1];
     int64_t C = x.shape().dims[2];
 
+    // Training: x is pre-sharded [B,T/n,C]. pre_sharded=true.
+    //   T_out = T (T/n) when unshard_=false.
+    //   T_out = T*world_size_ (full T) when unshard_=true.
+    // Generation: x is full [B,T,C]. pre_sharded=false — CP shards q/k/v
+    //   internally and unshards to full T. T_out = T (same as input).
+    bool pre_sharded = !generation_mode_;
+    int64_t T_out;
+    if (generation_mode_) {
+      T_out = T; // CP shards internally; output = same T as input
+    } else {
+      T_out = unshard_ ? T * world_size_ : T;
+    }
+
     Tensor h = dnn::fused_layer_norm(x, ln.weight, ln.bias,
                                      static_cast<int>(x.shape().dims[2]), ln.eps);
 
@@ -238,7 +259,7 @@ public:
     Tensor k = inp[1];
     Tensor v = inp[2];
 
-    // Reshape to [B, H, T, D]
+    // Reshape to [B, H, T, D] (T is local T/n in training, full T in generation)
     q = autograd::transpose(
         autograd::reshape(q, Shape({{B, T, n_heads_, head_dim_}})), 1, 2);
     k = autograd::transpose(
@@ -246,14 +267,15 @@ public:
     v = autograd::transpose(
         autograd::reshape(v, Shape({{B, T, n_heads_, head_dim_}})), 1, 2);
 
-    // Context Parallel SDPA
     timer_attn.start_timer();
-    Tensor attn_out = cp_->forward_cp(q, k, v);
+    // Generation: unshard=true always (need full output), pre_sharded=false.
+    // Training: unshard=unshard_, pre_sharded=true.
+    bool cp_unshard = generation_mode_ ? true : unshard_;
+    Tensor attn_out = cp_->forward_cp(q, k, v, cp_unshard, pre_sharded);
     t_attn += timer_attn.get_elapsed_seconds();
 
-    // Reshape back [B, T, C]
     Tensor merged = autograd::reshape(autograd::transpose(attn_out, 1, 2),
-                                      Shape({{B, T, C}}));
+                                      Shape({{B, T_out, C}}));
 
     Tensor proj = c_proj.forward(merged);
     return autograd::add(x, proj);
@@ -261,10 +283,17 @@ public:
 
   void reset_t_attn() { t_attn = 0.0; }
 
+  void set_unshard(bool unshard) { unshard_ = unshard; }
+  void set_generation_mode(bool gen) { generation_mode_ = gen; }
+
 private:
   int64_t n_embd_;
   int64_t n_heads_;
   int64_t head_dim_;
+  bool unshard_;
+  bool generation_mode_ = false;
+  int rank_;
+  int world_size_;
   std::shared_ptr<ContextParallel> cp_;
 };
 
@@ -330,15 +359,15 @@ public:
       const DeviceMesh &mesh, uint64_t seed = 1234)
       : config(cfg), wte(cfg.vocab_size, cfg.n_embd, device, seed),
         wpe(cfg.context_length, cfg.n_embd, device, seed + 100),
-        ln_f(cfg.n_embd) {
+        ln_f(cfg.n_embd),
+        rank_(pg->get_rank()), world_size_(pg->get_worldsize()) {
     ln_f.to(device);
 
     for (int i = 0; i < cfg.n_layers; ++i) {
       auto a = std::make_shared<CPAttention>(
           cfg.n_embd, cfg.n_heads, cfg.n_layers, device, pg, mesh,
           seed + 200 + i * 10,
-          // seed + 200 + static_cast<uint64_t>(i) * 10,
-          cfg.load_balancing);
+          cfg.load_balancing, cfg.cp_unshard);
       auto m = std::make_shared<MLP>(cfg.n_embd, cfg.n_layers, device,
                                      seed + 200 + i * 10);
       // seed + 300 + static_cast<uint64_t>(i) * 10);
@@ -372,6 +401,16 @@ public:
     register_module(wte);
     register_module(wpe);
     register_module(ln_f);
+  }
+
+  // Switch all CP attention layers to unshard=true (for generation) or restore
+  // training mode (unshard=false, seq_is_local per original construction).
+  void set_generation_mode(bool gen) {
+    for (auto &a : attn_blocks) {
+      a->set_unshard(gen ? true : config.cp_unshard);
+      a->set_generation_mode(gen);
+    }
+    is_in_generation_mode_ = gen;
   }
 
   void reset_timing() {
@@ -416,7 +455,15 @@ public:
     Tensor pos_emb = wpe.forward(pos_idx);
     t_pos_emb += timer_pos_emb.get_elapsed_seconds();
 
-    Tensor x = autograd::add(tok_emb, pos_emb);
+    Tensor x = autograd::add(tok_emb, pos_emb); // [B, T, C]
+
+    // Shard sequence to local chunk once — all layers operate on [B, T/n, C].
+    // Skipped during generation (is_in_generation_mode_=true) so full T is kept.
+    if (!config.cp_unshard && !is_in_generation_mode_) {
+      std::vector<Tensor> x_chunks =
+          x.make_shards_inplace_axis(static_cast<size_t>(world_size_), 1);
+      x = autograd::contiguous(x_chunks[rank_]); // [B, T/n, C] — autograd-aware
+    }
 
     // Attention + MLP blocks
     for (int i = 0; i < config.n_layers; ++i) {
@@ -443,6 +490,9 @@ public:
 
 private:
   Tensor cached_pos_;
+  int rank_;
+  int world_size_;
+  bool is_in_generation_mode_ = false;
 };
 
 // =============================================================================
@@ -639,11 +689,24 @@ int main(int argc, char **argv) {
             Batch vbatch = val_loader.next_batch();
             Tensor vx = vbatch.input.to(device).as_type(Dtype::Int64);
             Tensor vy = vbatch.target.to(device).as_type(Dtype::Int64);
+            autograd::NoGradGuard no_grad;
             Tensor vlogits = model.forward(vx);
-            Tensor vloss = autograd::sparse_cross_entropy_loss(vlogits, vy);
-            Tensor vloss_cpu = vloss.to_cpu();
-            val_loss_accum +=
-                vloss_cpu.data<float>()[0] / static_cast<float>(val_steps);
+            Tensor vloss;
+            if (!config.cp_unshard) {
+              // Sharded: vlogits is [B, T/n, vocab]; slice vy to local chunk.
+              std::vector<Tensor> vy_chunks =
+                  vy.make_shards_inplace_axis(static_cast<size_t>(world_size), 1);
+              Tensor vy_local = vy_chunks[rank].contiguous();
+              vloss = autograd::sparse_cross_entropy_loss(vlogits, vy_local);
+              pg->all_reduce(vloss.data<float>(), vloss.data<float>(), 1,
+                             Dtype::Float32, op_t::sum, true);
+              float vloss_val = vloss.to_cpu().data<float>()[0] / static_cast<float>(world_size);
+              val_loss_accum += vloss_val / static_cast<float>(val_steps);
+            } else {
+              // Unsharded: vlogits is [B, T, vocab]; all ranks identical.
+              vloss = autograd::sparse_cross_entropy_loss(vlogits, vy);
+              val_loss_accum += vloss.to_cpu().data<float>()[0] / static_cast<float>(val_steps);
+            }
           }
 
           if (rank == 0) {
@@ -658,6 +721,9 @@ int main(int argc, char **argv) {
           if (rank == 0) {
             std::cout << "--- Generating tokens at step " << step << " ---\n";
           }
+          // Switch to unshard=true so generation gets full [B,T,C] logits.
+          model.set_generation_mode(true);
+          autograd::NoGradGuard no_grad_gen;
 
           const int num_return_seq = 2;
           const int max_length = 32;
@@ -757,6 +823,8 @@ int main(int argc, char **argv) {
             }
             cfg_app.close();
           }
+          // Restore training mode (unshard=false, sharded sequence).
+          model.set_generation_mode(false);
         }
 
         // ---- Training step ----
@@ -785,11 +853,11 @@ int main(int argc, char **argv) {
           time_data += timer_data.get_elapsed_seconds();
 
           // Record autograd graph on step 0, micro 0, rank 0
-          // std::unique_ptr<autograd::GraphRecordGuard> graph_guard;
-          // if (step == 0 && micro == 0 && rank == 0) {
-          //     graph_guard =
-          //     std::make_unique<autograd::GraphRecordGuard>(true);
-          // }
+          std::unique_ptr<autograd::GraphRecordGuard> graph_guard;
+          if (step == 0 && micro == 0 && rank == 0) {
+              graph_guard =
+              std::make_unique<autograd::GraphRecordGuard>(true);
+          }
 
           // Forward
           timer_fwd.start_timer();
@@ -801,11 +869,31 @@ int main(int argc, char **argv) {
           time_forward += timer_fwd.get_elapsed_seconds();
 
           // Loss
+          // When unshard=false, logits is [B, T/n, vocab] (local chunk only).
+          // Slice y_in to the matching local token range [rank*T/n, (rank+1)*T/n).
           timer_loss.start_timer();
           Tensor loss;
           {
             emit_nvtx("Loss_Computation");
-            loss = autograd::sparse_cross_entropy_loss(logits, y_in);
+            if (!config.cp_unshard) {
+              // Sharded mode: logits is [B, T/n, vocab]; slice y to local chunk.
+              std::vector<Tensor> y_chunks =
+                  y_in.make_shards_inplace_axis(static_cast<size_t>(world_size), 1);
+              Tensor y_local = y_chunks[rank].contiguous();
+              loss = autograd::sparse_cross_entropy_loss(logits, y_local);
+              // Scale loss by 1/world_size via autograd to keep backward graph intact.
+              // Raw * operator drops grad_fn; autograd::mul preserves it.
+              static Tensor rank_scale =
+                  Tensor::full(Shape{{1}}, TensorOptions().with_device(device),
+                               1.0f / static_cast<float>(world_size));
+              loss = autograd::mul(loss, rank_scale);
+              // All-reduce the scalar loss value across ranks for logging.
+              pg->all_reduce(loss.data<float>(), loss.data<float>(), 1,
+                             Dtype::Float32, op_t::sum, true);
+            } else {
+              // Unsharded mode: logits is [B, T, vocab]; all ranks identical.
+              loss = autograd::sparse_cross_entropy_loss(logits, y_in);
+            }
             loss_accum_gpu = loss_accum_gpu + loss.detach();
           }
           time_loss += timer_loss.get_elapsed_seconds();

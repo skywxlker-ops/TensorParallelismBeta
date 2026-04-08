@@ -45,7 +45,8 @@ public:
       // Process group and config
       std::shared_ptr<ProcessGroupNCCL> pg, float attn_scale, bool is_causal,
       int rotator_type, bool load_balance, int world_size,
-      int rank)
+      int rank,
+      bool unshard = true) // when false: grad stays [B,H,T/n,D], no allgather
       : Node(3), // 3 outputs: grad for q, k, v
         saved_q_(saved_q), saved_k_chunks_(saved_k_chunks),
         saved_v_chunks_(saved_v_chunks),
@@ -53,7 +54,8 @@ public:
         saved_lse_per_step_(saved_lse_per_step), merged_lse_(merged_lse),
         merged_out_(merged_out), pg_(pg), attn_scale_(attn_scale),
         is_causal_(is_causal), rotator_type_(rotator_type),
-        load_balance_(load_balance), world_size_(world_size), rank_(rank) {}
+        load_balance_(load_balance), world_size_(world_size), rank_(rank),
+        unshard_(unshard) {}
 
   const char *name() const override { return "ContextParallelBackward"; }
 
@@ -64,10 +66,18 @@ public:
     }
 
     // ----- Phase 0: Shard the full gradient to local chunk -----
-    Tensor grad_output_full = grads[0].contiguous();
-    std::vector<Tensor> grad_chunks = grad_output_full.make_shards_inplace_axis(
-        static_cast<size_t>(world_size_), 2);
-    Tensor grad_local = grad_chunks[rank_].contiguous(); // [B, H, T/n, D]
+    // When unshard_=false: forward returned [B,H,T/n,D] so grad is already
+    // [B,H,T/n,D]; no sharding needed.
+    Tensor grad_local;
+    if (unshard_) {
+      Tensor grad_output_full = grads[0].contiguous();
+      std::vector<Tensor> grad_chunks =
+          grad_output_full.make_shards_inplace_axis(
+              static_cast<size_t>(world_size_), 2);
+      grad_local = grad_chunks[rank_].contiguous(); // [B, H, T/n, D]
+    } else {
+      grad_local = grads[0].contiguous(); // already [B, H, T/n, D]
+    }
 
     // ----- Phase 1: Gradient Buffer Init -----
     Tensor grad_q = Tensor::zeros(saved_q_.shape(), saved_q_.opts());
@@ -216,6 +226,13 @@ public:
     }
 
     // ----- Phase 4: Unshard gradients -----
+    // When unshard_=false: skip allgather; grads stay [B,H,T/n,D] to match
+    // the sharded forward output. Load balancing is skipped in this mode
+    // (lb is force-disabled for causal, and non-causal+sharded is not used).
+    if (!unshard_) {
+      return {grad_q, local_grad_k, local_grad_v};
+    }
+
     Tensor full_grad_q = all_gather_along_seq(grad_q);
     Tensor full_grad_k = all_gather_along_seq(local_grad_k);
     Tensor full_grad_v = all_gather_along_seq(local_grad_v);
@@ -259,6 +276,7 @@ private:
   bool load_balance_;
   int world_size_;
   int rank_;
+  bool unshard_;
 
   std::unique_ptr<RingRotatorBase> create_rotator() const {
     switch (rotator_type_) {

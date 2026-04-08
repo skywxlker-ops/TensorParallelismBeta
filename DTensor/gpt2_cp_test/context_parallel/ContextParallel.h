@@ -81,9 +81,17 @@ public:
   //
   // This overload takes raw Tensors and returns the merged attention output.
   // -----------------------------------------------------------------------
+  // unshard: when true (default), all-gather output to full [B,H,T,D].
+  //          when false, output stays [B,H,T/n,D]; downstream layers work on
+  //          the local sequence chunk with no inter-rank communication.
+  // pre_sharded: when true, q/k/v are already [B,H,T/n,D] (e.g. from a
+  //              previous layer that returned unshard=false). Phase 1 sharding
+  //              is skipped. Must be paired with unshard=false.
   Tensor forward_cp(Tensor &q, // [B, H, T, D] -- full sequence query
                     Tensor &k, // [B, H, T, D] -- full sequence key
-                    Tensor &v) // [B, H, T, D] -- full sequence value
+                    Tensor &v, // [B, H, T, D] -- full sequence value
+                    bool unshard = true,
+                    bool pre_sharded = false)
   {
     // ----- Phase 1: Context Parallel Shard -----
     // Shard Q along dim=2 (sequence dim in 4D [B, H, T, D])
@@ -100,9 +108,9 @@ public:
     // standard decreasing strides. Without this, the post-shard
     // contiguous() call produces wrong data because it cannot handle
     // non-standard stride ordering (stride[1] < stride[2]).
-    Tensor q_work = q.contiguous();
-    Tensor k_work = k.contiguous();
-    Tensor v_work = v.contiguous();
+    Tensor q_work = autograd::contiguous(q);
+    Tensor k_work = autograd::contiguous(k);
+    Tensor v_work = autograd::contiguous(v);
 
     if (lb_active) {
       load_balancer_.set_world_size(world_size_);
@@ -113,21 +121,26 @@ public:
       load_balancer_.loadbalance(v_work);
     }
 
-    // Shard into chunks along sequence dimension
-    std::vector<Tensor> q_chunks =
-        q_work.make_shards_inplace_axis(static_cast<size_t>(world_size_), 2);
-    std::vector<Tensor> k_chunks =
-        k_work.make_shards_inplace_axis(static_cast<size_t>(world_size_), 2);
-    std::vector<Tensor> v_chunks =
-        v_work.make_shards_inplace_axis(static_cast<size_t>(world_size_), 2);
+    // ----- Phase 1: Shard (skipped when pre_sharded=true) -----
+    // When pre_sharded=true, q/k/v are already [B,H,T/n,D] local chunks.
+    Tensor local_q, local_k, local_v;
+    if (pre_sharded) {
+      // q_work is already autograd::contiguous(q) — local_q IS q_work
+      local_q = q_work;
+      local_k = k_work;
+      local_v = v_work;
+    } else {
+      std::vector<Tensor> q_chunks =
+          q_work.make_shards_inplace_axis(static_cast<size_t>(world_size_), 2);
+      std::vector<Tensor> k_chunks =
+          k_work.make_shards_inplace_axis(static_cast<size_t>(world_size_), 2);
+      std::vector<Tensor> v_chunks =
+          v_work.make_shards_inplace_axis(static_cast<size_t>(world_size_), 2);
 
-    // Each rank gets its local chunk — contiguous() is still needed
-    // because make_shards_inplace_axis creates views where the outer
-    // dimension strides are larger than the sharded extent
-    // (e.g. stride[1] = T*D instead of T_local*D).
-    Tensor local_q = q_chunks[rank_].contiguous(); // [B, H, T/n, D]
-    Tensor local_k = k_chunks[rank_].contiguous(); // [B, H, T/n, D]
-    Tensor local_v = v_chunks[rank_].contiguous(); // [B, H, T/n, D]
+      local_q = autograd::contiguous(q_chunks[rank_]); // [B, H, T/n, D]
+      local_k = autograd::contiguous(k_chunks[rank_]); // [B, H, T/n, D]
+      local_v = autograd::contiguous(v_chunks[rank_]); // [B, H, T/n, D]
+    }
 
     // ----- Phase 2: Ring Attention Loop -----
     // Create rotator for K,V communication
@@ -222,74 +235,65 @@ public:
     auto [merged_out, merged_lse] = merger.results();
 
     // ----- Phase 4: Context Parallel Unshard -----
-    // Gather the output chunks back to full sequence
-    // Each rank has [B, H, T/n, D], need to all_gather along dim=2
-
-    // Flatten for all_gather
-    size_t local_count = static_cast<size_t>(merged_out.numel());
-    size_t total_count = local_count * static_cast<size_t>(world_size_);
-
-    Shape gathered_shape({{static_cast<int64_t>(total_count)}});
-    Tensor gathered_flat = Tensor::empty(gathered_shape, merged_out.opts());
-
-    pg_->all_gather(merged_out.data<float>(), gathered_flat.data<float>(),
-                    local_count, merged_out.dtype(),
-                    true); // sync
-
-    // Reshape gathered output to [B, H, T, D]
-    // The all_gather concatenates rank-0 chunk, rank-1 chunk, ... along flat
-    // dim We need to reconstruct the full tensor
+    // When unshard=false: skip allgather; return merged_out [B,H,T/n,D].
+    // Downstream layers (MLP, LayerNorm, loss) work on the local T/n chunk.
     int64_t B = local_q.shape().dims[0];
     int64_t H = local_q.shape().dims[1];
     int64_t T_local = local_q.shape().dims[2];
     int64_t D = local_q.shape().dims[3];
-    int64_t T_full = T_local * world_size_;
 
-    // Reshape: [world_size * B * H * T_local * D] -> [world_size, B, H,
-    // T_local, D] Then transpose and merge to get [B, H, T_full, D] For
-    // simplicity, reshape to [world_size, B*H*T_local*D] then rearrange to [B,
-    // H, T_full, D]
-    Shape per_rank_shape({{B, H, T_local, D}});
+    Tensor output_tensor;
+    if (!unshard) {
+      // No allgather: output stays [B, H, T/n, D]
+      output_tensor = merged_out;
+    } else {
+      // Gather the output chunks back to full [B, H, T, D]
+      size_t local_count = static_cast<size_t>(merged_out.numel());
+      size_t total_count = local_count * static_cast<size_t>(world_size_);
 
-    // Build output by copying each rank's contribution into the right position
-    Shape full_shape({{B, H, T_full, D}});
-    Tensor full_output = Tensor::empty(full_shape, merged_out.opts());
+      Shape gathered_shape({{static_cast<int64_t>(total_count)}});
+      Tensor gathered_flat = Tensor::empty(gathered_shape, merged_out.opts());
 
-    // Per-(b,h)-slice copy: source layout is [world_size, B, H, T_local, D]
-    // (from all_gather), destination is [B, H, T_full, D].
-    // A flat copy would scramble batch/head dims with sequence.
-    size_t slice_bytes = static_cast<size_t>(T_local * D) * sizeof(float);
-    for (int r = 0; r < world_size_; ++r) {
-      for (int64_t b = 0; b < B; ++b) {
-        for (int64_t h = 0; h < H; ++h) {
-          float *src = gathered_flat.data<float>() + r * (B * H * T_local * D) +
-                       b * (H * T_local * D) + h * (T_local * D);
-          float *dst = full_output.data<float>() + b * (H * T_full * D) +
-                       h * (T_full * D) + r * (T_local * D);
-          cudaMemcpyAsync(dst, src, slice_bytes, cudaMemcpyDeviceToDevice, 0);
+      pg_->all_gather(merged_out.data<float>(), gathered_flat.data<float>(),
+                      local_count, merged_out.dtype(),
+                      true); // sync
+
+      int64_t T_full = T_local * world_size_;
+      Shape full_shape({{B, H, T_full, D}});
+      Tensor full_output = Tensor::empty(full_shape, merged_out.opts());
+
+      size_t slice_bytes = static_cast<size_t>(T_local * D) * sizeof(float);
+      for (int r = 0; r < world_size_; ++r) {
+        for (int64_t b = 0; b < B; ++b) {
+          for (int64_t h = 0; h < H; ++h) {
+            float *src =
+                gathered_flat.data<float>() + r * (B * H * T_local * D) +
+                b * (H * T_local * D) + h * (T_local * D);
+            float *dst = full_output.data<float>() + b * (H * T_full * D) +
+                         h * (T_full * D) + r * (T_local * D);
+            cudaMemcpyAsync(dst, src, slice_bytes, cudaMemcpyDeviceToDevice, 0);
+          }
         }
       }
-    }
-    cudaStreamSynchronize(0);
+      cudaStreamSynchronize(0);
 
-    // Undo load balance if it was applied
-    if (lb_active) {
-      load_balancer_.unloadbalance(full_output);
+      if (lb_active) {
+        load_balancer_.unloadbalance(full_output);
+      }
+      output_tensor = full_output;
     }
 
     // ----- Register backward node -----
-    // If any input requires grad, register the backward node so that
-    // loss.backward() will propagate through context parallel.
     if (q.requires_grad() || k.requires_grad() || v.requires_grad()) {
       int rot_type = static_cast<int>(rotator_type_);
+      // Pass merged_out.detach() to break the cycle:
+      // output_tensor -> grad_fn -> merged_out -> output_tensor (when unshard=false
+      // output_tensor IS merged_out). Detach severs the grad_fn strong-ptr path.
       auto grad_fn = std::make_shared<ContextParallelBackward>(
           local_q, saved_k_chunks, saved_v_chunks, saved_causal_flags,
-          saved_lse_per_step, merged_lse, merged_out, pg_, attn_scale_,
-          is_causal_, rot_type, lb_active, world_size_, rank_);
+          saved_lse_per_step, merged_lse, merged_out.detach(), pg_, attn_scale_,
+          is_causal_, rot_type, lb_active, world_size_, rank_, unshard);
 
-      // Connect to input edges for q, k, v
-      // All three edges must be set so that gradients for k and v
-      // propagate back through make_shards_inplace_axis → c_attn.
       if (q.requires_grad()) {
         Tensor &q_mut = const_cast<Tensor &>(q);
         grad_fn->set_next_edge(0, autograd::get_grad_edge(q_mut));
@@ -303,11 +307,11 @@ public:
         grad_fn->set_next_edge(2, autograd::get_grad_edge(v_mut));
       }
 
-      full_output.set_grad_fn(grad_fn);
-      full_output.set_requires_grad(true);
+      output_tensor.set_grad_fn(grad_fn);
+      output_tensor.set_requires_grad(true);
     }
 
-    return full_output;
+    return output_tensor;
   }
 
 private:
