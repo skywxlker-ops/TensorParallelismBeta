@@ -1,0 +1,37 @@
+# Continue.dev config - https://docs.continue.dev/reference
+name: My Config
+version: 1.0.0
+schema: v1
+
+models:
+  # Local Gemma4 via Ollama - primary chat model
+  - name: Gemma4 Local
+    provider: ollama
+    model: gemma4-local:latest
+    apiBase: http://localhost:11434
+
+  # Claude Sonnet as cloud fallback
+  - uses: anthropic/claude-sonnet-4-6
+    with:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+# Autocomplete
+tabAutocomplete:
+  model:
+    name: Gemma4 Autocomplete
+    provider: ollama
+    model: gemma4-local:latest
+    apiBase: http://localhost:11434
+  useCopyBuffer: false
+  useFileSuffix: true
+
+mcpServers:
+  - uses: anthropic/memory-mcp
+
+  # CodeWiki MCP
+  - name: codewiki
+    command: /usr/bin/python3
+    args:
+      - /home/blu-bridge25/.continue/code_wiki_mcp/server.py   # ← adjust path if different
+    env:
+      WIKI_PATH: home/blu-bridge25/.continue/code_wiki_mcp  # ← path to your wiki/docs folder

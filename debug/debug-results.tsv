@@ -1,0 +1,3 @@
+iteration	type	hypothesis	result	severity	location	description
+0	hypothesis	Load balance permutation breaks offset-based causal masks	confirmed	CRITICAL	ContextParallel.h:253-255, FusedSDPAKernel.cu	Offsets assume linear mapping; HeadTail permutation invalidates this. Kernel allows attention between permuted positions that should be causal-masked. Gradient corruption.
+1	hypothesis	HeadTail offset computation breaks cross-chunk causal masks	confirmed	CRITICAL	ContextParallel.h:253-255, FusedSDPAKernel.cu	Offsets assume linear position = rank*S + local_idx; HeadTail breaks this. Local idx 2 is global pos 4, not 2. Kernel computes wrong global positions → violates causal structure → gradients flow backward incorrectly.

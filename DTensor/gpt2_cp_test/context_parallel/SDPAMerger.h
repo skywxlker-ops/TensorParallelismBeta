@@ -45,10 +45,13 @@ public:
     // into the running accumulator.
     //
     // Parameters:
-    //   block_out: partial attention output [B, H, T_q, D]
-    //   block_lse: partial log-sum-exp      [B, H, T_q, 1]
+    //   block_out: partial attention output [B, H, T_q, D]  (or [B,H,T_q/2,D] when partial=true)
+    //   block_lse: partial log-sum-exp      [B, H, T_q, 1]  (or [B,H,T_q/2,1] when partial=true)
+    //   partial:   when true, block_out/block_lse are half-sized (T/2) and
+    //              only the 2nd half of the accumulator is updated.
+    //              Matches PyTorch _SDPAMerger._merge_one partial logic.
     // -----------------------------------------------------------------------
-    void step(Tensor block_out, Tensor block_lse) {
+    void step(Tensor block_out, Tensor block_lse, bool partial = false) {
         // Save original dtypes for final cast
         out_dtype_ = block_out.dtype();
         lse_dtype_ = block_lse.dtype();
@@ -69,29 +72,54 @@ public:
             return;
         }
 
-;
-        //
-        // Using raw tensor ops (not autograd) since the merger is a numerical
-        // correction that does not need to be differentiated through directly.
-        // The autograd graph flows through the SDPA ops themselves.
+        // When partial=true: block_out/block_lse are ALREADY half-T sized
+        // (pre-sliced by the forward sub-chunking). Extract the matching
+        // 2nd-half view of the accumulator. No re-slicing of the input.
+        // When partial=false: merge the full accumulator with full-T block.
+        const int seq_dim = 2;       // [B, H, T, D] -- T is dim 2
+        const int lse_seq_dim = 2;   // [B, H, T, 1] -- T is dim 2
 
-        // sigmoid(block_lse - lse)
-        Tensor lse_diff = block_lse - lse_;
+        Tensor accum_out, accum_lse;
+        if (partial) {
+            int64_t T = out_.shape().dims[seq_dim];
+            int64_t half_T = T / 2;
+            accum_out = out_.narrow_view(seq_dim, half_T, half_T);
+            accum_lse = lse_.narrow_view(lse_seq_dim, half_T, half_T);
+        } else {
+            accum_out = out_;
+            accum_lse = lse_;
+        }
+
+        // Merge formula (matches PyTorch _SDPAMerger):
+        //   out = out - sigmoid(block_lse - lse) * (out - block_out)
+        //   lse = lse - log(sigmoid(lse - block_lse))
+        Tensor lse_diff = block_lse - accum_lse;
         Tensor sig = autograd::sigmoid(lse_diff);
 
-        // out = out - sig * (out - block_out)
-        Tensor out_diff = out_ - block_out;
+        Tensor out_diff = accum_out - block_out;
         Tensor correction = sig * out_diff;
-        out_ = out_ - correction;
+        Tensor new_out = accum_out - correction;
 
-        // lse = lse - log(sigmoid(lse - block_lse))
-        // Note: sigmoid(lse - block_lse) = sigmoid(-lse_diff) = 1 - sigmoid(lse_diff)
-        // log(1 - sigmoid(lse_diff)) is more stable than log(sigmoid(-lse_diff))
-        // But for functional correctness, direct computation works:
-        Tensor neg_lse_diff = lse_ - block_lse;
+        Tensor neg_lse_diff = accum_lse - block_lse;
         Tensor sig_neg = autograd::sigmoid(neg_lse_diff);
-        Tensor log_sig = autograd::log(sig_neg);
-        lse_ = lse_ - log_sig;
+        Tensor log_sig = OwnTensor::log(sig_neg);
+        Tensor new_lse = accum_lse - log_sig;
+
+        if (partial) {
+            // Partial merge: replace 2nd half with merged result via contiguous-safe cat.
+            // Use clone().cat() pattern to guarantee contiguity and avoid repeated allocations.
+            int64_t T = out_.shape().dims[seq_dim];
+            int64_t half_T = T / 2;
+
+            Tensor first_half_out = out_.narrow_view(seq_dim, 0, half_T).clone();
+            out_ = Tensor::cat({first_half_out, new_out}, seq_dim);
+
+            Tensor first_half_lse = lse_.narrow_view(lse_seq_dim, 0, half_T).clone();
+            lse_ = Tensor::cat({first_half_lse, new_lse}, lse_seq_dim);
+        } else {
+            out_ = new_out;
+            lse_ = new_lse;
+        }
     }
 
     // -----------------------------------------------------------------------

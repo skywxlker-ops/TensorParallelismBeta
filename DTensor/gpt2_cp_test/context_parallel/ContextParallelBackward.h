@@ -39,23 +39,25 @@ public:
       std::vector<Tensor> saved_k_chunks,     // K chunks per ring step
       std::vector<Tensor> saved_v_chunks,     // V chunks per ring step
       std::vector<bool> saved_causal_flags,   // causal flag per ring step
+      std::vector<bool> saved_partial_flags,  // partial flag per ring step
       std::vector<Tensor> saved_lse_per_step, // LSE per ring step [B,H,T/n,1]
       Tensor merged_lse,                      // final merged LSE [B,H,T/n,1]
       Tensor merged_out,                      // final merged out [B,H,T/n,D]
       // Process group and config
       std::shared_ptr<ProcessGroupNCCL> pg, float attn_scale, bool is_causal,
       int rotator_type, bool load_balance, int world_size,
-      int rank,
-      bool unshard = true) // when false: grad stays [B,H,T/n,D], no allgather
+      int rank, bool unshard = true,
+      bool recompute_k = true)
       : Node(3), // 3 outputs: grad for q, k, v
         saved_q_(saved_q), saved_k_chunks_(saved_k_chunks),
         saved_v_chunks_(saved_v_chunks),
         saved_causal_flags_(saved_causal_flags),
+        saved_partial_flags_(saved_partial_flags),
         saved_lse_per_step_(saved_lse_per_step), merged_lse_(merged_lse),
         merged_out_(merged_out), pg_(pg), attn_scale_(attn_scale),
         is_causal_(is_causal), rotator_type_(rotator_type),
         load_balance_(load_balance), world_size_(world_size), rank_(rank),
-        unshard_(unshard) {}
+        unshard_(unshard), recompute_k_(recompute_k) {}
 
   const char *name() const override { return "ContextParallelBackward"; }
 
@@ -66,178 +68,296 @@ public:
     }
 
     // ----- Phase 0: Shard the full gradient to local chunk -----
-    // When unshard_=false: forward returned [B,H,T/n,D] so grad is already
-    // [B,H,T/n,D]; no sharding needed.
     Tensor grad_local;
     if (unshard_) {
       Tensor grad_output_full = grads[0].contiguous();
       std::vector<Tensor> grad_chunks =
           grad_output_full.make_shards_inplace_axis(
               static_cast<size_t>(world_size_), 2);
-      grad_local = grad_chunks[rank_].contiguous(); // [B, H, T/n, D]
+      grad_local = grad_chunks[rank_].contiguous();
     } else {
-      grad_local = grads[0].contiguous(); // already [B, H, T/n, D]
+      grad_local = grads[0].contiguous();
     }
 
     // ----- Phase 1: Gradient Buffer Init -----
+    // Single travelling accumulators for dK/dV (rotated through ring).
+    // This matches PyTorch's pipelined dkv_rotater protocol.
+    const int seq_dim = 2;
+    const int64_t T_local_bwd = saved_q_.shape().dims[seq_dim];
+
     Tensor grad_q = Tensor::zeros(saved_q_.shape(), saved_q_.opts());
+    Tensor grad_key = Tensor::zeros(
+        saved_k_chunks_[0].shape(), saved_k_chunks_[0].opts());
+    Tensor grad_value = Tensor::zeros(
+        saved_v_chunks_[0].shape(), saved_v_chunks_[0].opts());
 
-    std::vector<Tensor> grad_k_accum(world_size_);
-    std::vector<Tensor> grad_v_accum(world_size_);
+    // dkv_rotater: pipelined rotation of dK/dV (only for LB path)
+    std::unique_ptr<AlltoAllRingRotator> dkv_rotater;
+    // Batch accumulators for non-LB path (old Phase 3 approach)
+    std::vector<Tensor> grad_k_accum;
+    std::vector<Tensor> grad_v_accum;
 
-    for (int i = 0; i < world_size_; ++i) {
-      grad_k_accum[i] = Tensor::zeros(saved_q_.shape(), saved_q_.opts());
-      grad_v_accum[i] = Tensor::zeros(saved_q_.shape(), saved_q_.opts());
+    bool lb_active_bwd = load_balance_;
+    if (lb_active_bwd) {
+      dkv_rotater = std::make_unique<AlltoAllRingRotator>(pg_);
+    } else {
+      grad_k_accum.resize(world_size_);
+      grad_v_accum.resize(world_size_);
+    }
+
+    // Optional kv_rotater for recompute_k mode
+    std::unique_ptr<RingRotatorBase> kv_rotater;
+    Tensor curr_k, curr_v;
+    if (recompute_k_) {
+      kv_rotater = create_rotator();
+      curr_k = saved_k_chunks_[0];
+      curr_v = saved_v_chunks_[0];
     }
 
     // ----- Phase 2: Ring Loop (backward) -----
-    const int64_t T_local_bwd = saved_q_.shape().dims[2];
-
     for (int i = 0; i < world_size_; ++i) {
-      if (!saved_k_chunks_[i].is_valid()) {
-        continue;
+      // --- K/V access ---
+      Tensor step_k, step_v;
+      if (recompute_k_) {
+        // Recompute: rotate K/V through ring (same protocol as forward)
+        if (i > 0) {
+          Tensor next_kv = kv_rotater->next_buffer();
+          Tensor kv_flat = next_kv.flatten();
+          int64_t k_numel = curr_k.numel();
+          curr_k = kv_flat.narrow(0, 0, k_numel).reshape(curr_k.shape());
+          curr_v = kv_flat.narrow(0, k_numel, k_numel).reshape(curr_v.shape());
+        }
+        if (i < (world_size_ - 1)) {
+          int64_t k_numel = curr_k.numel();
+          size_t k_bytes = static_cast<size_t>(k_numel) * sizeof(float);
+          Tensor kv_send =
+              Tensor::empty(Shape({{k_numel * 2}}), curr_k.opts());
+          cudaMemcpyAsync(kv_send.data<float>(), curr_k.data<float>(),
+                          k_bytes, cudaMemcpyDeviceToDevice, 0);
+          cudaMemcpyAsync(kv_send.data<float>() + k_numel,
+                          curr_v.data<float>(), k_bytes,
+                          cudaMemcpyDeviceToDevice, 0);
+          kv_rotater->exchange_buffers(kv_send);
+        }
+        step_k = curr_k;
+        step_v = curr_v;
+      } else {
+        // Save-K path (default): use pre-saved K/V
+        // NOTE: Do NOT continue here -- dkv_rotater communication below must
+        // happen on every step to avoid NCCL deadlocks across ranks.
+        step_k = saved_k_chunks_[i];
+        step_v = saved_v_chunks_[i];
       }
+
+      // If this step was skipped in forward (invalid K/V), skip SDPA but
+      // still participate in dkv_rotater communication below.
+      bool step_skipped = !step_k.is_valid();
 
       bool use_causal = saved_causal_flags_[i];
+      bool use_partial = saved_partial_flags_[i];
 
-      Tensor step_q = saved_q_.clone();
-      Tensor step_k = saved_k_chunks_[i].clone();
-      Tensor step_v = saved_v_chunks_[i].clone();
+      // --- Compute SDPA backward (skip if step was skipped in forward) ---
+      Tensor grad_q_step, grad_k_step, grad_v_step;
 
-      // Compute causal offsets matching the forward ring step
-      int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
-      int q_off = rank_ * static_cast<int>(T_local_bwd);
-      int k_off = source_rank * static_cast<int>(T_local_bwd);
+      if (!step_skipped) {
+        Tensor q_bwd = saved_q_;
+        Tensor k_bwd = step_k;
+        Tensor v_bwd = step_v;
+        Tensor out_bwd = merged_out_;
+        Tensor grad_out_bwd = grad_local;
+        Tensor lse_bwd = merged_lse_;
 
-      // Fused backward: P_ij = exp(s_ij - merged_lse_i) directly
-      // (equivalent to sdpa_backward_op_manual with lse_diff = step_lse -
-      // merged_lse,
-      //  since exp(s_ij - step_lse) * exp(step_lse - merged_lse) = exp(s_ij -
-      //  merged_lse))
-      std::vector<Tensor> step_grads = sdpa_fused_backward(
-          step_q, step_k, step_v, grad_local, merged_out_, merged_lse_,
-          use_causal, attn_scale_, q_off, k_off);
+        if (lb_active_bwd && i > 0) {
+          if (i <= rank_) {
+            // Past with LB: full Q, first half K/V, full out/grad_out/lse
+            std::vector<Tensor> k_halves =
+                step_k.make_shards_inplace_axis(2, seq_dim);
+            std::vector<Tensor> v_halves =
+                step_v.make_shards_inplace_axis(2, seq_dim);
+            k_bwd = k_halves[0].contiguous();
+            v_bwd = v_halves[0].contiguous();
+          } else {
+            // Future with LB: 2nd half of Q, out, grad_out, lse; full K/V
+            std::vector<Tensor> q_halves =
+                saved_q_.make_shards_inplace_axis(2, seq_dim);
+            q_bwd = q_halves[1].contiguous();
 
-      if (step_grads[0].is_valid()) {
-        grad_q = grad_q + step_grads[0];
+            std::vector<Tensor> out_halves =
+                merged_out_.make_shards_inplace_axis(2, seq_dim);
+            out_bwd = out_halves[1].contiguous();
+
+            std::vector<Tensor> grad_halves =
+                grad_local.make_shards_inplace_axis(2, seq_dim);
+            grad_out_bwd = grad_halves[1].contiguous();
+
+            std::vector<Tensor> lse_halves =
+                merged_lse_.make_shards_inplace_axis(2, seq_dim);
+            lse_bwd = lse_halves[1].contiguous();
+          }
+        }
+
+        int q_off = 0, k_off = 0;
+        if (!lb_active_bwd && is_causal_) {
+          int source_rank =
+              ((rank_ - i) % world_size_ + world_size_) % world_size_;
+          q_off = rank_ * static_cast<int>(T_local_bwd);
+          k_off = source_rank * static_cast<int>(T_local_bwd);
+        }
+        std::vector<Tensor> step_grads = sdpa_fused_backward(
+            q_bwd, k_bwd, v_bwd, grad_out_bwd, out_bwd, lse_bwd,
+            use_causal, attn_scale_, q_off, k_off);
+
+        grad_q_step = step_grads[0];
+        grad_k_step = step_grads[1];
+        grad_v_step = step_grads[2];
+
+        // --- Accumulate dQ (local, never rotated) ---
+        if (lb_active_bwd && i > rank_) {
+          int64_t half_T = T_local_bwd / 2;
+          Tensor gq_1st = grad_q.narrow_view(seq_dim, 0, half_T);
+          Tensor gq_2nd = grad_q.narrow_view(seq_dim, half_T, half_T);
+          grad_q = Tensor::cat({gq_1st.clone(), gq_2nd.clone() + grad_q_step}, seq_dim);
+        } else if (grad_q_step.is_valid()) {
+          grad_q = grad_q + grad_q_step;
+        }
       }
-      if (step_grads[1].is_valid()) {
-        grad_k_accum[i] = grad_k_accum[i] + step_grads[1];
-      }
-      if (step_grads[2].is_valid()) {
-        grad_v_accum[i] = grad_v_accum[i] + step_grads[2];
+
+      // --- dK/dV accumulation ---
+      if (lb_active_bwd) {
+        // LB path: pipelined rotation via dkv_rotater (PyTorch lines 588-627)
+        if (i == 0) {
+          if (grad_k_step.is_valid()) {
+            grad_key = grad_key + grad_k_step;
+          }
+          if (grad_v_step.is_valid()) {
+            grad_value = grad_value + grad_v_step;
+          }
+        } else {
+          int64_t k_numel = grad_key.numel();
+          Tensor next_grad_kv = dkv_rotater->next_buffer();
+          Tensor gkv_flat = next_grad_kv.flatten();
+          grad_key =
+              gkv_flat.narrow(0, 0, k_numel).reshape(grad_key.shape());
+          grad_value =
+              gkv_flat.narrow(0, k_numel, k_numel).reshape(grad_value.shape());
+
+          if (i <= rank_ && grad_k_step.is_valid()) {
+            int64_t half_T = T_local_bwd / 2;
+            Tensor zeros_half_k = Tensor::zeros(grad_k_step.shape(), grad_k_step.opts());
+            Tensor gk_padded = Tensor::cat({grad_k_step, zeros_half_k}, seq_dim);
+            Tensor zeros_half_v = Tensor::zeros(grad_v_step.shape(), grad_v_step.opts());
+            Tensor gv_padded = Tensor::cat({grad_v_step, zeros_half_v}, seq_dim);
+            grad_key = grad_key + gk_padded;
+            grad_value = grad_value + gv_padded;
+          } else {
+            if (grad_k_step.is_valid()) {
+              grad_key = grad_key + grad_k_step;
+            }
+            if (grad_v_step.is_valid()) {
+              grad_value = grad_value + grad_v_step;
+            }
+          }
+        }
+
+        // Send current grad_key/grad_value to next rank
+        int64_t k_numel_send = grad_key.numel();
+        size_t k_bytes_send =
+            static_cast<size_t>(k_numel_send) * sizeof(float);
+        Tensor grad_kv_send =
+            Tensor::empty(Shape({{k_numel_send * 2}}), grad_key.opts());
+        cudaMemcpyAsync(grad_kv_send.data<float>(), grad_key.data<float>(),
+                        k_bytes_send, cudaMemcpyDeviceToDevice, 0);
+        cudaMemcpyAsync(grad_kv_send.data<float>() + k_numel_send,
+                        grad_value.data<float>(), k_bytes_send,
+                        cudaMemcpyDeviceToDevice, 0);
+        dkv_rotater->exchange_buffers(grad_kv_send);
+      } else {
+        // Non-LB path: batch accumulate per step, single sendrecv at end
+        if (!step_skipped && grad_k_step.is_valid()) {
+          grad_k_accum[i] = grad_k_step;
+          grad_v_accum[i] = grad_v_step;
+        }
       }
     }
 
-    // ----- Phase 3: Communicate dK, dV back to source ranks -----
-    // Each grad_k_accum[i] belongs to the rank whose K chunk was used at step
-    // i. That source rank is (rank_ - i + world_size_) % world_size_. We must
-    // send grad_k_accum[i] there and receive contributions destined for our own
-    // K chunk from all other ranks. Dispatch on rotator_type_ to use the same
-    // collective as the forward pass.
-
-    Tensor local_grad_k =
-        Tensor::zeros(grad_k_accum[0].shape(), grad_k_accum[0].opts());
-    Tensor local_grad_v =
-        Tensor::zeros(grad_v_accum[0].shape(), grad_v_accum[0].opts());
-
-    if (rotator_type_ == 1) {
-      // AlltoAll: build a send buffer [world_size * kv_count] where slot dest
-      // holds (grad_k_accum[i], grad_v_accum[i]) for dest = (rank_-i+n)%n.
-      // After alltoall, each rank's recv buffer slot j contains rank j's
-      // contribution to our K/V chunk. Sum all slots to get local_grad_k/v.
-      int64_t k_count = grad_k_accum[0].numel();
-      int64_t kv_count = k_count * 2;
-      size_t byte_count = static_cast<size_t>(k_count) * sizeof(float);
-
-      Shape agg_shape({{kv_count * world_size_}});
-      Tensor send_buf = Tensor::zeros(agg_shape, grad_k_accum[0].opts());
-      Tensor recv_buf = Tensor::zeros(agg_shape, grad_k_accum[0].opts());
-
-      for (int i = 0; i < world_size_; ++i) {
-        int dest = ((rank_ - i) % world_size_ + world_size_) % world_size_;
-        float *dk_slot =
-            send_buf.data<float>() + static_cast<int64_t>(dest) * kv_count;
-        float *dv_slot = dk_slot + k_count;
-        cudaMemcpyAsync(dk_slot, grad_k_accum[i].data<float>(), byte_count,
-                        cudaMemcpyDeviceToDevice, 0);
-        cudaMemcpyAsync(dv_slot, grad_v_accum[i].data<float>(), byte_count,
-                        cudaMemcpyDeviceToDevice, 0);
-      }
-      cudaStreamSynchronize(0);
-
-      auto work = pg_->alltoall_async(send_buf.data(), recv_buf.data(),
-                                      static_cast<size_t>(kv_count),
-                                      grad_k_accum[0].dtype());
-      if (work) {
-        work->wait();
-      }
-
-      // Sum all received slots — each slot r contains rank r's dK/dV
-      // contribution to our K/V chunk.
-      for (int r = 0; r < world_size_; ++r) {
-        int64_t slot_off = static_cast<int64_t>(r) * kv_count;
-        Tensor slot_dk =
-            recv_buf.narrow(0, slot_off, k_count).reshape(local_grad_k.shape());
-        Tensor slot_dv = recv_buf.narrow(0, slot_off + k_count, k_count)
-                             .reshape(local_grad_v.shape());
-        local_grad_k = local_grad_k + slot_dk;
-        local_grad_v = local_grad_v + slot_dv;
-      }
+    // --- Final: collect dK/dV from ring ---
+    if (lb_active_bwd) {
+      // LB: receive completed travelling accumulator
+      int64_t k_numel = grad_key.numel();
+      Tensor final_grad_kv = dkv_rotater->next_buffer();
+      Tensor final_flat = final_grad_kv.flatten();
+      grad_key =
+          final_flat.narrow(0, 0, k_numel).reshape(grad_key.shape());
+      grad_value =
+          final_flat.narrow(0, k_numel, k_numel).reshape(grad_value.shape());
     } else {
-      // P2P (sendrecv): send grad_k_accum[i] to source rank, receive
-      // contributions from the rank whose queries attended our K chunk.
-      local_grad_k = grad_k_accum[0];
-      local_grad_v = grad_v_accum[0];
+      // Non-LB: step 0 is local, steps 1..N-1 exchanged via packed sendrecv.
+      // grad_key/grad_value (initialized to zeros at lines 88-92) accumulate results.
 
+      // Step 0: local contribution (our own K chunk)
+      if (grad_k_accum[0].is_valid()) {
+        grad_key = grad_key + grad_k_accum[0];
+        grad_value = grad_value + grad_v_accum[0];
+      }
+
+      // Steps 1..N-1: pack K+V, single sendrecv per step
       for (int i = 1; i < world_size_; ++i) {
-        int source_rank =
-            ((rank_ - i) % world_size_ + world_size_) % world_size_;
+        int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
+        int dest_rank = ((rank_ + i) % world_size_ + world_size_) % world_size_;
 
-        Tensor dk_flat = grad_k_accum[i].flatten();
-        Tensor dv_flat = grad_v_accum[i].flatten();
-        Tensor dkv_concat = Tensor::flatten_concat({dk_flat, dv_flat});
+        int64_t k_numel = saved_k_chunks_[0].numel();
+        size_t k_bytes = static_cast<size_t>(k_numel) * sizeof(float);
 
-        Tensor recv_buf = Tensor::empty(dkv_concat.shape(), dkv_concat.opts());
-
-        int dest_rank = source_rank;
-        int recv_from = ((rank_ + i) % world_size_);
-
-        size_t count = static_cast<size_t>(dkv_concat.numel());
-
-        auto work = pg_->sendrecv_async(dkv_concat.data<float>(),
-                                        recv_buf.data<float>(), dest_rank,
-                                        recv_from, count, dkv_concat.dtype());
-
-        if (work) {
-          work->wait();
+        // Pack K+V into one send buffer
+        Tensor send_buf = Tensor::zeros(Shape({{k_numel * 2}}),
+                                        saved_k_chunks_[0].opts());
+        if (grad_k_accum[i].is_valid()) {
+          cudaMemcpyAsync(send_buf.data<float>(), grad_k_accum[i].data<float>(),
+                          k_bytes, cudaMemcpyDeviceToDevice, 0);
+          cudaMemcpyAsync(send_buf.data<float>() + k_numel,
+                          grad_v_accum[i].data<float>(),
+                          k_bytes, cudaMemcpyDeviceToDevice, 0);
         }
 
-        Tensor recv_flat = recv_buf.flatten();
-        int64_t k_numel = local_grad_k.numel();
-        Tensor recv_dk =
-            recv_flat.narrow(0, 0, k_numel).reshape(local_grad_k.shape());
-        Tensor recv_dv =
-            recv_flat.narrow(0, k_numel, k_numel).reshape(local_grad_v.shape());
+        Tensor recv_buf = Tensor::empty(Shape({{k_numel * 2}}),
+                                        saved_k_chunks_[0].opts());
 
-        local_grad_k = local_grad_k + recv_dk;
-        local_grad_v = local_grad_v + recv_dv;
+        // Single packed sendrecv
+        pg_->sendrecv(send_buf.data<float>(), recv_buf.data<float>(),
+                      source_rank, dest_rank,
+                      static_cast<size_t>(k_numel * 2),
+                      saved_k_chunks_[0].dtype(), true);
+
+        // Unpack and accumulate
+        Tensor recv_k = recv_buf.narrow(0, 0, k_numel).reshape(
+            saved_k_chunks_[0].shape());
+        Tensor recv_v = recv_buf.narrow(0, k_numel, k_numel).reshape(
+            saved_v_chunks_[0].shape());
+
+        grad_key = grad_key + recv_k;
+        grad_value = grad_value + recv_v;
       }
+    }
+
+    // Cast back to original dtype
+    if (grad_q.dtype() != saved_q_.dtype()) {
+      grad_q = grad_q.as_type(saved_q_.dtype());
+    }
+    if (grad_key.dtype() != saved_k_chunks_[0].dtype()) {
+      grad_key = grad_key.as_type(saved_k_chunks_[0].dtype());
+      grad_value = grad_value.as_type(saved_v_chunks_[0].dtype());
     }
 
     // ----- Phase 4: Unshard gradients -----
-    // When unshard_=false: skip allgather; grads stay [B,H,T/n,D] to match
-    // the sharded forward output. Load balancing is skipped in this mode
-    // (lb is force-disabled for causal, and non-causal+sharded is not used).
     if (!unshard_) {
-      return {grad_q, local_grad_k, local_grad_v};
+      return {grad_q, grad_key, grad_value};
     }
 
     Tensor full_grad_q = all_gather_along_seq(grad_q);
-    Tensor full_grad_k = all_gather_along_seq(local_grad_k);
-    Tensor full_grad_v = all_gather_along_seq(local_grad_v);
+    Tensor full_grad_k = all_gather_along_seq(grad_key);
+    Tensor full_grad_v = all_gather_along_seq(grad_value);
 
-    bool lb_active = load_balance_ && !is_causal_;
+    bool lb_active = load_balance_;
     if (lb_active) {
       HeadTail lb;
       lb.set_world_size(world_size_);
@@ -265,6 +385,7 @@ private:
   std::vector<Tensor> saved_k_chunks_;
   std::vector<Tensor> saved_v_chunks_;
   std::vector<bool> saved_causal_flags_;
+  std::vector<bool> saved_partial_flags_;
   std::vector<Tensor> saved_lse_per_step_;
   Tensor merged_lse_;
   Tensor merged_out_;
@@ -277,6 +398,7 @@ private:
   int world_size_;
   int rank_;
   bool unshard_;
+  bool recompute_k_;
 
   std::unique_ptr<RingRotatorBase> create_rotator() const {
     switch (rotator_type_) {

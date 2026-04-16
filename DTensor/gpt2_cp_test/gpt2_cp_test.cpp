@@ -10,7 +10,7 @@
 
 #include <cuda_runtime.h>
 #include <mpi.h>
-#include <nvToolsExt.h>
+#include <nvtx3/nvToolsExt.h>
 
 // Tensor library includes
 #include "TensorLib.h"
@@ -81,7 +81,7 @@ struct GPTConfig {
   int64_t n_layers = 3;
   int64_t n_heads = 1;
   bool weight_tying = true;
-  bool load_balancing = false;
+  bool load_balancing = true;
   // When false: CP layers keep output local [B,T/n,C]; loss requires allreduce.
   // When true:  CP layers allgather output to full [B,T,C]; loss is scalar-identical
   //             across ranks, no allreduce needed.

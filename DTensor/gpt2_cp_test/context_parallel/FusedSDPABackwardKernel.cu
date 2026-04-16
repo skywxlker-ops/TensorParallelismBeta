@@ -170,13 +170,6 @@ __global__ void flash_attn_bwd_dq_kernel(
     float* dQ_ptr = dQ + (bh * T_q + q_local) * HEAD_DIM;
 #pragma unroll
     for (int d = 0; d < HEAD_DIM; ++d) dQ_ptr[d] = dq_regs[d];
-    if (bh == 0 && q_local == 0) {
-        printf("[SCALAR_DQ_OUT q%d k%d] dQ[0,0]=%.6f dQ[0,1]=%.6f\n",
-               q_offset, k_offset, dq_regs[0], dq_regs[1]);
-    }
-    if (bh == 0 && q_local == 1) {
-        printf("[SCALAR_DQ_OUT q%d k%d] dQ[1,0]=%.6f\n", q_offset, k_offset, dq_regs[0]);
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -67,9 +67,10 @@ public:
   ContextParallel(const DeviceMesh &mesh, std::shared_ptr<ProcessGroupNCCL> pg,
                   float attn_scale, bool is_causal = true,
                   RotatorType rotator_type = RotatorType::P2P,
-                  bool load_balance = true)
+                  bool load_balance = true, bool recompute_k = false)
       : mesh_(&mesh), pg_(pg), attn_scale_(attn_scale), is_causal_(is_causal),
         rotator_type_(rotator_type), load_balance_(load_balance),
+        recompute_k_(recompute_k),
         world_size_(pg->get_worldsize()), rank_(pg->get_rank()) {}
 
   // -----------------------------------------------------------------------
@@ -97,9 +98,8 @@ public:
     // Shard Q along dim=2 (sequence dim in 4D [B, H, T, D])
     // K, V also sharded along dim=2
 
-    // HeadTail load balancing is incompatible with causal attention:
-    // cross-chunk masks are checkerboard (even rows=0, odd rows=1),
-    // not expressible as tril. Force-disable until custom mask SDPA is added.
+    // Load balance disabled for causal attention until LB backward grad
+    // explosion is resolved. Non-causal uses LB when load_balance_=true.
     bool lb_active = load_balance_ && !is_causal_;
 
     // Input Q, K, V may be non-contiguous (e.g. from autograd::transpose
@@ -149,14 +149,16 @@ public:
     // Initialize merger for accumulating partial attention outputs
     SDPAMerger merger(/*convert_to_f32=*/true);
 
-    // Save K,V chunks, causal flags, and per-step LSE for backward pass
+    // Save K,V chunks, causal flags, partial flags, and per-step LSE for backward
     std::vector<Tensor> saved_k_chunks(world_size_);
     std::vector<Tensor> saved_v_chunks(world_size_);
     std::vector<bool> saved_causal_flags(world_size_, false);
+    std::vector<bool> saved_partial_flags(world_size_, false);
     std::vector<Tensor> saved_lse_per_step(world_size_);
 
-    // Sequence length of each rank's local chunk (used for causal offsets)
+    // Sequence length of each rank's local chunk
     int64_t T_local_fwd = local_q.shape().dims[2];
+    const int seq_dim = 2; // [B, H, T, D]
 
     // Pre-allocate KV send buffer (reused across ring steps)
     int64_t k_numel = local_k.numel();
@@ -171,16 +173,12 @@ public:
       // Step 1: If not first iteration, get K,V from previous exchange
       if (i > 0) {
         Tensor next_kv = kv_rotator->next_buffer();
-
-        // Split the received buffer: flatten to 1D then narrow
         Tensor kv_flat = next_kv.flatten();
-
         curr_k = kv_flat.narrow(0, 0, k_numel).reshape(local_k.shape());
         curr_v = kv_flat.narrow(0, k_numel, k_numel).reshape(local_v.shape());
       }
 
       // Step 2: Send current K,V to next rank (async, overlaps with compute)
-      // Use pre-allocated send buffer with D2D copies instead of flatten_concat
       if (i < (world_size_ - 1)) {
         size_t k_bytes = static_cast<size_t>(k_numel) * sizeof(float);
         cudaMemcpyAsync(kv_send_buf.data<float>(), curr_k.data<float>(),
@@ -188,47 +186,93 @@ public:
         cudaMemcpyAsync(kv_send_buf.data<float>() + k_numel,
                         curr_v.data<float>(), k_bytes, cudaMemcpyDeviceToDevice,
                         0);
-
-        // kv_send_buf = Tensor::cat({curr_k,curr_v}, 0);
-
         kv_rotator->exchange_buffers(kv_send_buf);
       }
 
       // Step 3: Determine causal behavior for this ring step
-      // NOTE: load_balance_ is force-disabled when is_causal_=true
-      // because HeadTail creates cross-chunk masks (even rows=zeros,
-      // odd rows=ones) that cannot be expressed as tril with any offset.
-      // Custom attention mask support in SDPA is needed to enable both.
-      int source_rank = ((rank_ - i) % world_size_ + world_size_) % world_size_;
+      // With load balance: i==0 is causal, all others are NOT_CAUSAL (never SKIP)
+      // Without load balance: i==0 is causal, past chunks full attention, future skipped
+      bool skip_step = false;
       bool use_causal = false;
       if (is_causal_) {
-        if (source_rank == rank_) {
+        if (i == 0) {
           use_causal = true;
-        } else if (source_rank > rank_) {
-          // Future chunk: all K,V positions > all Q positions, skip
-          continue;
+        } else if (lb_active) {
+          // Load balance enabled: never skip, never causal on non-diagonal
+          use_causal = false;
+        } else {
+          // No load balance: skip future chunks
+          int source_rank =
+              ((rank_ - i) % world_size_ + world_size_) % world_size_;
+          if (source_rank > rank_) {
+            skip_step = true;
+          }
+          use_causal = false;
         }
-        // source_rank < rank_: past chunk, full attention
       }
 
-      // Save for backward before computing
-      saved_k_chunks[i] = curr_k.clone();
-      saved_v_chunks[i] = curr_v.clone();
+      if (skip_step) {
+        continue;
+      }
+
+      // Step 4: Sub-chunk Q, K, V for load-balanced dispatch
+      // Matches PyTorch _templated_ring_attention lines 451-471:
+      //   i==0:       full Q, K, V (causal)
+      //   i<=rank LB: full Q, K[:T/2], V[:T/2] (not causal, partial=false)
+      //   i>rank  LB: Q[T/2:], full K, V (not causal, partial=true)
+      Tensor q_use = local_q;
+      Tensor k_use = curr_k;
+      Tensor v_use = curr_v;
+      bool use_partial = false;
+
+      if (lb_active && i > 0) {
+        if (i <= rank_) {
+          // Past chunk with LB: full Q, first half of K/V
+          std::vector<Tensor> k_halves =
+              curr_k.make_shards_inplace_axis(2, seq_dim);
+          std::vector<Tensor> v_halves =
+              curr_v.make_shards_inplace_axis(2, seq_dim);
+          k_use = autograd::contiguous(k_halves[0]);
+          v_use = autograd::contiguous(v_halves[0]);
+        } else {
+          // Future chunk with LB: second half of Q, full K/V
+          std::vector<Tensor> q_halves =
+              local_q.make_shards_inplace_axis(2, seq_dim);
+          q_use = autograd::contiguous(q_halves[1]);
+          use_partial = true;
+        }
+      }
+
+      // Save full (un-chunked) K,V for backward before computing.
+      // When recompute_k_=true, only save step 0 (local K,V) as the starting
+      // point for backward re-rotation. Other steps are recomputed.
+      if (!recompute_k_ || i == 0) {
+        saved_k_chunks[i] = curr_k.clone();
+        saved_v_chunks[i] = curr_v.clone();
+      }
       saved_causal_flags[i] = use_causal;
+      saved_partial_flags[i] = use_partial;
 
-      // Step 4: Compute fused SDPA for this (Q, K, V) pair
-      // q_offset / k_offset give correct global positions for causal masking
-      // across ring steps where Q and K/V come from different sequence chunks.
-      int q_off = rank_ * static_cast<int>(T_local_fwd);
-      int k_off = source_rank * static_cast<int>(T_local_fwd);
+      // Step 5: Compute fused SDPA
+      // With LB sub-chunking: no cross-chunk causal offsets needed (is_causal
+      // only on diagonal, sub-chunks handle the rest).
+      // Without LB: offsets needed for cross-chunk causal masking.
+      int q_off = 0;
+      int k_off = 0;
+      if (!lb_active && is_causal_) {
+        int source_rank =
+            ((rank_ - i) % world_size_ + world_size_) % world_size_;
+        q_off = rank_ * static_cast<int>(T_local_fwd);
+        k_off = source_rank * static_cast<int>(T_local_fwd);
+      }
       SDPAResult result = sdpa_fused_forward(
-          local_q, curr_k, curr_v, use_causal, attn_scale_, q_off, k_off);
+          q_use, k_use, v_use, use_causal, attn_scale_, q_off, k_off);
 
-      // Save per-step LSE for correct backward merger rescaling
+      // Save per-step LSE for backward
       saved_lse_per_step[i] = result.lse;
 
-      // Step 5: Merge into accumulator
-      merger.step(result.out, result.lse);
+      // Step 6: Merge into accumulator (with partial flag)
+      merger.step(result.out, result.lse, use_partial);
     }
 
     // ----- Phase 3: Get final merged result -----
@@ -291,8 +335,9 @@ public:
       // output_tensor IS merged_out). Detach severs the grad_fn strong-ptr path.
       auto grad_fn = std::make_shared<ContextParallelBackward>(
           local_q, saved_k_chunks, saved_v_chunks, saved_causal_flags,
-          saved_lse_per_step, merged_lse, merged_out.detach(), pg_, attn_scale_,
-          is_causal_, rot_type, lb_active, world_size_, rank_, unshard);
+          saved_partial_flags, saved_lse_per_step, merged_lse,
+          merged_out.detach(), pg_, attn_scale_, is_causal_, rot_type,
+          lb_active, world_size_, rank_, unshard, recompute_k_);
 
       if (q.requires_grad()) {
         Tensor &q_mut = const_cast<Tensor &>(q);
@@ -321,6 +366,7 @@ private:
   bool is_causal_;
   RotatorType rotator_type_;
   bool load_balance_;
+  bool recompute_k_;
   int world_size_;
   int rank_;
   HeadTail load_balancer_;

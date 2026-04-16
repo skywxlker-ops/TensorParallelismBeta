@@ -162,6 +162,10 @@ public:
     std::shared_ptr<Work> scatter_async(const void* sendbuff, void* recvbuff, size_t count, OwnTensor::Dtype dtype, int root, bool sync_ = false);
     std::shared_ptr<Work> broadcast_async(const void* sendbuff, void* recvbuff, size_t count, OwnTensor::Dtype dtype, int root, bool sync_ = false);
     std::shared_ptr<Work> alltoall_async(const void* sendbuff, void* recvbuff, size_t count, OwnTensor::Dtype dtype, bool sync_ = false);
+    // Sparse alltoall: per-rank send/recv counts and byte offsets (like ncclAllToAllv / PyTorch permute_tensor)
+    std::shared_ptr<Work> alltoallv_async(const void* sendbuff, const size_t* sendcounts, const size_t* senddispls,
+                                          void* recvbuff, const size_t* recvcounts, const size_t* recvdispls,
+                                          OwnTensor::Dtype dtype, bool sync_ = false);
     std::shared_ptr<Work> send_async(const void* sendbuff, size_t count, OwnTensor::Dtype dtype, int recv_rank, bool sync_ = false);
     std::shared_ptr<Work> recieve_async(void* recvbuff, size_t count, OwnTensor::Dtype dtype, int send_rank, bool sync_ = false);
     std::shared_ptr<Work> sendrecv_async(const void* sendbuff, void* recvbuff, int send_rank, int recv_rank, size_t count, OwnTensor::Dtype dtype, bool sync_ = false);

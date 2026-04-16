@@ -454,6 +454,37 @@ std::shared_ptr<Work> ProcessGroupNCCL::alltoall_async(const void *sendbuff,
       sync_);
 }
 
+// Sparse alltoall via ncclGroupStart + ncclSend/ncclRecv (matches PyTorch all2all_single_unequal_split)
+std::shared_ptr<Work> ProcessGroupNCCL::alltoallv_async(
+    const void *sendbuff, const size_t *sendcounts, const size_t *senddispls,
+    void *recvbuff, const size_t *recvcounts, const size_t *recvdispls,
+    OwnTensor::Dtype dtype, bool sync_) {
+  return launch_work_collectives(
+      communication_stream_,
+      [&]() -> ncclResult_t {
+        ncclDataType_t nccl_type = ncclTypeConversion(dtype);
+        size_t elem_size = OwnTensor::Tensor::dtype_size(dtype);
+        ncclResult_t res = ncclGroupStart();
+        if (res != ncclSuccess) return res;
+        for (int r = 0; r < world_size_; ++r) {
+          if (sendcounts[r] > 0) {
+            res = ncclSend(
+                static_cast<const char*>(sendbuff) + senddispls[r] * elem_size,
+                sendcounts[r], nccl_type, r, comm_, communication_stream_);
+            if (res != ncclSuccess) return res;
+          }
+          if (recvcounts[r] > 0) {
+            res = ncclRecv(
+                static_cast<char*>(recvbuff) + recvdispls[r] * elem_size,
+                recvcounts[r], nccl_type, r, comm_, communication_stream_);
+            if (res != ncclSuccess) return res;
+          }
+        }
+        return ncclGroupEnd();
+      },
+      sync_);
+}
+
 // void process_parallel(std::vector<int>& executable, int start, int end){
 //     for(int st = start; st <= end; st++){
 //         sendrecv_async(sendbuff, executable[st], )

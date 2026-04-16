@@ -120,41 +120,35 @@ private:
 class AlltoAllRingRotator : public RingRotatorBase {
 public:
     AlltoAllRingRotator(std::shared_ptr<ProcessGroupNCCL> pg)
-        : RingRotatorBase(pg), recv_buffer_(), buffer_allocated_(false) {}
+        : RingRotatorBase(pg), buffer_allocated_(false) {}
 
+    // Sparse alltoall ring shift: send curr_buffer to rank (i+1)%N,
+    // receive from rank (i-1)%N. Matches PyTorch's permute_tensor
+    // with dsts=[1,2,...,n-1,0] using alltoallv with sparse split sizes.
+    // Buffer: 1x per_rank_count (not world_size * per_rank_count).
     void exchange_buffers(Tensor& curr_buffer) override {
         int next_rank = (rank_ + 1) % world_size_;
+        int prev_rank = (rank_ - 1 + world_size_) % world_size_;
 
-        size_t per_rank_count = static_cast<size_t>(curr_buffer.numel());
+        size_t numel = static_cast<size_t>(curr_buffer.numel());
         Dtype dtype = curr_buffer.dtype();
-        size_t elem_size = Tensor::dtype_size(dtype);
 
-        // Pre-allocate the scatter/gather buffers once (world_size chunks each)
         if (!buffer_allocated_) {
-            Shape agg_shape({{static_cast<int64_t>(per_rank_count * world_size_)}});
-            send_buffer_ = Tensor::zeros(agg_shape, curr_buffer.opts());
-            recv_agg_buffer_ = Tensor::zeros(agg_shape, curr_buffer.opts());
             recv_buffer_ = Tensor::empty(curr_buffer.shape(), curr_buffer.opts());
+            // Build sparse split sizes: send numel to next_rank, recv numel from prev_rank
+            sendcounts_.assign(world_size_, 0);
+            recvcounts_.assign(world_size_, 0);
+            senddispls_.assign(world_size_, 0);
+            recvdispls_.assign(world_size_, 0);
+            sendcounts_[next_rank] = numel;
+            recvcounts_[prev_rank] = numel;
+            // Displacements are 0 for both (single contiguous buffer)
             buffer_allocated_ = true;
-            per_rank_numel_ = per_rank_count;
         }
 
-        // Zero the send buffer, then place curr_buffer into the next_rank slot
-        // dsts = [1, 2, ..., n-1, 0]:  rank i sends its data to rank (i+1)%N
-        cudaMemsetAsync(send_buffer_.data(), 0,
-                        per_rank_count * world_size_ * elem_size, 0);
-
-        uint8_t* dst_slot = static_cast<uint8_t*>(send_buffer_.data())
-                            + next_rank * per_rank_count * elem_size;
-        cudaMemcpyAsync(dst_slot, curr_buffer.data(),
-                        per_rank_count * elem_size,
-                        cudaMemcpyDeviceToDevice, 0);
-
-        // Launch ncclAlltoAll: rank j receives the j-th chunk from every rank
-        pending_work_ = pg_->alltoall_async(
-            send_buffer_.data(),
-            recv_agg_buffer_.data(),
-            per_rank_count,
+        pending_work_ = pg_->alltoallv_async(
+            curr_buffer.data(), sendcounts_.data(), senddispls_.data(),
+            recv_buffer_.data(), recvcounts_.data(), recvdispls_.data(),
             dtype);
     }
 
@@ -163,33 +157,16 @@ public:
             pending_work_->wait();
             pending_work_ = nullptr;
         }
-
-        if (!recv_buffer_.is_valid()) {
-            throw std::runtime_error("AlltoAllRingRotator::next_buffer: no buffer available");
-        }
-
-        // Extract the data from the prev_rank slot
-        // After alltoall, slot j in recv_agg_buffer_ contains data sent by rank j
-        // The rank that sent us data is prev_rank = (rank_ - 1 + N) % N
-        int prev_rank = (rank_ - 1 + world_size_) % world_size_;
-        size_t elem_size = Tensor::dtype_size(recv_buffer_.dtype());
-
-        const uint8_t* src_slot = static_cast<const uint8_t*>(recv_agg_buffer_.data())
-                                  + prev_rank * per_rank_numel_ * elem_size;
-        cudaMemcpyAsync(recv_buffer_.data(), src_slot,
-                        per_rank_numel_ * elem_size,
-                        cudaMemcpyDeviceToDevice, 0);
-        cudaStreamSynchronize(0);
-
         return recv_buffer_;
     }
 
 private:
-    Tensor send_buffer_;       // world_size chunks for alltoall input
-    Tensor recv_agg_buffer_;   // world_size chunks for alltoall output
-    Tensor recv_buffer_;       // single-chunk output for the caller
+    Tensor recv_buffer_;
     bool buffer_allocated_;
-    size_t per_rank_numel_ = 0;
+    std::vector<size_t> sendcounts_;
+    std::vector<size_t> recvcounts_;
+    std::vector<size_t> senddispls_;
+    std::vector<size_t> recvdispls_;
     std::shared_ptr<Work> pending_work_;
 };
 
