@@ -1905,10 +1905,10 @@ void DTensor::matmul(DTensor &A, DTensor &B) {
   tensor_ = autograd::matmul(A.tensor_, B.tensor_);
 }
 
-void DTensor::Linear(DTensor &Input, DTensor &Weights, DTensor &Bias) {
-  // autograd::GraphRecordMode::record_forward("ARITHMETIC: DTensor_Linear");
-  tensor_ = mlp_forward::linear(Input.tensor_, Weights.tensor_, Bias.tensor_);
-}
+// void DTensor::Linear(DTensor &Input, DTensor &Weights, DTensor &Bias) {
+//   // autograd::GraphRecordMode::record_forward("ARITHMETIC: DTensor_Linear");
+//   tensor_ = mlp_forward::linear(Input.tensor_, Weights.tensor_, Bias.tensor_);
+// }
 
 void DTensor::linear_w_autograd(DTensor &Input, DTensor &Weights,
                                 DTensor &Bias) {

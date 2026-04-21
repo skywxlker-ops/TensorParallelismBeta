@@ -17,3 +17,5 @@ code = code.replace("lse_ = lse_ - log_sig;", "lse_ = (lse_ - log_sig).detach();
 with open('/home/blu-bridge25/TP/TensorParallelismBeta/DTensor/gpt2_cp_test/context_parallel/SDPAMerger.h', 'w') as f:
     f.write(code)
 print("Patched SDPAMerger.h successfully.")
+
+

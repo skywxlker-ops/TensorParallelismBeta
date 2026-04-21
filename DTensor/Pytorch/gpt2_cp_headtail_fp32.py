@@ -29,7 +29,7 @@ from dataclasses import dataclass
 # primitive ops that DTensor cannot dispatch). Let PyTorch auto-select fused backend.
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.tensor.experimental import context_parallel
-from torch.distributed.tensor.experimental._attention import _cp_options
+from torch.distributed.tensor.experimental._attention import _cp_options, set_rotate_method
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -54,12 +54,13 @@ torch.manual_seed(1234)
 cp_mesh = init_device_mesh("cuda", (cp_world_size,))
 _cp_options.enable_load_balance = True    # HeadTail load balancing ENABLED
 _cp_options.convert_to_f32      = True    # FP32 accumulation in merger
+set_rotate_method("alltoall")  # PyTorch 2.11 changed default to "allgather" but backward is hardcoded ALL_TO_ALL; mismatch causes grad explosion
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-nsys_report = False
+nsys_report = True
 
 @dataclass
 class GPTConfig:
@@ -377,6 +378,7 @@ class GPT(nn.Module):
             lr=learning_rate,
             betas=(0.9, 0.95),
             eps=1e-8,
+            fused=False
         )
 
 

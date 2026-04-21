@@ -60,36 +60,16 @@ public:
             buffer_allocated_ = true;
         }
 
-        std::vector<std::shared_ptr<Work>> reqs;
-
-        if (rank_ % 2 == 0) {
-            auto send_req = pg_->send_async(
-                curr_buffer.data<float>(), count, dtype, next_rank);
-            reqs.push_back(send_req);
-
-            auto recv_req = pg_->recieve_async(
-                recv_buffer_.data<float>(), count, dtype, prev_rank);
-            reqs.push_back(recv_req);
-        } else {
-            auto recv_req = pg_->recieve_async(
-                recv_buffer_.data<float>(), count, dtype, prev_rank);
-            reqs.push_back(recv_req);
-
-            auto send_req = pg_->send_async(
-                curr_buffer.data<float>(), count, dtype, next_rank);
-            reqs.push_back(send_req);
-        }
-
-        pending_reqs_ = reqs;
+        pending_work_ = pg_->sendrecv_async(
+            curr_buffer.data<float>(), recv_buffer_.data<float>(),
+            next_rank, prev_rank, count, dtype);
     }
 
     Tensor next_buffer() override {
-        for (auto& req : pending_reqs_) {
-            if (req) {
-                req->wait();
-            }
+        if (pending_work_) {
+            pending_work_->wait();
+            pending_work_ = nullptr;
         }
-        pending_reqs_.clear();
 
         if (!recv_buffer_.is_valid()) {
             throw std::runtime_error("P2PRingRotator::next_buffer: no buffer available");
@@ -100,7 +80,7 @@ public:
 private:
     Tensor recv_buffer_;
     bool buffer_allocated_;
-    std::vector<std::shared_ptr<Work>> pending_reqs_;
+    std::shared_ptr<Work> pending_work_;
 };
 
 

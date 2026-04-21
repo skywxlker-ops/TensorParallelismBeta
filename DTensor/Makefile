@@ -615,12 +615,22 @@ gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
 # Explicitly list the CUDA kernels for Context Parallel tests
 FUSED_SDPA_KERNEL_OBJ = gpt2_cp_test/context_parallel/FusedSDPAKernel.o
 FUSED_SDPA_BWD_KERNEL_OBJ = gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.o
+CP_ATTN_FWD_KERNEL_OBJ = gpt2_cp_test/context_parallel/AttentionForward.o
+CP_ATTN_BWD_KERNEL_OBJ = gpt2_cp_test/context_parallel/AttentionBackward.o
 
 $(FUSED_SDPA_KERNEL_OBJ): gpt2_cp_test/context_parallel/FusedSDPAKernel.cu
 	@echo "[COMPILE CUDA] $<"
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
 $(FUSED_SDPA_BWD_KERNEL_OBJ): gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+$(CP_ATTN_FWD_KERNEL_OBJ): gpt2_cp_test/context_parallel/AttentionForward.cu
+	@echo "[COMPILE CUDA] $<"
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+
+$(CP_ATTN_BWD_KERNEL_OBJ): gpt2_cp_test/context_parallel/AttentionBackward.cu
 	@echo "[COMPILE CUDA] $<"
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
 
@@ -632,7 +642,7 @@ GPT2_CP_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/FusedAdamWKernel.o dnn/VectorizedLayerNormKernel.o dnn/FusedLayerNormOp.o dnn/AttentionKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
+GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/FusedAdamWKernel.o dnn/VectorizedLayerNormKernel.o dnn/FusedLayerNormOp.o dnn/AttentionKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ) $(CP_ATTN_FWD_KERNEL_OBJ) $(CP_ATTN_BWD_KERNEL_OBJ)
 
 gpt2_cp_test: $(GPT2_CP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: gpt2_cp_test_exec"

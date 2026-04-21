@@ -31,6 +31,8 @@
 
 #include "core/Tensor.h"
 #include "dnn/AttentionKernels.h"
+#include "gpt2_cp_test/context_parallel/AttentionBackward.h"
+#include "gpt2_cp_test/context_parallel/AttentionForward.h"
 #include "gpt2_cp_test/context_parallel/FusedSDPABackwardKernel.h"
 #include "gpt2_cp_test/context_parallel/FusedSDPAKernel.h"
 #include "gpt2_cp_test/context_parallel/SDPAOp.h"
@@ -104,13 +106,19 @@ inline SDPAResult sdpa_fused_forward(Tensor &q, Tensor &k, Tensor &v,
   // Always use launch_flash_attn_fwd_f32 (FusedSDPAKernel.cu).
   // The WMMA TC path (mem_efficient_attn_forward_tc from AttentionKernels.cu)
   // is pending bug investigation and disabled until verified correct.
-  launch_flash_attn_fwd_f32(Q_ptr, K_ptr, V_ptr, O_ptr, LSE_ptr, BH,
-                            static_cast<int>(T_q), static_cast<int>(T_k),
-                            static_cast<int>(D), scale, is_causal, q_offset,
-                            k_offset);
+
+  // launch_flash_attn_fwd_f32(Q_ptr, K_ptr, V_ptr, O_ptr, LSE_ptr, BH,
+  //                           static_cast<int>(T_q), static_cast<int>(T_k),
+  //                           static_cast<int>(D), scale, is_causal, q_offset,
+  //                           k_offset);
+
+  OwnTensor::cp::cuda::mem_efficient_attn_forward_tc(
+    Q_ptr, K_ptr, V_ptr, O_ptr, LSE_ptr,
+    B, H, T_q, T_k, q_offset, k_offset, D,
+    is_causal, 0.0f, nullptr);
 
   // Synchronise so the caller can safely read results immediately
-  cudaDeviceSynchronize();
+  // cudaDeviceSynchronize();
 
   return SDPAResult{out, lse};
 }
@@ -152,22 +160,29 @@ sdpa_fused_backward(const Tensor &q, const Tensor &k, const Tensor &v,
 
   TensorOptions base_opts = q.opts().with_req_grad(false);
 
-  Tensor dQ = Tensor::zeros(q.shape(), base_opts);
-  Tensor dK = Tensor::zeros(k.shape(), base_opts);
-  Tensor dV = Tensor::zeros(v.shape(), base_opts);
+  Tensor dQ = Tensor::empty(q.shape(), base_opts);
+  Tensor dK = Tensor::empty(k.shape(), base_opts);
+  Tensor dV = Tensor::empty(v.shape(), base_opts);
 
   // D_buf [BH, T_q] -- scratch written by dQ kernel, read by dK/dV kernel
   Shape d_shape({{static_cast<int64_t>(BH), T_q}});
   Tensor D_buf = Tensor::empty(d_shape, base_opts);
 
-  launch_flash_attn_bwd_f32(
-      q.data<float>(), k.data<float>(), v.data<float>(), out.data<float>(),
-      grad_out.data<float>(), merged_lse.data<float>(), dQ.data<float>(),
-      dK.data<float>(), dV.data<float>(), D_buf.data<float>(), BH,
-      static_cast<int>(T_q), static_cast<int>(T_k), static_cast<int>(D), scale,
-      is_causal, q_offset, k_offset);
+  // launch_flash_attn_bwd_f32(
+  //     q.data<float>(), k.data<float>(), v.data<float>(), out.data<float>(),
+  //     grad_out.data<float>(), merged_lse.data<float>(), dQ.data<float>(),
+  //     dK.data<float>(), dV.data<float>(), D_buf.data<float>(), BH,
+  //     static_cast<int>(T_q), static_cast<int>(T_k), static_cast<int>(D), scale,
+  //     is_causal, q_offset, k_offset);
 
-  cudaDeviceSynchronize();
+  OwnTensor::cp::cuda::mem_efficient_attn_backward(
+    q.data<float>(), k.data<float>(), v.data<float>(),
+    out.data<float>(), grad_out.data<float>(), merged_lse.data<float>(),
+    dQ.data<float>(), dK.data<float>(), dV.data<float>(), D_buf.data<float>(),
+    B, H, T_q, T_k, q_offset, k_offset, D,
+    is_causal);
+
+  // cudaDeviceSynchronize();
 
   return {dQ, dK, dV};
 }
