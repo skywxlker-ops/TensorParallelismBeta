@@ -219,7 +219,7 @@ public:
     //   past chunks (source_rank < rank_): full attention
     //   future chunks (source_rank > rank_): skipped
     cp_ = std::make_shared<ContextParallel>(
-        mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::P2P,
+        mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::AlltoAll,
         /*load_balance=*/load_balancing, /*recompute_k=*/false);
 
     ln.to(device);
@@ -510,25 +510,25 @@ int main(int argc, char **argv) {
     std::cout << "=== GPT-2 Context Parallel Training Script ===" << std::endl;
   }
 
-  bool nysys_report = false;
+  bool nysys_report = true;
   //nsys profile -t cuda -o my_report ./path/to/your_executable
   //nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report /path/to/my_report.nsys-rep
   //nsys profile -t cuda -o my_report ./your_executable && nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report my_report.nsys-rep
   try {
     // Configuration
     GPTConfig config;
-    config.batch_size = 4;
+    config.batch_size = 8;
     config.context_length = 1024;
     config.vocab_size = 50304;
-    config.n_embd = 384;
-    config.n_layers = 3;
-    config.n_heads = 6;
+    config.n_embd = 768;
+    config.n_layers = 12;
+    config.n_heads = 12;
     config.weight_tying = false;
     config.load_balancing = true;
 
     const int B = static_cast<int>(config.batch_size);
     const int T = static_cast<int>(config.context_length);
-    const int global_batch = 65536;
+    const int global_batch = 524288;
     const int grad_accum_steps = global_batch / (B * T);
 
     const float max_lr = 6e-4f;
@@ -574,9 +574,8 @@ int main(int argc, char **argv) {
       num_params_gpu += p.numel();
     }
 
-    // const int max_steps    = (static_cast<int>(num_params) / global_batch ) *
-    // 5;
-    int max_steps = 6768;
+    int max_steps    = (static_cast<int>(num_params) / global_batch ) * 5;
+    // int max_steps = 6768;
     int warmup_steps = max_steps / 10;
     if (nysys_report)
     {
@@ -831,21 +830,6 @@ int main(int argc, char **argv) {
         // ---- Training step ----
         double time_data = 0, time_forward = 0, time_loss = 0;
         double time_backward = 0, time_clip = 0, time_optim = 0;
-        double time_optim_pre = 0;
-
-        // === DIAGNOSTIC: pre-forward optim.step() (GPU "cold") ===
-        // At step >= 1, params still have grads from previous step's backward.
-        // At step 0, all params have has_grad=false, so optim is a no-op (skip).
-        // Compare against the post-forward call below to isolate
-        // whether prior CP/backward workload is degrading kernel speed.
-        if (step >= 1) {
-          CudaTimer timer_optim_pre;
-          cudaDeviceSynchronize();
-          timer_optim_pre.start_timer();
-          optimizer.step();
-          time_optim_pre = timer_optim_pre.get_elapsed_seconds();
-          cudaDeviceSynchronize();
-        }
 
         optimizer.zero_grad();
         if (model.config.weight_tying && model.lm_head->weight.has_grad()) {
@@ -986,11 +970,6 @@ int main(int argc, char **argv) {
         float lr = get_lr(step, max_lr, min_lr, warmup_steps, max_steps);
         optimizer.set_lr(lr);
 
-        if (rank == 0) {
-          std::cout << "DEBUG: world_size=" << world_size
-                    << ", num_params=" << num_params << std::endl;
-        }
-
         if (rank == 0 && (step == 0 || step == 1 || step == 100)) {
           int64_t total_numel = 0;
           int n_fp32 = 0, n_other = 0, n_contig = 0, n_noncontig = 0;
@@ -1014,14 +993,9 @@ int main(int argc, char **argv) {
                     << " n_fp32=" << n_fp32 << " n_other=" << n_other
                     << " n_contig=" << n_contig << " n_noncontig=" << n_noncontig << "\n";
         }
-        cudaDeviceSynchronize();
         timer_optim.start_timer();
         optimizer.step();
         time_optim = timer_optim.get_elapsed_seconds();
-        if (rank == 0) {
-          std::cout << "  optim_pre=" << (time_optim_pre*1000.0) << "ms"
-                    << " optim_post=" << (time_optim*1000.0) << "ms\n";
-        }
 
         double dt = timer_step.get_elapsed_seconds();
 

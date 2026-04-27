@@ -60,15 +60,15 @@ set_rotate_method("alltoall")  # PyTorch 2.11 changed default to "allgather" but
 # ══════════════════════════════════════════════════════════════════════════════
 # Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-nsys_report = False
+nsys_report = True
 
 @dataclass
 class GPTConfig:
-    n_embd:       int  = 384
+    n_embd:       int  = 768
     block_size:   int  = 1024
     vocab_size:   int  = 50304
-    n_layer:      int  = 3
-    n_head:       int  = 6
+    n_layer:      int  = 12
+    n_head:       int  = 12
     weight_tying: bool = False
 
 
@@ -429,9 +429,9 @@ class DataLoaderLite:
 # Training Setup
 # ══════════════════════════════════════════════════════════════════════════════
 
-B = 4
+B = 8
 T = 1024
-total_batch_size = 65536
+total_batch_size = 524288
 
 assert T % cp_world_size == 0, f"T={T} must be divisible by cp_world_size={cp_world_size}"
 grad_accum_steps = total_batch_size // (B * T)
@@ -443,8 +443,8 @@ model.to(device)
 
 num_params         = sum(p.numel() for p in model.parameters())
 num_params_per_gpu = num_params
-
-max_steps    = 6768
+max_steps = num_params * 5 // total_batch_size
+# max_steps    = 6768
 warmup_steps = max_steps // 10
 
 
