@@ -220,7 +220,7 @@ public:
     //   future chunks (source_rank > rank_): skipped
     cp_ = std::make_shared<ContextParallel>(
         mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::P2P,
-        /*load_balance=*/load_balancing);
+        /*load_balance=*/load_balancing, /*recompute_k=*/false);
 
     ln.to(device);
     c_attn.to(device);
@@ -510,7 +510,7 @@ int main(int argc, char **argv) {
     std::cout << "=== GPT-2 Context Parallel Training Script ===" << std::endl;
   }
 
-  bool nysys_report = true;
+  bool nysys_report = false;
   //nsys profile -t cuda -o my_report ./path/to/your_executable
   //nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report /path/to/my_report.nsys-rep
   //nsys profile -t cuda -o my_report ./your_executable && nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report my_report.nsys-rep
@@ -577,12 +577,13 @@ int main(int argc, char **argv) {
     // const int max_steps    = (static_cast<int>(num_params) / global_batch ) *
     // 5;
     int max_steps = 6768;
+    int warmup_steps = max_steps / 10;
     if (nysys_report)
     {
-      max_steps = 1;
+      max_steps = 2;
+      warmup_steps = 0;
     }
     // const int max_steps    = 1;
-    const int warmup_steps = max_steps / 10;
 
     if (rank == 0) {
       std::cout << "Parameters: " << num_params << "\n";
@@ -830,6 +831,21 @@ int main(int argc, char **argv) {
         // ---- Training step ----
         double time_data = 0, time_forward = 0, time_loss = 0;
         double time_backward = 0, time_clip = 0, time_optim = 0;
+        double time_optim_pre = 0;
+
+        // === DIAGNOSTIC: pre-forward optim.step() (GPU "cold") ===
+        // At step >= 1, params still have grads from previous step's backward.
+        // At step 0, all params have has_grad=false, so optim is a no-op (skip).
+        // Compare against the post-forward call below to isolate
+        // whether prior CP/backward workload is degrading kernel speed.
+        if (step >= 1) {
+          CudaTimer timer_optim_pre;
+          cudaDeviceSynchronize();
+          timer_optim_pre.start_timer();
+          optimizer.step();
+          time_optim_pre = timer_optim_pre.get_elapsed_seconds();
+          cudaDeviceSynchronize();
+        }
 
         optimizer.zero_grad();
         if (model.config.weight_tying && model.lm_head->weight.has_grad()) {
@@ -970,9 +986,42 @@ int main(int argc, char **argv) {
         float lr = get_lr(step, max_lr, min_lr, warmup_steps, max_steps);
         optimizer.set_lr(lr);
 
+        if (rank == 0) {
+          std::cout << "DEBUG: world_size=" << world_size
+                    << ", num_params=" << num_params << std::endl;
+        }
+
+        if (rank == 0 && (step == 0 || step == 1 || step == 100)) {
+          int64_t total_numel = 0;
+          int n_fp32 = 0, n_other = 0, n_contig = 0, n_noncontig = 0;
+          std::cout << "=== STEP " << step << " PARAM AUDIT ===\n";
+          std::cout << "params.size() = " << params.size() << "\n";
+          for (size_t i = 0; i < params.size(); ++i) {
+            auto& p = params[i];
+            if (!p.requires_grad() || !p.has_grad()) continue;
+            Tensor g = p.grad_view();
+            total_numel += g.numel();
+            if (g.dtype() == Dtype::Float32) n_fp32++; else n_other++;
+            if (g.is_contiguous()) n_contig++; else n_noncontig++;
+            if (i < 5) {
+              std::cout << "  param[" << i << "]: numel=" << p.numel()
+                        << " grad.dtype=" << (int)g.dtype()
+                        << " grad.contig=" << g.is_contiguous()
+                        << " grad.ptr=" << (void*)g.data<float>() << "\n";
+            }
+          }
+          std::cout << "  total_grad_numel=" << total_numel
+                    << " n_fp32=" << n_fp32 << " n_other=" << n_other
+                    << " n_contig=" << n_contig << " n_noncontig=" << n_noncontig << "\n";
+        }
+        cudaDeviceSynchronize();
         timer_optim.start_timer();
         optimizer.step();
         time_optim = timer_optim.get_elapsed_seconds();
+        if (rank == 0) {
+          std::cout << "  optim_pre=" << (time_optim_pre*1000.0) << "ms"
+                    << " optim_post=" << (time_optim*1000.0) << "ms\n";
+        }
 
         double dt = timer_step.get_elapsed_seconds();
 

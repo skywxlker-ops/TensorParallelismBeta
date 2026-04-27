@@ -17,6 +17,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include <nvtx3/nvToolsExt.h>
+
 using namespace OwnTensor;
 
 // ---------------------------------------------------------------------------
@@ -92,14 +94,14 @@ public:
         saved_v_chunks_[0].shape(), saved_v_chunks_[0].opts());
 
     // dkv_rotater: pipelined rotation of dK/dV (only for LB path)
-    std::unique_ptr<AlltoAllRingRotator> dkv_rotater;
+    std::unique_ptr<RingRotatorBase> dkv_rotater;
     // Batch accumulators for non-LB path (old Phase 3 approach)
     std::vector<Tensor> grad_k_accum;
     std::vector<Tensor> grad_v_accum;
 
     bool lb_active_bwd = load_balance_;
     if (lb_active_bwd) {
-      dkv_rotater = std::make_unique<AlltoAllRingRotator>(pg_);
+      dkv_rotater = create_rotator();
     } else {
       grad_k_accum.resize(world_size_);
       grad_v_accum.resize(world_size_);
@@ -270,7 +272,9 @@ public:
         cudaMemcpyAsync(grad_kv_send.data<float>() + k_numel_send,
                         grad_value.data<float>(), k_bytes_send,
                         cudaMemcpyDeviceToDevice, 0);
+        nvtxRangePushA("CP.bwd.LB.ring.exchange_buffers");
         dkv_rotater->exchange_buffers(grad_kv_send);
+        nvtxRangePop();
       } else {
         // Non-LB path: batch accumulate per step, single sendrecv at end
         if (!step_skipped && grad_k_step.is_valid()) {
@@ -284,7 +288,9 @@ public:
     if (lb_active_bwd) {
       // LB: receive completed travelling accumulator
       int64_t k_numel = grad_key.numel();
+      nvtxRangePushA("CP.bwd.LB.post_loop.next_buffer");
       Tensor final_grad_kv = dkv_rotater->next_buffer();
+      nvtxRangePop();
       Tensor final_flat = final_grad_kv.flatten();
       grad_key =
           final_flat.narrow(0, 0, k_numel).reshape(grad_key.shape());
@@ -323,10 +329,12 @@ public:
                                         saved_k_chunks_[0].opts());
 
         // Single packed sendrecv
+        nvtxRangePushA("CP.bwd.nonLB.sendrecv");
         pg_->sendrecv(send_buf.data<float>(), recv_buf.data<float>(),
                       source_rank, dest_rank,
                       static_cast<size_t>(k_numel * 2),
                       saved_k_chunks_[0].dtype(), true);
+        nvtxRangePop();
 
         // Unpack and accumulate
         Tensor recv_k = recv_buf.narrow(0, 0, k_numel).reshape(
@@ -353,9 +361,15 @@ public:
       return {grad_q, grad_key, grad_value};
     }
 
+    nvtxRangePushA("CP.bwd.unshard.all_gather.grad_q");
     Tensor full_grad_q = all_gather_along_seq(grad_q);
+    nvtxRangePop();
+    nvtxRangePushA("CP.bwd.unshard.all_gather.grad_k");
     Tensor full_grad_k = all_gather_along_seq(grad_key);
+    nvtxRangePop();
+    nvtxRangePushA("CP.bwd.unshard.all_gather.grad_v");
     Tensor full_grad_v = all_gather_along_seq(grad_value);
+    nvtxRangePop();
 
     bool lb_active = load_balance_;
     if (lb_active) {

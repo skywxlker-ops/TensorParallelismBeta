@@ -569,7 +569,7 @@ GPT2_TP_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+GPT2_TP_TEST_OBJS = $(GPT2_TP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 gpt2_tp_test: $(GPT2_TP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: gpt2_tp_test_exec"
@@ -584,13 +584,28 @@ GPT2_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_TEST_OBJS = $(GPT2_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+GPT2_TEST_OBJS = $(GPT2_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 gpt2_test: $(GPT2_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating example executable: gpt2_test_exec"
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_test_exec $(GPT2_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] GPT2 Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./gpt2_test_exec \n"
+
+GPT2_ATTN_TEST_SRCS = \
+    gpt2_attn_fixed2.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+GPT2_ATTN_TEST_OBJS = $(GPT2_ATTN_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
+
+gpt2_attn_test: $(GPT2_ATTN_TEST_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating example executable: gpt2_attn_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o gpt2_attn_test_exec $(GPT2_ATTN_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] GPT2 Attention	 Test build complete."
+	@echo "\nRun with: mpirun -np 2 ./gpt2_attn_test_exec \n"
 
 
 GPT2_TP_MLP_TEST_SRCS = \
@@ -603,7 +618,7 @@ GPT2_TP_MLP_TEST_SRCS = \
 # GPT2_CUDA_SRCS = dnn/dist_grad_norm_kernels.cu
 # CUDA_OBJS = $(GPT2_CUDA_SRCS:.cu = .o)
 
-GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o  Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o
+GPT2_TP_MLP_TEST_OBJS = $(GPT2_TP_MLP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o
 
 
 gpt2_tp_mlp_test: $(GPT2_TP_MLP_TEST_OBJS) $(TENSOR_LIB_A)
@@ -642,7 +657,7 @@ GPT2_CP_TEST_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/FusedAdamWKernel.o dnn/VectorizedLayerNormKernel.o dnn/FusedLayerNormOp.o dnn/AttentionKernels.o Tensor-Implementations/src/Kernels/cuda/MultiTensorKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ) $(CP_ATTN_FWD_KERNEL_OBJ) $(CP_ATTN_BWD_KERNEL_OBJ)
+GPT2_CP_TEST_OBJS = $(GPT2_CP_TEST_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/FusedAdamWKernel.o dnn/VectorizedLayerNormKernel.o dnn/FusedLayerNormOp.o dnn/AttentionKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ) $(CP_ATTN_FWD_KERNEL_OBJ) $(CP_ATTN_BWD_KERNEL_OBJ)
 
 gpt2_cp_test: $(GPT2_CP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: gpt2_cp_test_exec"
@@ -771,6 +786,22 @@ test_fused_adamw: $(FUSED_ADAMW_TEST_OBJS) $(TENSOR_LIB_A)
 	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o test_fused_adamw_exec $(FUSED_ADAMW_TEST_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
 	@echo "[SUCCESS] Fused AdamW test build complete."
 	@echo "\nRun with: ./test_fused_adamw_exec \n"
+
+# Isolated AdamW Benchmark (single GPU, no MPI/NCCL)
+BENCH_ADAMW_SRCS = \
+    gpt2_cp_test/bench_adamw_isolated.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+BENCH_ADAMW_OBJS = $(BENCH_ADAMW_SRCS:.cpp=.o) $(CUDA_OBJS)
+
+bench_adamw_isolated: $(BENCH_ADAMW_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: bench_adamw_isolated_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o bench_adamw_isolated_exec $(BENCH_ADAMW_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Isolated AdamW Benchmark build complete."
+	@echo "\nRun with: ./bench_adamw_isolated_exec \n"
 
 # Vectorized LayerNorm test (single GPU, no MPI)
 VECT_LN_TEST_SRCS = \

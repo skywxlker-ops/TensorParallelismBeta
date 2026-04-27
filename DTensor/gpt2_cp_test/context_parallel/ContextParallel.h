@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+#include <nvtx3/nvToolsExt.h>
+
 using namespace OwnTensor;
 using namespace OwnTensor::dnn;
 
@@ -186,7 +188,9 @@ public:
         cudaMemcpyAsync(kv_send_buf.data<float>() + k_numel,
                         curr_v.data<float>(), k_bytes, cudaMemcpyDeviceToDevice,
                         0);
+        nvtxRangePushA("CP.fwd.ring.exchange_buffers");
         kv_rotator->exchange_buffers(kv_send_buf);
+        nvtxRangePop();
       }
 
       // Step 3: Determine causal behavior for this ring step
@@ -298,9 +302,11 @@ public:
       Shape gathered_shape({{static_cast<int64_t>(total_count)}});
       Tensor gathered_flat = Tensor::empty(gathered_shape, merged_out.opts());
 
+      nvtxRangePushA("CP.fwd.unshard.all_gather");
       pg_->all_gather(merged_out.data<float>(), gathered_flat.data<float>(),
                       local_count, merged_out.dtype(),
                       true); // sync
+      nvtxRangePop();
 
       int64_t T_full = T_local * world_size_;
       Shape full_shape({{B, H, T_full, D}});

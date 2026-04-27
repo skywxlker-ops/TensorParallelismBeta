@@ -44,6 +44,7 @@ __device__ __forceinline__ void cp_async_wait_group() {
     asm volatile("cp.async.wait_group %0;\n" :: "n"(N) : "memory");
 }
 
+
 __device__ __forceinline__ void cp_async_l16(void* smem_ptr, const void* global_ptr, bool pred) {
     uint32_t smem_addr = __cvta_generic_to_shared(smem_ptr);
     asm volatile(
@@ -55,6 +56,8 @@ __device__ __forceinline__ void cp_async_l16(void* smem_ptr, const void* global_
         "}\n"
         : : "r"(smem_addr), "l"(global_ptr), "r"((int)pred) : "memory");
 }
+
+
 
 // ============================================================================
 // Scalar forward kernel (CP)
@@ -794,6 +797,7 @@ void mem_efficient_attn_forward_tc(
 
     // Use TI sm89 Ada kernel when inputs match its assumptions:
     //   T_q == T_k && q_offset == 0 && k_offset == 0
+    #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
     if (T_q == T_k && q_offset == 0 && k_offset == 0 &&
         ::OwnTensor::cuda::get_arch() == ::OwnTensor::cuda::ArchFamily::Ada) {
         ::OwnTensor::fused_attn_forward_tc_sm89_cuda(
@@ -802,7 +806,8 @@ void mem_efficient_attn_forward_tc(
             dropout_p, dropout_mask, grid_y, 0);
         return;
     }
-
+    #endif
+    
     ::OwnTensor::cp::launch_fwd_tc_kernel(
         query, key, value, output, lse,
         T_q, T_k, hd, q_offset, k_offset,

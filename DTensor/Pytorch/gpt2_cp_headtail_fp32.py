@@ -60,7 +60,7 @@ set_rotate_method("alltoall")  # PyTorch 2.11 changed default to "allgather" but
 # ══════════════════════════════════════════════════════════════════════════════
 # Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-nsys_report = True
+nsys_report = False
 
 @dataclass
 class GPTConfig:
@@ -378,7 +378,8 @@ class GPT(nn.Module):
             lr=learning_rate,
             betas=(0.9, 0.95),
             eps=1e-8,
-            fused=False
+            fused=False,
+            foreach=True,
         )
 
 
@@ -444,11 +445,12 @@ num_params         = sum(p.numel() for p in model.parameters())
 num_params_per_gpu = num_params
 
 max_steps    = 6768
+warmup_steps = max_steps // 10
+
 
 if nsys_report == True:
-    max_steps = 1
-
-warmup_steps = max_steps // 10
+    max_steps = 2
+    warmup_steps = 0
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
@@ -476,7 +478,7 @@ if master_process:
     print(f"  SDPA Backend:   EFFICIENT_ATTENTION (FP32, auto-selected)")
     print(f"  CP API:         torch.distributed.tensor.experimental.context_parallel")
 
-optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr)
+optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
