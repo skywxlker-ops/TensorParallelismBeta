@@ -60,7 +60,7 @@ set_rotate_method("alltoall")  # PyTorch 2.11 changed default to "allgather" but
 # ══════════════════════════════════════════════════════════════════════════════
 # Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-nsys_report = True
+nsys_report = False
 
 @dataclass
 class GPTConfig:
@@ -436,7 +436,7 @@ total_batch_size = 524288
 assert T % cp_world_size == 0, f"T={T} must be divisible by cp_world_size={cp_world_size}"
 grad_accum_steps = total_batch_size // (B * T)
 
-config = GPTConfig(vocab_size=50304, n_layer=3, n_head=6, weight_tying=False)
+config = GPTConfig(vocab_size=50304, n_layer=12, n_head=12, weight_tying=False)
 
 model = GPT(config)
 model.to(device)
