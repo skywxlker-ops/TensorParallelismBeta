@@ -112,8 +112,26 @@ inline SDPAResult sdpa_fused_forward(Tensor &q, Tensor &k, Tensor &v,
   //                           static_cast<int>(D), scale, is_causal, q_offset,
   //                           k_offset);
 
-  OwnTensor::cp::cuda::mem_efficient_attn_forward_tc(
-    Q_ptr, K_ptr, V_ptr, O_ptr, LSE_ptr,
+  // Extract strides from Q/K/V so the kernel can read non-contiguous inputs
+  // (e.g. transposed views) without an upstream contiguous copy.
+  // Output `out` and `lse` are freshly allocated above and packed; their
+  // strides are derived from shape.
+  const auto& qs = q.stride().strides;
+  const auto& ks = k.stride().strides;
+  const auto& vs = v.stride().strides;
+  // [B, H, T, D] → strides[0]=B, strides[1]=H, strides[2]=T, strides[3]=D(=1).
+  const int64_t q_sB = qs[0], q_sH = qs[1], q_sM = qs[2];
+  const int64_t k_sB = ks[0], k_sH = ks[1], k_sM = ks[2];
+  const int64_t v_sB = vs[0], v_sH = vs[1], v_sM = vs[2];
+  const int64_t o_sB = H * T_q * D, o_sH = T_q * D, o_sM = D;
+  const int64_t lse_sB = H * T_q,  lse_sH = T_q;
+
+  OwnTensor::cp::cuda::mem_efficient_attn_forward_tc_strided(
+    Q_ptr, q_sB, q_sM, q_sH,
+    K_ptr, k_sB, k_sM, k_sH,
+    V_ptr, v_sB, v_sM, v_sH,
+    O_ptr, o_sB, o_sM, o_sH,
+    LSE_ptr, lse_sB, lse_sH,
     B, H, T_q, T_k, q_offset, k_offset, D,
     is_causal, 0.0f, nullptr);
 
@@ -175,10 +193,35 @@ sdpa_fused_backward(const Tensor &q, const Tensor &k, const Tensor &v,
   //     static_cast<int>(T_q), static_cast<int>(T_k), static_cast<int>(D), scale,
   //     is_causal, q_offset, k_offset);
 
-  OwnTensor::cp::cuda::mem_efficient_attn_backward(
-    q.data<float>(), k.data<float>(), v.data<float>(),
-    out.data<float>(), grad_out.data<float>(), merged_lse.data<float>(),
-    dQ.data<float>(), dK.data<float>(), dV.data<float>(), D_buf.data<float>(),
+  // Extract input strides; outputs (dQ, dK, dV) are freshly allocated above
+  // and contiguous so their strides are the contiguous ones.
+  const auto& qs   = q.stride().strides;
+  const auto& ks   = k.stride().strides;
+  const auto& vs   = v.stride().strides;
+  const auto& os   = out.stride().strides;
+  const auto& dos_ = grad_out.stride().strides;
+  // [B, H, T, D] → strides[0]=B, strides[1]=H, strides[2]=T, strides[3]=D(=1).
+  const int64_t q_sB = qs[0],  q_sH = qs[1],  q_sM = qs[2];
+  const int64_t k_sB = ks[0],  k_sH = ks[1],  k_sM = ks[2];
+  const int64_t v_sB = vs[0],  v_sH = vs[1],  v_sM = vs[2];
+  const int64_t o_sB = os[0],  o_sH = os[1],  o_sM = os[2];
+  const int64_t do_sB = dos_[0], do_sH = dos_[1], do_sM = dos_[2];
+  const int64_t lse_sB = H * T_q,  lse_sH = T_q;
+  const int64_t dq_sB = H * T_q * D, dq_sH = T_q * D, dq_sM = D;
+  const int64_t dk_sB = H * T_k * D, dk_sH = T_k * D, dk_sM = D;
+  const int64_t dv_sB = H * T_k * D, dv_sH = T_k * D, dv_sM = D;
+
+  OwnTensor::cp::cuda::mem_efficient_attn_backward_strided(
+    q.data<float>(), q_sB, q_sM, q_sH,
+    k.data<float>(), k_sB, k_sM, k_sH,
+    v.data<float>(), v_sB, v_sM, v_sH,
+    out.data<float>(),       o_sB,  o_sM,  o_sH,
+    grad_out.data<float>(),  do_sB, do_sM, do_sH,
+    merged_lse.data<float>(), lse_sB, lse_sH,
+    dQ.data<float>(), dq_sB, dq_sM, dq_sH,
+    dK.data<float>(), dk_sB, dk_sM, dk_sH,
+    dV.data<float>(), dv_sB, dv_sM, dv_sH,
+    D_buf.data<float>(),
     B, H, T_q, T_k, q_offset, k_offset, D,
     is_causal);
 
@@ -186,3 +229,4 @@ sdpa_fused_backward(const Tensor &q, const Tensor &k, const Tensor &v,
 
   return {dQ, dK, dV};
 }
+

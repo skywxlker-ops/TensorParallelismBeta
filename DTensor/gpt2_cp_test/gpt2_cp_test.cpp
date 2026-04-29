@@ -510,7 +510,7 @@ int main(int argc, char **argv) {
     std::cout << "=== GPT-2 Context Parallel Training Script ===" << std::endl;
   }
 
-  bool nysys_report = true;
+  bool nsys_report = true;
   //nsys profile -t cuda -o my_report ./path/to/your_executable
   //nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report /path/to/my_report.nsys-rep
   //nsys profile -t cuda -o my_report ./your_executable && nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report my_report.nsys-rep
@@ -520,7 +520,7 @@ int main(int argc, char **argv) {
     config.batch_size = 8;
     config.context_length = 1024;
     config.vocab_size = 50304;
-    config.n_embd = 768;
+    config.n_embd = 768;    
     config.n_layers = 12;
     config.n_heads = 12;
     config.weight_tying = false;
@@ -577,7 +577,7 @@ int main(int argc, char **argv) {
     int max_steps    = (static_cast<int>(num_params) / global_batch ) * 5;
     // int max_steps = 6768;
     int warmup_steps = max_steps / 10;
-    if (nysys_report)
+    if (nsys_report)
     {
       max_steps = 2;
       warmup_steps = 0;

@@ -10,6 +10,7 @@
 
 #include "gpt2_cp_test/context_parallel/ContextParallelBackward.h"
 #include "gpt2_cp_test/context_parallel/FusedSDPAOp.h"
+#include "gpt2_cp_test/context_parallel/KVPackKernel.h"
 #include "gpt2_cp_test/context_parallel/RingRotator.h"
 #include "gpt2_cp_test/context_parallel/SDPAMerger.h"
 #include "gpt2_cp_test/context_parallel/SDPAOp.h"
@@ -104,13 +105,15 @@ public:
     // explosion is resolved. Non-causal uses LB when load_balance_=true.
     bool lb_active = load_balance_ && !is_causal_;
 
-    // Input Q, K, V may be non-contiguous (e.g. from autograd::transpose
-    // which swaps strides without copying data). Make contiguous BEFORE
-    // sharding so that make_shards_inplace_axis produces views with
-    // standard decreasing strides. Without this, the post-shard
-    // contiguous() call produces wrong data because it cannot handle
-    // non-standard stride ordering (stride[1] < stride[2]).
-    Tensor q_work = autograd::contiguous(q);
+    // Q can stay strided: sdpa_fused_forward / sdpa_fused_backward read
+    // strides explicitly. Q is never sent across NCCL.
+    //
+    // K, V are kept contiguous: the ring rotator's cudaMemcpyAsync below
+    // does a flat byte copy, and the strided pack-kernel alternative
+    // (KVPackKernel) was measured slower than cudaMemcpyAsync on the
+    // contig hot path. Keep contig here; pack kernel infrastructure remains
+    // available for future use cases where source is genuinely strided.
+    Tensor q_work = pre_sharded ? q : autograd::contiguous(q);
     Tensor k_work = autograd::contiguous(k);
     Tensor v_work = autograd::contiguous(v);
 

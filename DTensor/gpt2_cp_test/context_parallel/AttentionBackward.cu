@@ -10,6 +10,10 @@
 // Adds separate T_q / T_k plus q_offset / k_offset for CP ring-attention
 // sub-chunks.
 //
+// Strided inputs supported: per-tensor B/M/H strides for Q/K/V/dO/O/LSE and
+// dQ/dK/dV. Last dim of each tensor must have stride=1. D is an internal
+// scratch buffer, kept flat as [BH, T_q].
+//
 // Key behavior change from TI:
 //   - exp11's final dQ write is atomicAdd (not assignment). Callers must zero
 //     dQ once before the first ring iteration; subsequent iterations accumulate.
@@ -22,7 +26,7 @@ namespace OwnTensor {
 namespace cp {
 
 // ============================================================================
-// CP backward params
+// CP backward params with per-tensor strides (last dim stride=1)
 // ============================================================================
 
 struct CPBwdParams {
@@ -30,15 +34,27 @@ struct CPBwdParams {
     const float* K;
     const float* V;
     const float* dO;
+    const float* O;     // forward output, used by precompute_D
     const float* LSE;
-    const float* D;
+    const float* D;     // flat scratch [BH * T_q], stride = T_q per (b,h)
     float* dQ;
     float* dK;
     float* dV;
+    int B;
+    int nh;
     int T_q;
     int T_k;
     int q_offset;
     int k_offset;
+    int64_t q_strideB,  q_strideM,  q_strideH;
+    int64_t k_strideB,  k_strideM,  k_strideH;
+    int64_t v_strideB,  v_strideM,  v_strideH;
+    int64_t do_strideB, do_strideM, do_strideH;
+    int64_t o_strideB,  o_strideM,  o_strideH;
+    int64_t lse_strideB, lse_strideH;
+    int64_t dq_strideB, dq_strideM, dq_strideH;
+    int64_t dk_strideB, dk_strideM, dk_strideH;
+    int64_t dv_strideB, dv_strideM, dv_strideH;
     float scale;
     bool is_causal;
 };
@@ -65,11 +81,7 @@ __inline__ __device__ float bwd_warp_sum(float val) {
 // ============================================================================
 
 template<int HeadDim>
-__global__ void mem_efficient_bwd_precompute_D(
-    const float* __restrict__ dO,
-    const float* __restrict__ O,
-    float* __restrict__ D,
-    int T_q)
+__global__ void mem_efficient_bwd_precompute_D(CPBwdParams params)
 {
     constexpr int LocalN = (HeadDim + BWD_WARP_SZ - 1) / BWD_WARP_SZ;
 
@@ -77,15 +89,21 @@ __global__ void mem_efficient_bwd_precompute_D(
     const int warp_id = threadIdx.x / BWD_WARP_SZ;
     const int lane_id = threadIdx.x % BWD_WARP_SZ;
 
+    const int b = bh / params.nh;
+    const int h = bh - b * params.nh;
+
     const int base_row = blockIdx.x * (BWD_BLOCK_M_D * 2) + warp_id * 2;
     const int row0     = base_row;
     const int row1     = base_row + 1;
-    const bool v0      = (row0 < T_q);
-    const bool v1      = (row1 < T_q);
+    const bool v0      = (row0 < params.T_q);
+    const bool v1      = (row1 < params.T_q);
 
-    const long long bh_base = (long long)bh * T_q * HeadDim;
-    const long long off0    = bh_base + (long long)row0 * HeadDim;
-    const long long off1    = bh_base + (long long)row1 * HeadDim;
+    const float* dO_bh = params.dO + b * params.do_strideB + h * params.do_strideH;
+    const float* O_bh  = params.O  + b * params.o_strideB  + h * params.o_strideH;
+    float*       D_bh  = (float*)params.D + (long long)bh * params.T_q;
+
+    const int64_t do_sM = params.do_strideM;
+    const int64_t o_sM  = params.o_strideM;
 
     float sum0 = 0.f, sum1 = 0.f;
 
@@ -93,8 +111,8 @@ __global__ void mem_efficient_bwd_precompute_D(
     for (int i = 0; i < LocalN; ++i) {
         const int k = lane_id + i * BWD_WARP_SZ;
         if (k < HeadDim) {
-            if (v0) sum0 += __ldg(&dO[off0 + k]) * __ldg(&O[off0 + k]);
-            if (v1) sum1 += __ldg(&dO[off1 + k]) * __ldg(&O[off1 + k]);
+            if (v0) sum0 += __ldg(&dO_bh[(long long)row0 * do_sM + k]) * __ldg(&O_bh[(long long)row0 * o_sM + k]);
+            if (v1) sum1 += __ldg(&dO_bh[(long long)row1 * do_sM + k]) * __ldg(&O_bh[(long long)row1 * o_sM + k]);
         }
     }
 
@@ -102,8 +120,8 @@ __global__ void mem_efficient_bwd_precompute_D(
     sum1 = bwd_warp_sum(sum1);
 
     if (lane_id == 0) {
-        if (v0) D[(long long)bh * T_q + row0] = sum0;
-        if (v1) D[(long long)bh * T_q + row1] = sum1;
+        if (v0) D_bh[row0] = sum0;
+        if (v1) D_bh[row1] = sum1;
     }
 }
 
@@ -135,26 +153,33 @@ __global__ void mem_efficient_bwd_unified_kernel_exp7(CPBwdParams params)
     const int warp_id = threadIdx.x / BWD_WARP_SZ;
     const int lane_id = threadIdx.x % BWD_WARP_SZ;
 
-    const long long q_bh_off = (long long)bh * params.T_q * HeadDim;
-    const long long k_bh_off = (long long)bh * params.T_k * HeadDim;
-    const long long q_bh_T   = (long long)bh * params.T_q;
+    const int b = bh / params.nh;
+    const int h = bh - b * params.nh;
 
-    const float* Q_bh   = params.Q   + q_bh_off;
-    const float* K_bh   = params.K   + k_bh_off;
-    const float* V_bh   = params.V   + k_bh_off;
-    const float* dO_bh  = params.dO  + q_bh_off;
-    const float* LSE_bh = params.LSE + q_bh_T;
-    const float* D_bh   = params.D   + q_bh_T;
-    float*       dQ_bh  = params.dQ  + q_bh_off;
-    float*       dK_bh  = params.dK  + k_bh_off;
-    float*       dV_bh  = params.dV  + k_bh_off;
+    const float* Q_bh   = params.Q   + b * params.q_strideB   + h * params.q_strideH;
+    const float* K_bh   = params.K   + b * params.k_strideB   + h * params.k_strideH;
+    const float* V_bh   = params.V   + b * params.v_strideB   + h * params.v_strideH;
+    const float* dO_bh  = params.dO  + b * params.do_strideB  + h * params.do_strideH;
+    const float* LSE_bh = params.LSE + b * params.lse_strideB + h * params.lse_strideH;
+    const float* D_bh   = params.D   + (long long)bh * params.T_q;
+    float*       dQ_bh  = params.dQ  + b * params.dq_strideB  + h * params.dq_strideH;
+    float*       dK_bh  = params.dK  + b * params.dk_strideB  + h * params.dk_strideH;
+    float*       dV_bh  = params.dV  + b * params.dv_strideB  + h * params.dv_strideH;
+
+    const int64_t q_sM  = params.q_strideM;
+    const int64_t k_sM  = params.k_strideM;
+    const int64_t v_sM  = params.v_strideM;
+    const int64_t do_sM = params.do_strideM;
+    const int64_t dq_sM = params.dq_strideM;
+    const int64_t dk_sM = params.dk_strideM;
+    const int64_t dv_sM = params.dv_strideM;
 
     // Zero this block's dK/dV tile rows (T_k-indexed)
     for (int idx = threadIdx.x; idx < tile_size * HeadDim; idx += blockDim.x) {
         const int r = idx / HeadDim;
         const int k = idx % HeadDim;
-        dK_bh[(tile_start + r) * HeadDim + k] = 0.f;
-        dV_bh[(tile_start + r) * HeadDim + k] = 0.f;
+        dK_bh[(tile_start + r) * dk_sM + k] = 0.f;
+        dV_bh[(tile_start + r) * dv_sM + k] = 0.f;
     }
 
     // K/V smem load
@@ -162,8 +187,8 @@ __global__ void mem_efficient_bwd_unified_kernel_exp7(CPBwdParams params)
         const int r     = idx / HeadDim;
         const int k     = idx % HeadDim;
         const int g_row = tile_start + r;
-        Ks[r * HD_PAD + k] = (g_row < params.T_k) ? K_bh[g_row * HeadDim + k] : 0.f;
-        Vs[r * HD_PAD + k] = (g_row < params.T_k) ? V_bh[g_row * HeadDim + k] : 0.f;
+        Ks[r * HD_PAD + k] = (g_row < params.T_k) ? K_bh[(long long)g_row * k_sM + k] : 0.f;
+        Vs[r * HD_PAD + k] = (g_row < params.T_k) ? V_bh[(long long)g_row * v_sM + k] : 0.f;
     }
 
     __syncthreads();
@@ -187,8 +212,8 @@ __global__ void mem_efficient_bwd_unified_kernel_exp7(CPBwdParams params)
             const int k = lane_id + i * BWD_WARP_SZ;
             float qv = 0.0f, dov = 0.0f;
             if (valid && k < HeadDim) {
-                qv  = Q_bh [qi * HeadDim + k];
-                dov = dO_bh[qi * HeadDim + k];
+                qv  = Q_bh [(long long)qi * q_sM  + k];
+                dov = dO_bh[(long long)qi * do_sM + k];
             }
             q_local[i]  = qv;
             do_local[i] = dov;
@@ -228,9 +253,9 @@ __global__ void mem_efficient_bwd_unified_kernel_exp7(CPBwdParams params)
                 const int k = lane_id + i * BWD_WARP_SZ;
                 if (k < HeadDim) {
                     dq_local[i] += ds * params.scale * Ks[j * HD_PAD + k];
-                    atomicAdd(&dK_bh[(tile_start + j) * HeadDim + k],
+                    atomicAdd(&dK_bh[(long long)(tile_start + j) * dk_sM + k],
                               ds * params.scale * q_local[i]);
-                    atomicAdd(&dV_bh[(tile_start + j) * HeadDim + k],
+                    atomicAdd(&dV_bh[(long long)(tile_start + j) * dv_sM + k],
                               p  *                do_local[i]);
                 }
             }
@@ -241,7 +266,7 @@ __global__ void mem_efficient_bwd_unified_kernel_exp7(CPBwdParams params)
             for (int i = 0; i < LocalN; ++i) {
                 const int k = lane_id + i * BWD_WARP_SZ;
                 if (k < HeadDim)
-                    atomicAdd(&dQ_bh[qi * HeadDim + k], dq_local[i]);
+                    atomicAdd(&dQ_bh[(long long)qi * dq_sM + k], dq_local[i]);
             }
         }
     }
@@ -293,27 +318,34 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
     const int warp_id = threadIdx.x / BWD_WARP_SZ;
     const int chunk   = warp_id % HD_CHUNKS;
 
-    const long long q_bh_off = (long long)bh * params.T_q * HeadDim;
-    const long long k_bh_off = (long long)bh * params.T_k * HeadDim;
-    const long long q_bh_T   = (long long)bh * params.T_q;
+    const int b = bh / params.nh;
+    const int h = bh - b * params.nh;
 
-    const float* Q_bh   = params.Q   + q_bh_off;
-    const float* K_bh   = params.K   + k_bh_off;
-    const float* V_bh   = params.V   + k_bh_off;
-    const float* dO_bh  = params.dO  + q_bh_off;
-    const float* LSE_bh = params.LSE + q_bh_T;
-    const float* D_bh   = params.D   + q_bh_T;
-    float*       dQ_bh  = params.dQ  + q_bh_off;
-    float*       dK_bh  = params.dK  + k_bh_off;
-    float*       dV_bh  = params.dV  + k_bh_off;
+    const float* Q_bh   = params.Q   + b * params.q_strideB   + h * params.q_strideH;
+    const float* K_bh   = params.K   + b * params.k_strideB   + h * params.k_strideH;
+    const float* V_bh   = params.V   + b * params.v_strideB   + h * params.v_strideH;
+    const float* dO_bh  = params.dO  + b * params.do_strideB  + h * params.do_strideH;
+    const float* LSE_bh = params.LSE + b * params.lse_strideB + h * params.lse_strideH;
+    const float* D_bh   = params.D   + (long long)bh * params.T_q;
+    float*       dQ_bh  = params.dQ  + b * params.dq_strideB  + h * params.dq_strideH;
+    float*       dK_bh  = params.dK  + b * params.dk_strideB  + h * params.dk_strideH;
+    float*       dV_bh  = params.dV  + b * params.dv_strideB  + h * params.dv_strideH;
+
+    const int64_t q_sM  = params.q_strideM;
+    const int64_t k_sM  = params.k_strideM;
+    const int64_t v_sM  = params.v_strideM;
+    const int64_t do_sM = params.do_strideM;
+    const int64_t dq_sM = params.dq_strideM;
+    const int64_t dk_sM = params.dk_strideM;
+    const int64_t dv_sM = params.dv_strideM;
 
     // Load Q, dO, LSE, D for this Q-tile into smem
     for (int idx = threadIdx.x; idx < BM_WMMA * HeadDim; idx += blockDim.x) {
         const int r  = idx / HeadDim, k = idx % HeadDim;
         const int qi = q_tile_start + r;
         const bool vq = (qi < params.T_q);
-        Q_sm [r * HD_PAD + k] = vq ? Q_bh [qi * HeadDim + k] : 0.f;
-        dO_sm[r * HD_PAD + k] = vq ? dO_bh[qi * HeadDim + k] : 0.f;
+        Q_sm [r * HD_PAD + k] = vq ? Q_bh [(long long)qi * q_sM  + k] : 0.f;
+        dO_sm[r * HD_PAD + k] = vq ? dO_bh[(long long)qi * do_sM + k] : 0.f;
     }
     if (threadIdx.x < BM_WMMA) {
         const int qi  = q_tile_start + threadIdx.x;
@@ -346,8 +378,8 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
         for (int idx = threadIdx.x; idx < BlockN * HeadDim; idx += blockDim.x) {
             const int r = idx / HeadDim, k = idx % HeadDim;
             const int g = kv_base + r;
-            Ks[r * HD_PAD + k] = (g < params.T_k) ? K_bh[g * HeadDim + k] : 0.f;
-            Vs[r * HD_PAD + k] = (g < params.T_k) ? V_bh[g * HeadDim + k] : 0.f;
+            Ks[r * HD_PAD + k] = (g < params.T_k) ? K_bh[(long long)g * k_sM + k] : 0.f;
+            Vs[r * HD_PAD + k] = (g < params.T_k) ? V_bh[(long long)g * v_sM + k] : 0.f;
         }
         __syncthreads();
 
@@ -440,7 +472,7 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
         // atomicAdd dK tile -> global
         for (int idx = threadIdx.x; idx < kv_tile_size * HeadDim; idx += blockDim.x) {
             const int r = idx / HeadDim, k = idx % HeadDim;
-            atomicAdd(&dK_bh[(kv_base + r) * HeadDim + k], tile_st[r * HeadDim + k]);
+            atomicAdd(&dK_bh[(long long)(kv_base + r) * dk_sM + k], tile_st[r * HeadDim + k]);
         }
         __syncthreads();
 
@@ -468,7 +500,7 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
         // atomicAdd dV tile -> global
         for (int idx = threadIdx.x; idx < kv_tile_size * HeadDim; idx += blockDim.x) {
             const int r = idx / HeadDim, k = idx % HeadDim;
-            atomicAdd(&dV_bh[(kv_base + r) * HeadDim + k], tile_st[r * HeadDim + k]);
+            atomicAdd(&dV_bh[(long long)(kv_base + r) * dv_sM + k], tile_st[r * HeadDim + k]);
         }
     }
 
@@ -483,7 +515,7 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
 
     for (int idx = threadIdx.x; idx < tile_size * HeadDim; idx += blockDim.x) {
         const int r = idx / HeadDim, k = idx % HeadDim;
-        atomicAdd(&dQ_bh[(q_tile_start + r) * HeadDim + k], tile_st[r * HeadDim + k]);
+        atomicAdd(&dQ_bh[(long long)(q_tile_start + r) * dq_sM + k], tile_st[r * HeadDim + k]);
     }
 }
 
@@ -493,10 +525,25 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
 
 namespace cuda {
 
-void mem_efficient_attn_backward(
-    const float* query, const float* key, const float* value,
-    const float* output, const float* grad_output, const float* lse,
-    float* grad_query, float* grad_key, float* grad_value,
+// Strided variant.
+//
+// Note: dQ/dK/dV must be cleared by the caller (the kernel atomicAdds into them)
+// — we still issue cudaMemsetAsync inside the launch macro for parity with the
+// previous behavior. The memset assumes the dQ/dK/dV buffers are CONTIGUOUS
+// (it zeroes B*nh*T*hd consecutive floats). For strided dQ/dK/dV (views into
+// a larger tensor), the caller must zero them out themselves and we cannot
+// blindly memset. Since the typical CP path allocates dQ/dK/dV via Tensor::empty
+// (contiguous), the default memset path is correct in practice.
+void mem_efficient_attn_backward_strided(
+    const float* query, int64_t q_strideB, int64_t q_strideM, int64_t q_strideH,
+    const float* key,   int64_t k_strideB, int64_t k_strideM, int64_t k_strideH,
+    const float* value, int64_t v_strideB, int64_t v_strideM, int64_t v_strideH,
+    const float* output,    int64_t o_strideB,  int64_t o_strideM,  int64_t o_strideH,
+    const float* grad_output, int64_t do_strideB, int64_t do_strideM, int64_t do_strideH,
+    const float* lse,   int64_t lse_strideB, int64_t lse_strideH,
+    float* grad_query,  int64_t dq_strideB, int64_t dq_strideM, int64_t dq_strideH,
+    float* grad_key,    int64_t dk_strideB, int64_t dk_strideM, int64_t dk_strideH,
+    float* grad_value,  int64_t dv_strideB, int64_t dv_strideM, int64_t dv_strideH,
     float* D_buf,
     int64_t B, int64_t nh,
     int64_t T_q, int64_t T_k,
@@ -504,27 +551,37 @@ void mem_efficient_attn_backward(
     int64_t hd,
     bool is_causal)
 {
-    float scale = 1.0f / sqrtf(static_cast<float>(hd));
     const int BH = (int)(B * nh);
     dim3 block_cfg(BWD_NUM_THREADS);
-
     dim3 grid_D(((int)T_q + (BWD_BLOCK_M_D * 2) - 1) / (BWD_BLOCK_M_D * 2), BH);
 
-    CPBwdParams params;
-    params.Q         = query;
-    params.K         = key;
-    params.V         = value;
-    params.dO        = grad_output;
-    params.LSE       = lse;
-    params.D         = D_buf;
-    params.dQ        = grad_query;
-    params.dK        = grad_key;
-    params.dV        = grad_value;
-    params.T_q       = (int)T_q;
-    params.T_k       = (int)T_k;
-    params.q_offset  = q_offset;
-    params.k_offset  = k_offset;
-    params.scale     = scale;
+    ::OwnTensor::cp::CPBwdParams params{};
+    params.Q  = query;
+    params.K  = key;
+    params.V  = value;
+    params.dO = grad_output;
+    params.O  = output;
+    params.LSE = lse;
+    params.D   = D_buf;
+    params.dQ  = grad_query;
+    params.dK  = grad_key;
+    params.dV  = grad_value;
+    params.B  = (int)B;
+    params.nh = (int)nh;
+    params.T_q = (int)T_q;
+    params.T_k = (int)T_k;
+    params.q_offset = q_offset;
+    params.k_offset = k_offset;
+    params.q_strideB  = q_strideB;  params.q_strideM  = q_strideM;  params.q_strideH  = q_strideH;
+    params.k_strideB  = k_strideB;  params.k_strideM  = k_strideM;  params.k_strideH  = k_strideH;
+    params.v_strideB  = v_strideB;  params.v_strideM  = v_strideM;  params.v_strideH  = v_strideH;
+    params.do_strideB = do_strideB; params.do_strideM = do_strideM; params.do_strideH = do_strideH;
+    params.o_strideB  = o_strideB;  params.o_strideM  = o_strideM;  params.o_strideH  = o_strideH;
+    params.lse_strideB = lse_strideB; params.lse_strideH = lse_strideH;
+    params.dq_strideB = dq_strideB; params.dq_strideM = dq_strideM; params.dq_strideH = dq_strideH;
+    params.dk_strideB = dk_strideB; params.dk_strideM = dk_strideM; params.dk_strideH = dk_strideH;
+    params.dv_strideB = dv_strideB; params.dv_strideM = dv_strideM; params.dv_strideH = dv_strideH;
+    params.scale = 1.0f / sqrtf(static_cast<float>(hd));
     params.is_causal = is_causal;
 
     // exp7: scalar KV-outer fallback (any HeadDim, uses atomicAdd for dQ/dK/dV)
@@ -534,8 +591,7 @@ void mem_efficient_attn_backward(
         const size_t shmem_exp7 = 2ULL * block_n7 * ((HD) + 1) * sizeof(float); \
         const int kv_tiles7 = ((int)T_k + block_n7 - 1) / block_n7; \
         dim3 grid_bwd7(kv_tiles7, BH); \
-        ::OwnTensor::cp::mem_efficient_bwd_precompute_D<HD><<<grid_D, block_cfg>>>( \
-            grad_output, output, D_buf, (int)T_q); \
+        ::OwnTensor::cp::mem_efficient_bwd_precompute_D<HD><<<grid_D, block_cfg>>>(params); \
         if (is_causal) { \
             ::OwnTensor::cp::mem_efficient_bwd_unified_kernel_exp7<HD, true> \
                 <<<grid_bwd7, block_cfg, shmem_exp7>>>(params); \
@@ -546,6 +602,8 @@ void mem_efficient_attn_backward(
     } while (0)
 
     // exp11: Q-tile-centric, TF32 WMMA, dQ/dK/dV via atomicAdd (HD%16==0)
+    // The memset zeroes the contiguous backing storage of dQ/dK/dV; if these
+    // were ever strided views of a larger tensor, the caller would need to zero.
     #define LAUNCH_CP_BWD_EXP11(HD) \
     do { \
         constexpr int BN11 = 16, BM11 = 16; \
@@ -569,8 +627,7 @@ void mem_efficient_attn_backward(
         cudaMemsetAsync(params.dQ, 0, (size_t)BH * (int)T_q * (HD) * sizeof(float), stream); \
         cudaMemsetAsync(params.dK, 0, (size_t)BH * (int)T_k * (HD) * sizeof(float), stream); \
         cudaMemsetAsync(params.dV, 0, (size_t)BH * (int)T_k * (HD) * sizeof(float), stream); \
-        ::OwnTensor::cp::mem_efficient_bwd_precompute_D<HD><<<grid_D, block_cfg>>>( \
-            grad_output, output, D_buf, (int)T_q); \
+        ::OwnTensor::cp::mem_efficient_bwd_precompute_D<HD><<<grid_D, block_cfg>>>(params); \
         if (is_causal) { \
             ::OwnTensor::cp::mem_efficient_bwd_unified_kernel_exp11<HD, true> \
                 <<<grid_q11, block_cfg, shmem11>>>(params); \
@@ -601,6 +658,33 @@ void mem_efficient_attn_backward(
     }
     #undef LAUNCH_CP_BWD_EXP7
     #undef LAUNCH_CP_BWD_EXP11
+}
+
+// Backward-compat: contiguous wrapper.
+void mem_efficient_attn_backward(
+    const float* query, const float* key, const float* value,
+    const float* output, const float* grad_output, const float* lse,
+    float* grad_query, float* grad_key, float* grad_value,
+    float* D_buf,
+    int64_t B, int64_t nh,
+    int64_t T_q, int64_t T_k,
+    int q_offset, int k_offset,
+    int64_t hd,
+    bool is_causal)
+{
+    mem_efficient_attn_backward_strided(
+        query, nh * T_q * hd, hd, T_q * hd,
+        key,   nh * T_k * hd, hd, T_k * hd,
+        value, nh * T_k * hd, hd, T_k * hd,
+        output,      nh * T_q * hd, hd, T_q * hd,
+        grad_output, nh * T_q * hd, hd, T_q * hd,
+        lse,   nh * T_q,            T_q,
+        grad_query, nh * T_q * hd, hd, T_q * hd,
+        grad_key,   nh * T_k * hd, hd, T_k * hd,
+        grad_value, nh * T_k * hd, hd, T_k * hd,
+        D_buf,
+        B, nh, T_q, T_k, q_offset, k_offset, hd,
+        is_causal);
 }
 
 } // namespace cuda
