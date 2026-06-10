@@ -63,4 +63,4 @@ DTensor/TP_MLP_Training_logs/
 DTensor/examples/gpt2_tp_embedding_loss_test
 DTensor/examples/gpt2_tp_embedding_loss_test
 *.zip
-DTensor/Tensor-Implementations*
+DTensor/Tensor-Implementations-*
