@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -277,6 +278,19 @@ public:
     Tensor merged = autograd::reshape(autograd::transpose(attn_out, 1, 2),
                                       Shape({{B, T_out, C}}));
 
+    // Raw SDPA output (block 0), before c_proj + residual — isolates the
+    // attention operator from the projection. Dumps once when DUMP_FWD set.
+    static bool raw_dumped = false;
+    if (std::getenv("DUMP_FWD") && !raw_dumped) {
+      Tensor host = merged.to_cpu().contiguous();
+      std::ofstream bf("fwd_sdpa_cpp.bin", std::ios::binary);
+      bf.write(reinterpret_cast<const char *>(host.data<float>()),
+               host.numel() * sizeof(float));
+      bf.close();
+      raw_dumped = true;
+      std::cout << "[DUMP_FWD] saved fwd_sdpa_cpp.bin (raw attn output, pre-c_proj)\n";
+    }
+
     Tensor proj = c_proj.forward(merged);
     return autograd::add(x, proj);
   }
@@ -441,43 +455,100 @@ public:
     emit_nvtx("GPT_Forward");
     int64_t T = idx.shape().dims[1];
 
+    // Pre-embedding sequence shard (training path only).
+    // After this branch: idx_to_embed is [B, T/n] and pos_idx is [1, T/n].
+    // For generation / cp_unshard: keep full T and 0..T-1 position range.
+    Tensor idx_to_embed = idx;
+    Tensor pos_idx;
+    if (!config.cp_unshard && !is_in_generation_mode_) {
+      Tensor empty_y;
+      ShardedInputs sh = shard_sequence_pre_embed(
+          idx, empty_y, T, world_size_, rank_, config.load_balancing,
+          idx.device());
+      idx_to_embed = sh.idx_local;
+      pos_idx = sh.pos_local;
+    } else {
+      Tensor pos_flat =
+          autograd::reshape(cached_pos_, Shape({{config.context_length}}));
+      Tensor pos_sliced = pos_flat.slice(0, T);
+      pos_idx = autograd::reshape(pos_sliced, Shape({{1, T}}));
+    }
+
+    // [SHARD CHECK] one-time: confirm the local sequence length fed into the
+    // embeddings/blocks. Expect T/world_size (sharded) unless cp_unshard=true.
+    static bool printed_shard_check = false;
+    if (std::getenv("CP_DEBUG_SHAPES") && rank_ == 0 && !printed_shard_check &&
+        !is_in_generation_mode_) {
+      printed_shard_check = true;
+      std::cout << "[SHARD CHECK] global T=" << T
+                << " world_size=" << world_size_
+                << " cp_unshard=" << (config.cp_unshard ? "true" : "false")
+                << " -> local seqlen fed to blocks = "
+                << idx_to_embed.shape().dims[1]
+                << " (expect " << (config.cp_unshard ? T : T / world_size_)
+                << ")\n";
+    }
+
     // Token embedding
     timer_tok_emb.start_timer();
-    Tensor tok_emb = wte.forward(idx);
+    Tensor tok_emb = wte.forward(idx_to_embed);
     t_tok_emb += timer_tok_emb.get_elapsed_seconds();
 
     // Position embedding
     timer_pos_emb.start_timer();
-    Tensor pos_flat =
-        autograd::reshape(cached_pos_, Shape({{config.context_length}}));
-    Tensor pos_sliced = pos_flat.slice(0, T);
-    Tensor pos_idx = autograd::reshape(pos_sliced, Shape({{1, T}}));
     Tensor pos_emb = wpe.forward(pos_idx);
     t_pos_emb += timer_pos_emb.get_elapsed_seconds();
 
-    Tensor x = autograd::add(tok_emb, pos_emb); // [B, T, C]
+    Tensor x = autograd::add(tok_emb, pos_emb); // [B, T/n, C] or [B, T, C]
 
-    // Shard sequence to local chunk once — all layers operate on [B, T/n, C].
-    // Skipped during generation (is_in_generation_mode_=true) so full T is kept.
-    if (!config.cp_unshard && !is_in_generation_mode_) {
-      std::vector<Tensor> x_chunks =
-          x.make_shards_inplace_axis(static_cast<size_t>(world_size_), 1);
-      x = autograd::contiguous(x_chunks[rank_]); // [B, T/n, C] — autograd-aware
+    // Env-gated forward-parity dump (ws=1 base-model check). Captures ONCE on
+    // rank 0. Raw [B,T,C] row-major binary, matches PT's .npy layout.
+    static bool fwd_dumped = false;
+    bool dump_fwd = std::getenv("DUMP_FWD") && !fwd_dumped && rank_ == 0 &&
+                    !is_in_generation_mode_;
+    auto dump_act = [](const std::string &fn, const Tensor &t) {
+      Tensor host = t.to_cpu().contiguous();
+      std::ofstream bf(fn, std::ios::binary);
+      bf.write(reinterpret_cast<const char *>(host.data<float>()),
+               host.numel() * sizeof(float));
+      bf.close();
+    };
+    if (dump_fwd) {
+      dump_act("fwd_emb_cpp.bin", x);
+      Tensor ie = idx_to_embed.to_cpu();
+      Tensor pe = pos_idx.to_cpu();
+      const int64_t *iep = ie.data<int64_t>();
+      const int64_t *pep = pe.data<int64_t>();
+      std::cout << "[DUMP_FWD] embedded idx[:8]=";
+      for (int i = 0; i < 8; ++i) std::cout << iep[i] << " ";
+      std::cout << " pos[:8]=";
+      for (int i = 0; i < 8 && i < pe.numel(); ++i) std::cout << pep[i] << " ";
+      std::cout << "\n";
     }
 
     // Attention + MLP blocks
     for (int i = 0; i < config.n_layers; ++i) {
       x = attn_blocks[i]->forward(x);
       // attn timing tracked inside CPAttention; collect at end
+      if (dump_fwd && i == 0)
+        dump_act("fwd_blk0attn_cpp.bin", x);  // post-attention, pre-MLP
 
       timer_mlp.start_timer();
       x = mlp_blocks[i]->forward(x);
       t_mlp += timer_mlp.get_elapsed_seconds();
+      if (dump_fwd && i == 0)
+        dump_act("fwd_blk0_cpp.bin", x);
     }
 
     // Final LayerNorm
     timer_ln_f.start_timer();
     x = dnn::fused_layer_norm(x, ln_f.weight, ln_f.bias, config.n_embd, ln_f.eps);
+    if (dump_fwd) {
+      dump_act("fwd_lnf_cpp.bin", x);
+      fwd_dumped = true;
+      std::cout << "[DUMP_FWD] saved fwd_emb_cpp.bin, fwd_blk0_cpp.bin, "
+                   "fwd_lnf_cpp.bin\n";
+    }
     t_ln_f += timer_ln_f.get_elapsed_seconds();
 
     // LM Head
@@ -510,31 +581,44 @@ int main(int argc, char **argv) {
     std::cout << "=== GPT-2 Context Parallel Training Script ===" << std::endl;
   }
 
-  bool nsys_report = true;
+  bool nsys_report = false;
   //nsys profile -t cuda -o my_report ./path/to/your_executable
   //nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report /path/to/my_report.nsys-rep
   //nsys profile -t cuda -o my_report ./your_executable && nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report my_report.nsys-rep
   try {
+
+    bool fourtyfour = false;
+
     // Configuration
     GPTConfig config;
-    config.batch_size = 8;
+    config.batch_size = 4;
     config.context_length = 1024;
     config.vocab_size = 50304;
-    config.n_embd = 768;    
-    config.n_layers = 12;
-    config.n_heads = 12;
+    config.n_embd = fourtyfour?384:768;
+    config.n_layers = fourtyfour?3:12;
+    config.n_heads = fourtyfour?6:12;
     config.weight_tying = false;
     config.load_balancing = true;
 
     const int B = static_cast<int>(config.batch_size);
     const int T = static_cast<int>(config.context_length);
-    const int global_batch = 524288;
+    const int global_batch = fourtyfour?65536:524288;
     const int grad_accum_steps = global_batch / (B * T);
 
     const float max_lr = 6e-4f;
     const float min_lr = max_lr * 0.1f;
     const int VAL_FREQ = 100;
     const int TOK_GEN_FREQ = 100;
+
+    // int max_steps    = (static_cast<int>(num_params) / global_batch ) * 5;
+    int max_steps = fourtyfour?6768:1555;
+    int warmup_steps = max_steps / 10;
+    if (nsys_report)
+    {
+      max_steps = 1;
+      warmup_steps = 0;
+    }
+    // const int max_steps    = 1;
 
     if (rank == 0) {
       std::cout << "Configuration:\n";
@@ -574,15 +658,135 @@ int main(int argc, char **argv) {
       num_params_gpu += p.numel();
     }
 
-    int max_steps    = (static_cast<int>(num_params) / global_batch ) * 5;
-    // int max_steps = 6768;
-    int warmup_steps = max_steps / 10;
-    if (nsys_report)
-    {
-      max_steps = 2;
-      warmup_steps = 0;
+    // ----- INIT WEIGHT LOAD (PT parity, opt-in via LOAD_INIT_WEIGHTS env) -----
+    // Loads init_weights.bin written by gpt2_cp_headtail_fp32.py so the C++
+    // model starts from identical weights as the PyTorch baseline.
+    if (const char *init_path = std::getenv("LOAD_INIT_WEIGHTS")) {
+      if (rank == 0) {
+        std::cout << "Loading init weights from " << init_path << " ...\n";
+      }
+      std::ifstream wf(init_path, std::ios::binary);
+      if (!wf) {
+        throw std::runtime_error(std::string("cannot open ") + init_path);
+      }
+      TensorOptions cpu_opts = TensorOptions().with_dtype(Dtype::Float32);
+      for (size_t i = 0; i < params.size(); ++i) {
+        Tensor &p = params[i];
+        int64_t n = p.numel();
+        Tensor host_t = Tensor::empty(p.shape(), cpu_opts);
+        wf.read(reinterpret_cast<char *>(host_t.data<float>()),
+                static_cast<std::streamsize>(n) * sizeof(float));
+        if (!wf) {
+          throw std::runtime_error("short read on init_weights.bin at param " +
+                                   std::to_string(i));
+        }
+        Tensor dev_t = host_t.to(device);
+        p.copy_(dev_t);
+      }
+      if (rank == 0) {
+        std::cout << "Loaded init weights from " << init_path << "\n";
+      }
     }
-    // const int max_steps    = 1;
+    // ----- END INIT WEIGHT LOAD -----
+
+    // ----- NAME-AWARE INIT WEIGHT LOAD (LOAD_INIT_NAMED) -----
+    // The positional LOAD_INIT_WEIGHTS above SCRAMBLES weights: C++
+    // model.parameters() order (blocks first, then wte/wpe/ln_f) differs from
+    // PT named_parameters() order (wte/wpe/ln_f first). This loader matches by
+    // NAME and transposes Linear weights (PT [out,in] -> C++ [in,out]).
+    if (const char *named_path = std::getenv("LOAD_INIT_NAMED")) {
+      if (rank == 0)
+        std::cout << "Loading NAMED init weights from " << named_path << " ...\n";
+      std::ifstream wf(named_path, std::ios::binary);
+      if (!wf)
+        throw std::runtime_error(std::string("cannot open ") + named_path);
+      struct Rec { std::vector<int64_t> dims; std::vector<float> data; };
+      std::vector<std::pair<std::string, Rec>> recs;
+      while (wf.peek() != EOF) {
+        int32_t nlen = 0;
+        wf.read(reinterpret_cast<char *>(&nlen), 4);
+        if (!wf) break;
+        std::string name(static_cast<size_t>(nlen), '\0');
+        wf.read(&name[0], nlen);
+        int32_t ndim = 0;
+        wf.read(reinterpret_cast<char *>(&ndim), 4);
+        Rec rec;
+        int64_t numel = 1;
+        for (int d = 0; d < ndim; ++d) {
+          int64_t dd = 0;
+          wf.read(reinterpret_cast<char *>(&dd), 8);
+          rec.dims.push_back(dd);
+          numel *= dd;
+        }
+        rec.data.resize(static_cast<size_t>(numel));
+        wf.read(reinterpret_cast<char *>(rec.data.data()),
+                numel * static_cast<int64_t>(sizeof(float)));
+        recs.emplace_back(std::move(name), std::move(rec));
+      }
+      TensorOptions cpu_opts = TensorOptions().with_dtype(Dtype::Float32);
+      // needs_transpose MUST be decided by ROLE, not by shape: C++ Linear weights
+      // are [in,out], PyTorch's are [out,in], so every Linear weight needs a
+      // transpose on load. Shape-based detection silently FAILS for SQUARE Linear
+      // weights (e.g. attn.c_proj 768x768), where [out,in]==[in,out] dims match
+      // and a direct copy loads W instead of W^T. That single bug made attn.c_proj
+      // use W (not W^T), corrupting every block and producing the orthogonal
+      // step-0 gradients. Embeddings/LayerNorm/biases are NOT transposed.
+      auto load = [&](const std::string &name, Tensor &target,
+                      bool needs_transpose) {
+        Rec *r = nullptr;
+        for (auto &pr : recs)
+          if (pr.first == name) { r = &pr.second; break; }
+        if (!r) throw std::runtime_error("named init missing: " + name);
+        auto ts = target.shape().dims;
+        Tensor host = Tensor::empty(target.shape(), cpu_opts);
+        float *hp = host.data<float>();
+        if (needs_transpose) {
+          if (ts.size() != 2 || r->dims.size() != 2 ||
+              r->dims[0] != ts[1] || r->dims[1] != ts[0])
+            throw std::runtime_error("transpose shape mismatch for " + name);
+          int64_t a = r->dims[0], b = r->dims[1]; // PT [out,in] -> C++ [in,out]
+          for (int64_t i = 0; i < a; ++i)
+            for (int64_t j = 0; j < b; ++j)
+              hp[j * a + i] = r->data[i * b + j];
+        } else {
+          if (r->dims.size() != ts.size())
+            throw std::runtime_error("shape mismatch for " + name);
+          for (size_t k = 0; k < ts.size(); ++k)
+            if (r->dims[k] != ts[k])
+              throw std::runtime_error("shape mismatch for " + name);
+          std::memcpy(hp, r->data.data(), r->data.size() * sizeof(float));
+        }
+        Tensor dev = host.to(device);
+        target.copy_(dev);
+      };
+      load("transformer.wte.weight", model.wte.weight, false);
+      load("transformer.wpe.weight", model.wpe.weight, false);
+      load("transformer.ln_f.weight", model.ln_f.weight, false);
+      load("transformer.ln_f.bias", model.ln_f.bias, false);
+      for (int i = 0; i < config.n_layers; ++i) {
+        std::string b = "transformer.h." + std::to_string(i) + ".";
+        auto &a = *model.attn_blocks[i];
+        auto &m = *model.mlp_blocks[i];
+        load(b + "attn.ln.weight", a.ln.weight, false);
+        load(b + "attn.ln.bias", a.ln.bias, false);
+        load(b + "attn.c_attn.weight", a.c_attn.weight, true);
+        load(b + "attn.c_attn.bias", a.c_attn.bias, false);
+        load(b + "attn.c_proj.weight", a.c_proj.weight, true);
+        load(b + "attn.c_proj.bias", a.c_proj.bias, false);
+        load(b + "mlp.ln.weight", m.ln.weight, false);
+        load(b + "mlp.ln.bias", m.ln.bias, false);
+        load(b + "mlp.c_fc.weight", m.fc_up.weight, true);
+        load(b + "mlp.c_fc.bias", m.fc_up.bias, false);
+        load(b + "mlp.c_proj.weight", m.fc_down.weight, true);
+        load(b + "mlp.c_proj.bias", m.fc_down.bias, false);
+      }
+      load("lm_head.weight", model.lm_head->weight, true);
+      if (rank == 0)
+        std::cout << "Loaded NAMED init weights (" << recs.size()
+                  << " records)\n";
+    }
+    // ----- END NAME-AWARE INIT WEIGHT LOAD -----
+
 
     if (rank == 0) {
       std::cout << "Parameters: " << num_params << "\n";
@@ -675,6 +879,23 @@ int main(int argc, char **argv) {
 
     float val_loss_log = -1.0f;
 
+    // Auto-increment run index for the per-step debug dump file: scan existing
+    // debug_rank_lb{rank}_N.md files and pick the next free N. Each rank picks
+    // its own; aligns per-rank across reruns without overwriting.
+    int debug_run_idx = 0;
+    while (true) {
+      std::string probe = "debug_rank_lb" + std::to_string(rank) + "_" +
+                          std::to_string(debug_run_idx) + ".md";
+      std::ifstream check(probe);
+      if (!check.good()) break;
+      ++debug_run_idx;
+    }
+    std::string debug_path = "debug_rank_lb" + std::to_string(rank) + "_" +
+                             std::to_string(debug_run_idx) + ".md";
+    if (rank == 0) {
+      std::cout << "Debug dump file: " << debug_path << "\n";
+    }
+
     for (int step = 0; step < max_steps; ++step) {
       try {
         timer_step.start_timer();
@@ -693,10 +914,11 @@ int main(int argc, char **argv) {
             Tensor vlogits = model.forward(vx);
             Tensor vloss;
             if (!config.cp_unshard) {
-              // Sharded: vlogits is [B, T/n, vocab]; slice vy to local chunk.
-              std::vector<Tensor> vy_chunks =
-                  vy.make_shards_inplace_axis(static_cast<size_t>(world_size), 1);
-              Tensor vy_local = vy_chunks[rank].contiguous();
+              // Sharded: vlogits is [B, T/n, vocab]; produce matching vy slice
+              // using the same pre-embedding shard (contiguous or HeadTail).
+              ShardedInputs vsh = shard_sequence_pre_embed(
+                  vx, vy, T, world_size, rank, config.load_balancing, device);
+              Tensor vy_local = vsh.y_local;
               vloss = autograd::sparse_cross_entropy_loss(vlogits, vy_local);
               pg->all_reduce(vloss.data<float>(), vloss.data<float>(), 1,
                              Dtype::Float32, op_t::sum, true);
@@ -844,6 +1066,138 @@ int main(int argc, char **argv) {
             Tensor::full(Shape{{1}}, TensorOptions().with_device(device),
                          1.0f / static_cast<float>(grad_accum_steps));
 
+        // ── Step 0 gradient dump (for PyTorch parity check) — FULLY GATED ──
+        // Runs ONE micro-batch UNSCALED (grad_scale=1.0), dumps NAMED per-param
+        // grad L2 (transpose-invariant) to step0_grads_cpp.txt, then zeroes
+        // grads and resets the loader so the real accumulation below is
+        // byte-identical to a normal run. Only fires when DUMP_STEP0_GRADS set.
+        // Mirrors the exact loss path (incl. avg all_reduce) used in training.
+        if (step == 0 && std::getenv("DUMP_STEP0_GRADS")) {
+          Batch db = train_loader.next_batch();
+          Tensor dx = db.input.to(device).as_type(Dtype::Int64);
+          Tensor dy = db.target.to(device).as_type(Dtype::Int64);
+          if (rank == 0) {
+            Tensor dx_cpu = dx.to_cpu();
+            const int64_t *xp = dx_cpu.data<int64_t>();
+            std::cout << "[DUMP] first 8 token ids:";
+            for (int i = 0; i < 8; ++i) std::cout << " " << xp[i];
+            std::cout << "\n";
+          }
+          Tensor dlogits = model.forward(dx);
+          Tensor dloss;
+          if (!config.cp_unshard) {
+            ShardedInputs dsh = shard_sequence_pre_embed(
+                dx, dy, T, world_size, rank, config.load_balancing, device);
+            dloss = autograd::sparse_cross_entropy_loss(dlogits, dsh.y_local);
+            pg->all_reduce(dloss.data<float>(), dloss.data<float>(), 1,
+                           Dtype::Float32, op_t::avg, true);
+          } else {
+            dloss = autograd::sparse_cross_entropy_loss(dlogits, dy);
+          }
+          Tensor one_scale =
+              Tensor::full(Shape{{1}}, TensorOptions().with_device(device), 1.0f);
+          dloss.backward(&one_scale);
+
+          // AVG-all-reduce PARAM grads across ranks -> full-batch gradient
+          // (sum over all tokens), independent of how each impl splits tokens
+          // across ranks. Collective: ALL ranks participate. Required for a
+          // valid per-element compare vs PT (rank0 local shards differ).
+          for (auto &p : params) {
+            if (p.has_grad()) {
+              Tensor g = p.grad_view();
+              pg->all_reduce(g.data<float>(), g.data<float>(), g.numel(),
+                             Dtype::Float32, op_t::avg, true);
+            }
+          }
+
+          if (rank == 0) {
+            auto l2_of = [](const Tensor &t) -> double {
+              Tensor host = t.to_cpu();
+              const float *p = host.data<float>();
+              double s = 0.0;
+              for (int64_t i = 0; i < t.numel(); ++i)
+                s += static_cast<double>(p[i]) * static_cast<double>(p[i]);
+              return std::sqrt(s);
+            };
+            std::ofstream gf("step0_grads_cpp.txt");
+            // Full per-element raw blob (ALL params, PT [out,in] layout) for a
+            // complete backward cosine check. Linear weights are transposed from
+            // C++ [in,out] -> PT [out,in]; embeddings/LN/biases written as-is.
+            // Written in the SAME ORDER as the txt lines; compare reads names+
+            // numels from the txt and slices this blob sequentially.
+            std::ofstream gfr("step0_grads_cpp_raw.bin", std::ios::binary);
+            double total_l2 = 0.0;
+            auto emit_t = [&](const std::string &name, const Tensor &w,
+                              bool needs_transpose) {
+              if (w.has_grad()) {
+                Tensor g = w.grad_view();
+                double l2 = l2_of(g);
+                total_l2 += l2 * l2;
+                gf << name << " " << g.numel() << " " << std::scientific
+                   << std::setprecision(8) << l2 << "\n";
+                Tensor gc = needs_transpose ? g.transpose(0, 1).contiguous() : g;
+                Tensor host = gc.to_cpu().contiguous();
+                gfr.write(reinterpret_cast<const char *>(host.data<float>()),
+                          host.numel() * sizeof(float));
+              }
+            };
+            emit_t("transformer.wte.weight", model.wte.weight, false);
+            emit_t("transformer.wpe.weight", model.wpe.weight, false);
+            emit_t("transformer.ln_f.weight", model.ln_f.weight, false);
+            emit_t("transformer.ln_f.bias", model.ln_f.bias, false);
+            for (int i = 0; i < config.n_layers; ++i) {
+              std::string b = "transformer.h." + std::to_string(i) + ".";
+              auto &a = *model.attn_blocks[i];
+              auto &m = *model.mlp_blocks[i];
+              emit_t(b + "attn.ln.weight", a.ln.weight, false);
+              emit_t(b + "attn.ln.bias", a.ln.bias, false);
+              emit_t(b + "attn.c_attn.weight", a.c_attn.weight, true);
+              emit_t(b + "attn.c_attn.bias", a.c_attn.bias, false);
+              emit_t(b + "attn.c_proj.weight", a.c_proj.weight, true);
+              emit_t(b + "attn.c_proj.bias", a.c_proj.bias, false);
+              emit_t(b + "mlp.ln.weight", m.ln.weight, false);
+              emit_t(b + "mlp.ln.bias", m.ln.bias, false);
+              emit_t(b + "mlp.c_fc.weight", m.fc_up.weight, true);    // PT name: c_fc
+              emit_t(b + "mlp.c_fc.bias", m.fc_up.bias, false);
+              emit_t(b + "mlp.c_proj.weight", m.fc_down.weight, true); // PT name: c_proj
+              emit_t(b + "mlp.c_proj.bias", m.fc_down.bias, false);
+            }
+            emit_t("lm_head.weight", model.lm_head->weight, true);
+            gf << "# total_L2 " << std::scientific << std::setprecision(8)
+               << std::sqrt(total_l2) << "\n";
+            gf.close();
+            gfr.close();
+
+            // Raw grad arrays for cosine check. C++ stores Linear weight as
+            // [in,out]; transpose to PT's [out,in] before writing so element
+            // order matches PT's .npy. ln_f.weight is 1D -> no transpose.
+            auto write_raw = [](const std::string &fn, const Tensor &t) {
+              Tensor host = t.to_cpu().contiguous();
+              std::ofstream bf(fn, std::ios::binary);
+              bf.write(reinterpret_cast<const char *>(host.data<float>()),
+                       host.numel() * sizeof(float));
+              bf.close();
+            };
+            if (model.ln_f.weight.has_grad())
+              write_raw("step0_raw_lnf_cpp.bin", model.ln_f.weight.grad_view());
+            if (model.attn_blocks[0]->c_attn.weight.has_grad()) {
+              Tensor cg = model.attn_blocks[0]->c_attn.weight.grad_view();
+              Tensor cgT = cg.transpose(0, 1).contiguous(); // [in,out]->[out,in]
+              write_raw("step0_raw_c_attn_cpp.bin", cgT);
+            }
+            std::cout << "[STEP 0 GRAD DUMP] wrote step0_grads_cpp.txt total_L2="
+                      << std::scientific << std::setprecision(8)
+                      << std::sqrt(total_l2) << "\n";
+          }
+
+          // Restore state so the real accumulation below is unaffected.
+          optimizer.zero_grad();
+          if (model.config.weight_tying && model.lm_head->weight.has_grad())
+            model.lm_head->weight.zero_grad();
+          train_loader.reset();
+          model.reset_timing();
+        }
+
         for (int micro = 0; micro < grad_accum_steps; ++micro) {
           // Data
           timer_data.start_timer();
@@ -853,11 +1207,11 @@ int main(int argc, char **argv) {
           time_data += timer_data.get_elapsed_seconds();
 
           // Record autograd graph on step 0, micro 0, rank 0
-          std::unique_ptr<autograd::GraphRecordGuard> graph_guard;
-          if (step == 0 && micro == 0 && rank == 0) {
-              graph_guard =
-              std::make_unique<autograd::GraphRecordGuard>(true);
-          }
+          // std::unique_ptr<autograd::GraphRecordGuard> graph_guard;
+          // if (step == 0 && micro == 0 && rank == 0) {
+          //     graph_guard =
+          //     std::make_unique<autograd::GraphRecordGuard>(true);
+          // }
 
           // Forward
           timer_fwd.start_timer();
@@ -876,20 +1230,20 @@ int main(int argc, char **argv) {
           {
             emit_nvtx("Loss_Computation");
             if (!config.cp_unshard) {
-              // Sharded mode: logits is [B, T/n, vocab]; slice y to local chunk.
-              std::vector<Tensor> y_chunks =
-                  y_in.make_shards_inplace_axis(static_cast<size_t>(world_size), 1);
-              Tensor y_local = y_chunks[rank].contiguous();
+              // Sharded mode: logits is [B, T/n, vocab]; produce matching y
+              // slice via same pre-embedding shard (contiguous or HeadTail).
+              ShardedInputs sh_y = shard_sequence_pre_embed(
+                  x_in, y_in, T, world_size, rank, config.load_balancing,
+                  device);
+              Tensor y_local = sh_y.y_local;
               loss = autograd::sparse_cross_entropy_loss(logits, y_local);
-              // Scale loss by 1/world_size via autograd to keep backward graph intact.
-              // Raw * operator drops grad_fn; autograd::mul preserves it.
-              static Tensor rank_scale =
-                  Tensor::full(Shape{{1}}, TensorOptions().with_device(device),
-                               1.0f / static_cast<float>(world_size));
-              loss = autograd::mul(loss, rank_scale);
-              // All-reduce the scalar loss value across ranks for logging.
+              // NOTE: do NOT scale loss by 1/world_size here. The scaling
+              // shrinks every C++ gradient to 0.5x PT (for N=2), masking
+              // any LB-specific divergence and acting like an implicit half-LR.
+              // For the logged scalar we AVG (not SUM) the per-rank losses to
+              // recover the global mean loss.
               pg->all_reduce(loss.data<float>(), loss.data<float>(), 1,
-                             Dtype::Float32, op_t::sum, true);
+                             Dtype::Float32, op_t::avg, true);
             } else {
               // Unsharded mode: logits is [B, T, vocab]; all ranks identical.
               loss = autograd::sparse_cross_entropy_loss(logits, y_in);
@@ -910,7 +1264,6 @@ int main(int argc, char **argv) {
           // graph_guard.reset();
         }
 
-
         // Weight tying: accumulate lm_head grad into wte
         if (model.config.weight_tying && model.lm_head->weight.has_grad()) {
           Tensor lm_grad_T =
@@ -922,8 +1275,68 @@ int main(int argc, char **argv) {
         // Collect attention timing from all layers
         model.collect_attn_timing();
 
+        // ---- Parameter-gradient All-Reduce across CP ranks ----
+        // In Context Parallelism each rank computes param grads from ONLY its
+        // sequence shard (like data parallelism); the correct full-batch grad is
+        // the AVERAGE across ranks. The ring sums only the attention tensor grads
+        // (dQ/dK/dV) — the Linear/LayerNorm/embedding weight grads must be synced
+        // here, or the ranks become divergent replicas (grad-norm explosion).
+        //
+        // AVG (not SUM): the active loss is NOT scaled by 1/world_size, so each
+        // rank's mean-reduced shard loss -> AVG gives the global mean gradient.
+        // (Empirically verified: step-0 AVG-allreduce == single-GPU full-batch
+        // grad at cosine 1.0.) The old commented code used SUM under a stale
+        // "loss scaled by 1/world_size via rank_scale" assumption that the
+        // current code contradicts -> SUM would be world_size x too large.
+        //
+        // CP_NO_GRAD_ALLREDUCE=1 disables this to reproduce the (broken)
+        // divergent-replica run for A/B comparison.
+        const char *_cp_no_gar = std::getenv("CP_NO_GRAD_ALLREDUCE");
+        const bool _grad_ar_on =
+            (_cp_no_gar == nullptr) || (_cp_no_gar[0] == '0' && _cp_no_gar[1] == '\0');
+        if (world_size > 1 && _grad_ar_on) {
+          for (auto &p : params) {
+            if (p.has_grad()) {
+              Tensor g = p.grad_view();
+              pg->all_reduce(g.data<float>(), g.data<float>(), g.numel(),
+                             Dtype::Float32, op_t::avg, true);
+            }
+          }
+        }
+
+        // ---- Post-AR debug: dump param and grad values to rank-specific .md ----
+        // Mirrors PyTorch dump in Pytorch/gpt2_cp_headtail_fp32.py: writes the
+        // first 4 elements of the [:2, :2] block of block-0 c_attn.weight,
+        // c_attn.grad, fc_up.weight, fc_up.grad each step for cross-impl diff.
+        {
+          auto dump4 = [&](std::ofstream &f, const char *label, const Tensor &t) {
+            // C++ stores Linear weight as [in, out] (transpose of PT's [out, in]).
+            // To make this dump diffable line-by-line against PyTorch's
+            // (which prints [0,0], [0,1], [1,0], [1,1] of the [out, in] tensor),
+            // we read p[0], p[W], p[1], p[W+1] of the C++ [in, out] tensor —
+            // those are the same four scalars in PT's print order.
+            Tensor host = t.to_cpu();
+            const float *p = host.data<float>();
+            int64_t W = t.shape().dims[1]; // out_features (C++ layout)
+            f << "**" << label << "** (first 4): ["
+              << p[0] << ", " << p[W] << ", " << p[1] << ", " << p[W + 1] << "]\n";
+          };
+          std::ofstream df(debug_path, std::ios::app);
+          if (df) {
+            df << "\n## Step " << step << "\n";
+            auto &c_attn = model.attn_blocks[0]->c_attn;
+            auto &fc_up  = model.mlp_blocks[0]->fc_up;
+            dump4(df, "c_attn.weight", c_attn.weight);
+            if (c_attn.weight.has_grad())
+              dump4(df, "c_attn.grad", c_attn.weight.grad_view());
+            dump4(df, "c_fc.weight", fc_up.weight);
+            if (fc_up.weight.has_grad())
+              dump4(df, "c_fc.grad", fc_up.weight.grad_view());
+          }
+        }
+
         // TEMP DEBUGGING: Print parameter gradients to check cross-rank sync
-        // if ((grad_accum_steps + 1) % 1 == 0 && rank == 0) {
+        // if ((grad_accum_steps + 1) % 1 == 0 ) {
         //   for (int r = 0; r < world_size; ++r) {
         //     if (rank == r) {
         //       std::cout << "\n=== DEBUG: Parameter Gradients at Step " << step

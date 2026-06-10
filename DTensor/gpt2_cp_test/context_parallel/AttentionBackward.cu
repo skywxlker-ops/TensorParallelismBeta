@@ -26,6 +26,20 @@ namespace OwnTensor {
 namespace cp {
 
 // ============================================================================
+// TF32 round-to-nearest before WMMA (precision backport from latest TI kernel).
+// The default tf32 WMMA load truncates the fp32 mantissa toward zero (biased);
+// adding half a TF32 ULP before truncation yields round-to-nearest, removing the
+// systematic bias that compounds across layers and training steps. fp32 keeps 23
+// mantissa bits, tf32 keeps 10 -> drop 13 -> half-ULP = (1<<12) = 0x1000.
+// ============================================================================
+template <typename FragType>
+__device__ __forceinline__ void round_tf32_wmma_frag(FragType &frag) {
+#pragma unroll
+  for (int i = 0; i < (int)FragType::num_elements; i++)
+    reinterpret_cast<uint32_t &>(frag.x[i]) += 0x1000u;
+}
+
+// ============================================================================
 // CP backward params with per-tensor strides (last dim stride=1)
 // ============================================================================
 
@@ -402,6 +416,7 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
                 const int k_off = ks * 8;
                 wmma::load_matrix_sync(a_frag, src_sm + k_off, HD_PAD);
                 wmma::load_matrix_sync(b_frag, kv_sm  + k_off, HD_PAD);
+                round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
                 wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);
             }
             wmma::store_matrix_sync(dst_sm, acc_frag, BKN_PAD, wmma::mem_row_major);
@@ -449,9 +464,11 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
                 const float* b_ptr = Ks + chunk * 16;
                 wmma::load_matrix_sync(a_frag, ds_qd,              BKN_PAD);
                 wmma::load_matrix_sync(b_frag, b_ptr,              HD_PAD);
+                round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
                 wmma::mma_sync(dq_frag, a_frag, b_frag, dq_frag);
                 wmma::load_matrix_sync(a_frag, ds_qd + 8,          BKN_PAD);
                 wmma::load_matrix_sync(b_frag, b_ptr + 8 * HD_PAD, HD_PAD);
+                round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
                 wmma::mma_sync(dq_frag, a_frag, b_frag, dq_frag);
             } else {
                 wmma::fragment<wmma::accumulator, 16, 16, 8, float> dk_frag;
@@ -459,9 +476,11 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
                 const float* b_ptr = Q_sm + chunk * 16;
                 wmma::load_matrix_sync(a_frag, ds_kd,              BM_PAD);
                 wmma::load_matrix_sync(b_frag, b_ptr,              HD_PAD);
+                round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
                 wmma::mma_sync(dk_frag, a_frag, b_frag, dk_frag);
                 wmma::load_matrix_sync(a_frag, ds_kd + 8,          BM_PAD);
                 wmma::load_matrix_sync(b_frag, b_ptr + 8 * HD_PAD, HD_PAD);
+                round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
                 wmma::mma_sync(dk_frag, a_frag, b_frag, dk_frag);
                 wmma::store_matrix_sync(tile_st + chunk * 16, dk_frag,
                                         HeadDim, wmma::mem_row_major);
@@ -488,9 +507,11 @@ __global__ void mem_efficient_bwd_unified_kernel_exp11(CPBwdParams params)
             const float* b_ptr = dO_sm + chunk * 16;
             wmma::load_matrix_sync(a_frag, p_kd,              BM_PAD);
             wmma::load_matrix_sync(b_frag, b_ptr,             HD_PAD);
+            round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
             wmma::mma_sync(dv_frag, a_frag, b_frag, dv_frag);
             wmma::load_matrix_sync(a_frag, p_kd + 8,          BM_PAD);
             wmma::load_matrix_sync(b_frag, b_ptr + 8 * HD_PAD, HD_PAD);
+            round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
             wmma::mma_sync(dv_frag, a_frag, b_frag, dv_frag);
             wmma::store_matrix_sync(tile_st + chunk * 16, dv_frag,
                                     HeadDim, wmma::mem_row_major);

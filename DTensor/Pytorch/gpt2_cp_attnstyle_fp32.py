@@ -1,17 +1,29 @@
 """
-Context Parallel GPT-2 — Pure FP32, Native PyTorch Ring Attention + HeadTail LB
+Context Parallel GPT-2 — Pure FP32, _AttentionContextParallel ParallelStyle variant
 =================================================================================
-Uses torch.distributed.tensor.experimental.context_parallel to:
-  • Auto-patch F.scaled_dot_product_attention with ring attention
-  • Auto-shard sequence-dependent buffers across CP ranks
-  • HeadTail load balancing ENABLED (enable_load_balance = True)
-    - Pre-sharding: pairs head (early) + tail (late) chunks per rank
-    - Ring loop: round-robin sub-chunk selection (3 mask types: SKIP/CAUSAL/NOT_CAUSAL)
+This is an experimental fork of gpt2_cp_headtail_fp32.py that uses the
+private `_AttentionContextParallel` ParallelStyle instead of the legacy
+`context_parallel()` context manager.
 
-This is the HeadTail FP32 baseline for the C++ CP+HeadTail implementation.
+WHY: the legacy `context_parallel()` API installs the CP dispatcher only
+within its `with` block. When that block exits (before `loss.backward()`),
+the dispatcher is torn down — so the CP-specific backward function
+`_templated_ring_attention_backward` never runs, and cross-rank dK/dV
+contributions are silently dropped. The `_AttentionContextParallel`
+ParallelStyle uses input/output backward hooks to keep the CP dispatcher
+LIVE around the attention module's backward as well as its forward.
+
+KNOWN CAVEATS:
+- `_AttentionContextParallel` is a private API (underscore prefix)
+- It uses `placement = [Replicate()]` with `run_check=False` as a hack
+  (the local data is actually sequence-sharded but tagged as Replicate)
+- Only flash attention backend is officially supported (we'll let efficient
+  attention dispatch and hope for the best — should work in practice)
+- Buffer sharding (idx, pos, targets) must be done MANUALLY since we
+  removed the `with context_parallel(...)` block
 
 Launch:
-  torchrun --standalone --nnodes=1 --nproc-per-node=<N> gpt2_cp_headtail_fp32.py
+  torchrun --standalone --nnodes=1 --nproc-per-node=<N> gpt2_cp_attnstyle_fp32.py
 """
 
 import os
@@ -25,28 +37,24 @@ import torch.nn.functional as F
 import numpy as np
 from dataclasses import dataclass
 
-# Note: SDPBackend.MATH is incompatible with context_parallel (decomposes into
-# primitive ops that DTensor cannot dispatch). Let PyTorch auto-select fused backend.
 from torch.distributed.device_mesh import init_device_mesh
-from torch.distributed.tensor.experimental import context_parallel
-from torch.distributed.tensor.experimental._attention import _cp_options, set_rotate_method
+from torch.distributed.tensor.experimental._attention import (
+    _cp_options,
+    set_rotate_method,
+    _AttentionContextParallel,
+    _context_parallel_buffers,
+    _generate_round_robin_indices,
+)
+from torch.distributed.tensor.parallel import parallelize_module
 
-# ── Instrumentation: count CP backward + dispatcher invocations ────────────
-# Use the same import path the script already uses (line 32)
+# ── Instrumentation: count CP backward invocations ─────────────────────────
+# We expect the count to be NON-ZERO this time (the whole point of the
+# _AttentionContextParallel ParallelStyle is to make this fire).
 import torch.distributed.tensor.experimental._attention as _cp_attn
 
-# Probe what's actually available (helps debug)
-import os as _os
-if int(_os.environ.get('RANK', '0')) == 0:
-    _probe_attrs = [a for a in dir(_cp_attn) if not a.startswith('__')]
-    print(f"[PROBE] _cp_attn attributes: {sorted(_probe_attrs)}", flush=True)
-    print(f"[PROBE] _cp_attn.__file__ = {_cp_attn.__file__}", flush=True)
-
 _bwd_call_count = [0]
-_handler_op_counts = {}
-_patched = {"bwd": False, "handler": False}
+_patched = {"bwd": False}
 
-# Patch _templated_ring_attention_backward
 if hasattr(_cp_attn, '_templated_ring_attention_backward'):
     _original_bwd = _cp_attn._templated_ring_attention_backward
     def _instrumented_bwd(*args, **kwargs):
@@ -54,17 +62,6 @@ if hasattr(_cp_attn, '_templated_ring_attention_backward'):
         return _original_bwd(*args, **kwargs)
     _cp_attn._templated_ring_attention_backward = _instrumented_bwd
     _patched["bwd"] = True
-
-# Patch custom_ops dict if it exists (this catches the dispatcher path)
-if hasattr(_cp_attn, 'custom_ops') and hasattr(_cp_attn, '_sdpa_handler'):
-    _original_handler = _cp_attn._sdpa_handler
-    def _instrumented_handler(op_call, args, kwargs):
-        _name = str(op_call).split('.')[-2] if '.' in str(op_call) else str(op_call)
-        _handler_op_counts[_name] = _handler_op_counts.get(_name, 0) + 1
-        return _original_handler(op_call, args, kwargs)
-    for _k in list(_cp_attn.custom_ops.keys()):
-        _cp_attn.custom_ops[_k] = _instrumented_handler
-    _patched["handler"] = True
 
 import atexit
 def _print_counts():
@@ -75,11 +72,11 @@ def _print_counts():
         r = -1
     print(f"\n[INSTRUMENTATION rank={r}] patched: {_patched}", flush=True)
     print(f"[INSTRUMENTATION rank={r}] CP backward called {_bwd_call_count[0]} times", flush=True)
-    print(f"[INSTRUMENTATION rank={r}] SDPA handler op counts: {_handler_op_counts}", flush=True)
 atexit.register(_print_counts)
 
 # Env-gated: print the ACTUAL per-ring-step SDPA q/k/v shapes inside
-# _templated_ring_attention. CP_PRINT_SDPA_SHAPES=1 to enable.
+# _templated_ring_attention (the sub-chunking happens here, not in forward()).
+# CP_PRINT_SDPA_SHAPES=1 to enable; prints the first 12 op calls on each rank.
 if int(os.environ.get("CP_PRINT_SDPA_SHAPES", "0")) == 1 and hasattr(
     _cp_attn, "_templated_ring_attention"
 ):
@@ -118,19 +115,29 @@ cp_group      = torch.distributed.group.WORLD
 device         = torch.device("cuda", local_rank)
 master_process = (cp_rank == 0)
 
+# ── Optional: match C++ TF32 matmul precision (parity test only; env-gated) ──
+# Default PyTorch on Ampere uses fp32 matmul (allow_tf32=False). The C++ model
+# runs Linear GEMMs in TF32. Set PT_TF32=1 to make PT use TF32 too, isolating
+# whether the C++<->PT forward gap is just the TF32-vs-fp32 precision difference.
+if int(os.environ.get("PT_TF32", "0")) == 1:
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    if master_process:
+        print("[PT_TF32] allow_tf32=True (matching C++ TF32 matmul precision)")
+
 torch.manual_seed(1234)
 
 # ── Context Parallel mesh + options ──
 cp_mesh = init_device_mesh("cuda", (cp_world_size,))
-_cp_options.enable_load_balance = True    # HeadTail load balancing ENABLED
-_cp_options.convert_to_f32      = True    # FP32 accumulation in merger
-set_rotate_method("alltoall")  # PyTorch 2.11 changed default to "allgather" but backward is hardcoded ALL_TO_ALL; mismatch causes grad explosion
+_cp_options.enable_load_balance = True
+_cp_options.convert_to_f32      = True
+set_rotate_method("alltoall")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-nsys_report = False  # full 1555-step training run (set True for 1-step nsys profiling)
+nsys_report =False
 
 @dataclass
 class GPTConfig:
@@ -150,10 +157,8 @@ class CudaTimer:
     def __init__(self):
         self.start_event = torch.cuda.Event(enable_timing=True)
         self.end_event   = torch.cuda.Event(enable_timing=True)
-
     def start(self):
         self.start_event.record()
-
     def elapsed_seconds(self):
         self.end_event.record()
         torch.cuda.synchronize()
@@ -161,25 +166,16 @@ class CudaTimer:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Attention (native CP — SDPA auto-patched by context_parallel)
+# Attention — same as headtail variant, but no internal context_parallel block
 # ══════════════════════════════════════════════════════════════════════════════
 
 class CPAttention(nn.Module):
     """
-    Context-parallel causal self-attention — pure FP32 + HeadTail.
-
-    Uses PyTorch's native context_parallel() to auto-patch SDPA with
-    ring attention + HeadTail load balancing.
-
-    PyTorch's approach:
-      - HeadTail pre-sharding: pairs head+tail sequence chunks per rank
-      - Round-robin sub-chunking: selects which half of local Q/K/V to
-        compute at each ring step using 3 mask types (SKIP/CAUSAL/NOT_CAUSAL)
-
-    Our C++ approach (for comparison):
-      - HeadTail pre-sharding: same permutation pattern
-      - Global position masking: single mask, processes all KV at every step
+    Self-attention module. Forward takes a single tensor x (already sequence-
+    sharded by the caller). The _AttentionContextParallel ParallelStyle wraps
+    this module's forward/backward with DTensor and the CP dispatcher.
     """
+    _raw_dumped = False  # class-level: dump raw SDPA output once (block 0, DUMP_FWD)
 
     def __init__(self, config: GPTConfig):
         super().__init__()
@@ -208,6 +204,16 @@ class CPAttention(nn.Module):
         self.t_attn = 0.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Path A: all surrounding ops are plain local tensors (no DTensor
+        # weights). Only SDPA itself is wrapped as DTensor inside an active
+        # _enable_cp_dispatcher() so the CP handler runs ring forward AND
+        # registers the backward node that routes through
+        # _templated_ring_attention_backward.
+        from torch.distributed.tensor import DTensor as _DT, Replicate as _Rep
+        from torch.distributed.tensor.experimental._attention import (
+            _enable_cp_dispatcher,
+        )
+
         B, T_local, C = x.size()
 
         h   = self.ln(x)
@@ -215,72 +221,67 @@ class CPAttention(nn.Module):
         q, k, v = qkv.split(self.n_embd, dim=2)
 
         def to_heads(t):
-            return t.view(B, T_local, self.n_head, self.head_dim).transpose(1, 2)
+            return t.view(B, T_local, self.n_head, self.head_dim).transpose(1, 2).contiguous()
 
         q = to_heads(q)
         k = to_heads(k)
         v = to_heads(v)
 
-        # ── SDPA: auto-patched by context_parallel() with ring attention ──
-        # HeadTail pre-sharding + round-robin sub-chunking handled internally
-        # context_parallel intercepts at aten._scaled_dot_product_{flash,efficient,cudnn}
-        # SDPBackend.MATH is NOT supported (decomposes into DTensor-incompatible primitives)
         self._ts.record()
-        y = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True,
-        )
+
+        # Enter dispatcher manually for SDPA forward
+        cp_fwd_ctx = _enable_cp_dispatcher()
+        cp_fwd_ctx.__enter__()
+        try:
+            q_dt = _DT.from_local(q, cp_mesh, [_Rep()], run_check=False)
+            k_dt = _DT.from_local(k, cp_mesh, [_Rep()], run_check=False)
+            v_dt = _DT.from_local(v, cp_mesh, [_Rep()], run_check=False)
+            y_dt = F.scaled_dot_product_attention(
+                q_dt, k_dt, v_dt, attn_mask=None, dropout_p=0.0, is_causal=True,
+            )
+        finally:
+            cp_fwd_ctx.__exit__(None, None, None)
+
+        # Backward bracket: re-enter dispatcher when grad arrives at y_dt,
+        # exit after SDPA backward produces grad for q_dt. Register exit on
+        # q_dt only (k_dt/v_dt grads land in the same backward step; one
+        # exit is enough).
+        bwd_state = {'ctx': None}
+
+        def _enter_bwd(_grad):
+            bwd_state['ctx'] = _enable_cp_dispatcher()
+            bwd_state['ctx'].__enter__()
+            return None  # do not modify the grad
+
+        def _exit_bwd(_grad):
+            ctx = bwd_state['ctx']
+            if ctx is not None:
+                ctx.__exit__(None, None, None)
+                bwd_state['ctx'] = None
+            return None
+
+        # Only register hooks when grad is being tracked (skipped under no_grad
+        # / inference paths like validation).
+        if y_dt.requires_grad:
+            y_dt.register_hook(_enter_bwd)
+            q_dt.register_hook(_exit_bwd)
+
         self._te.record()
         torch.cuda.synchronize()
         self.t_attn += self._ts.elapsed_time(self._te) / 1000.0
 
-        # Optional first-call dump for C++ parity probe (gated by DUMP_CP_OUT=1).
-        # Fires once per process on the first SDPA call (block 0, step 0).
-        if int(os.environ.get('DUMP_CP_OUT', '0')) == 1 and not getattr(
-            CPAttention, '_cp_dump_done', False
-        ):
-            CPAttention._cp_dump_done = True
-            import glob as _g
-            _r = torch.distributed.get_rank()
-            _run_idx = len(_g.glob(f"block0_merged_out_rank{_r}_*.md"))
-            _path = f"block0_merged_out_rank{_r}_{_run_idx}.md"
-            with open(_path, 'w') as _f:
-                _f.write(f"shape={list(y.shape)}\n")
-                _flat = y.detach().to(torch.float32).contiguous().view(-1)[:16].tolist()
-                _f.write(f"first16: {_flat}\n")
-
-        # Optional backward parity probe: register one-shot hooks on y, q, k, v
-        # for each block. Hooks fire during the backward pass with dY/dQ/dK/dV
-        # at this block. Gated by DUMP_CP_OUT=1, fires once per (block, rank).
-        if int(os.environ.get('DUMP_CP_OUT', '0')) == 1:
-            _layer_idx = getattr(self, '_cp_layer_idx', -1)
-            _bw_done = getattr(self, '_cp_bw_dump_done', False)
-            if _layer_idx >= 0 and not _bw_done and y.requires_grad:
-                self._cp_bw_dump_done = True
-                _r = torch.distributed.get_rank()
-                _lyr = _layer_idx
-
-                def _make_hook(label, lyr=_lyr, r=_r):
-                    def _hook(grad):
-                        _path = f"block_bw_rank{r}.md"
-                        with open(_path, 'a') as _f:
-                            _f.write(f"\n## layer_idx={lyr} {label}\n")
-                            _f.write(f"{label} shape={list(grad.shape)}\n")
-                            _flat = grad.detach().to(torch.float32).contiguous().view(-1)[:16].tolist()
-                            _f.write(f"{label} first16: {_flat}\n")
-                        return None
-                    return _hook
-
-                y.register_hook(_make_hook("dY"))
-                if q.requires_grad:
-                    q.register_hook(_make_hook("dQ"))
-                if k.requires_grad:
-                    k.register_hook(_make_hook("dK"))
-                if v.requires_grad:
-                    v.register_hook(_make_hook("dV"))
-
-        # Merge heads -> [B, T_local, C]
+        # Back to local for trailing ops. to_local() is autograd-aware so
+        # grad will flow back into y_dt (firing _enter_bwd) before SDPA's
+        # backward node consumes it.
+        y = y_dt.to_local()
         y = y.transpose(1, 2).contiguous().view(B, T_local, C)
-
+        if int(os.environ.get("DUMP_FWD", "0")) == 1 and not CPAttention._raw_dumped:
+            # Raw SDPA output (block 0), before c_proj + residual — isolates the
+            # attention operator from the projection.
+            np.save("fwd_sdpa_pt.npy", y.detach().to(torch.float32).cpu().numpy())
+            CPAttention._raw_dumped = True
+            print("[DUMP_FWD] saved fwd_sdpa_pt.npy (raw attn output, pre-c_proj)",
+                  flush=True)
         return x + self.c_proj(y)
 
 
@@ -289,11 +290,9 @@ class CPAttention(nn.Module):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class MLP(nn.Module):
-
     def __init__(self, config: GPTConfig):
         super().__init__()
         residual_std = 0.02 / math.sqrt(2.0 * config.n_layer)
-
         self.ln     = nn.LayerNorm(config.n_embd)
         self.c_fc   = nn.Linear(config.n_embd, 4 * config.n_embd, bias=True)
         self.gelu   = nn.GELU(approximate="tanh")
@@ -317,7 +316,6 @@ class MLP(nn.Module):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class Block(nn.Module):
-
     def __init__(self, config: GPTConfig):
         super().__init__()
         self.attn = CPAttention(config)
@@ -334,11 +332,10 @@ class Block(nn.Module):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GPT Model
+# GPT Model — no `with context_parallel(...)` block. Sharding done by caller.
 # ══════════════════════════════════════════════════════════════════════════════
 
 class GPT(nn.Module):
-
     def __init__(self, config: GPTConfig):
         super().__init__()
         self.config = config
@@ -358,10 +355,8 @@ class GPT(nn.Module):
         })
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
         if config.weight_tying:
             self.lm_head.weight = self.transformer['wte'].weight
-
         self._init_weights()
 
     def _init_weights(self):
@@ -389,99 +384,128 @@ class GPT(nn.Module):
 
     def forward(self, idx: torch.Tensor, targets=None):
         """
-        Forward pass with native context_parallel + HeadTail load balancing.
-
-        The context_parallel() context manager:
-          1. Applies HeadTail rearrangement to buffers (pairing head+tail chunks)
-          2. Shards rearranged buffers along the sequence dim
-          3. Auto-patches F.scaled_dot_product_attention with ring attention
-          4. Restores buffers after the context exits
+        Forward pass. Takes full (idx, targets) of shape [B, T] and shards
+        them internally along the sequence dimension (HeadTail-rearranged if
+        LB is enabled). Same external contract as gpt2_cp_headtail_fp32.py.
         """
         B, T = idx.size()
 
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
-        pos = pos.unsqueeze(0).expand(B, -1).contiguous()
+        # Shard buffers along sequence dim. This replaces the legacy
+        # `with context_parallel(buffers=...)` block — same effect, but
+        # without installing the dispatcher (which would exit before
+        # backward). _AttentionContextParallel handles the dispatcher
+        # per-attention-module with backward hooks.
+        if _cp_options.enable_load_balance:
+            load_balance_indices = _generate_round_robin_indices(
+                seq_length=T,
+                cp_world_size=cp_world_size,
+                device=idx.device,
+            )
+        else:
+            load_balance_indices = None
+
+        # Global positions [B, T]; sharded through the SAME LB machinery as idx
+        # so each rank embeds the correct GLOBAL position of its local tokens.
+        # (Previously pos = arange(0, T_local) used LOCAL indices, which at ws>1
+        # gave every rank positions 0..T_local-1 -> wpe[T_local:] received zero
+        # gradient and second-half tokens got the wrong positional encoding.)
+        pos_full = torch.arange(0, T, dtype=torch.long, device=idx.device)
+        pos_full = pos_full.unsqueeze(0).expand(B, -1).contiguous()
+
+        buffers = [idx]
+        buffer_seq_dims = [1]
+        if targets is not None:
+            buffers.append(targets)
+            buffer_seq_dims.append(1)
+        buffers.append(pos_full)
+        buffer_seq_dims.append(1)
+
+        sharded = _context_parallel_buffers(
+            cp_mesh, buffers, buffer_seq_dims, load_balance_indices
+        )
+        idx = sharded[0]
+        if targets is not None:
+            targets = sharded[1]
+            pos = sharded[2]
+        else:
+            pos = sharded[1]
+
+        T_local = idx.size(1)
 
         _t  = torch.cuda.Event(enable_timing=True)
         _t2 = torch.cuda.Event(enable_timing=True)
 
-        # Build buffer list for context_parallel sharding
-        buffers = [idx, pos]
-        buffer_seq_dims = [1, 1]
-        no_restore = {idx, pos}
+        torch.cuda.nvtx.range_push("TokEmb")
+        _t.record()
+        tok_emb = self.transformer['wte'](idx)
+        _t2.record(); torch.cuda.synchronize()
+        self.t_tok_emb += _t.elapsed_time(_t2) / 1000.0
+        torch.cuda.nvtx.range_pop()
 
-        if targets is not None:
-            buffers.append(targets)
-            buffer_seq_dims.append(1)
-            no_restore.add(targets)
+        torch.cuda.nvtx.range_push("PosEmb")
+        _t.record()
+        pos_emb = self.transformer['wpe'](pos)
+        _t2.record(); torch.cuda.synchronize()
+        self.t_pos_emb += _t.elapsed_time(_t2) / 1000.0
+        torch.cuda.nvtx.range_pop()
 
-        with context_parallel(
-            cp_mesh,
-            buffers=buffers,
-            buffer_seq_dims=buffer_seq_dims,
-            no_restore_buffers=no_restore,
-        ):
-            # After entering context: idx, pos, targets are HeadTail-rearranged + sharded
+        x = tok_emb + pos_emb
 
-            # ---- token embedding ----
-            torch.cuda.nvtx.range_push("TokEmb")
-            _t.record()
-            tok_emb = self.transformer['wte'](idx)
-            _t2.record(); torch.cuda.synchronize()
-            self.t_tok_emb += _t.elapsed_time(_t2) / 1000.0
-            torch.cuda.nvtx.range_pop()
+        # Env-gated forward-parity dump (ws=1 base-model check). Captures ONCE.
+        _dump_fwd = int(os.environ.get("DUMP_FWD", "0")) == 1 and not getattr(
+            GPT, "_fwd_dumped", False)
+        if _dump_fwd:
+            np.save("fwd_emb_pt.npy", x.detach().to(torch.float32).cpu().numpy())
+            print(f"[DUMP_FWD] embedded idx[:8]={idx.reshape(-1)[:8].tolist()} "
+                  f"pos[:8]={pos.reshape(-1)[:8].tolist()}", flush=True)
 
-            # ---- positional embedding ----
-            torch.cuda.nvtx.range_push("PosEmb")
-            _t.record()
-            pos_emb = self.transformer['wpe'](pos)
-            _t2.record(); torch.cuda.synchronize()
-            self.t_pos_emb += _t.elapsed_time(_t2) / 1000.0
-            torch.cuda.nvtx.range_pop()
-
-            x = tok_emb + pos_emb
-
-            # ---- transformer blocks ----
-            _t.record()
-            for i, block in enumerate(self.transformer['h']):
-                torch.cuda.nvtx.range_push(f"Block_{i}")
+        _t.record()
+        for i, block in enumerate(self.transformer['h']):
+            torch.cuda.nvtx.range_push(f"Block_{i}")
+            if _dump_fwd and i == 0:
+                # Intra-block-0 bisection: capture post-attention (pre-MLP) too.
+                x = block.attn(x)
+                np.save("fwd_blk0attn_pt.npy", x.detach().to(torch.float32).cpu().numpy())
+                x = block.mlp(x)
+            else:
                 x = block(x)
-                torch.cuda.nvtx.range_pop()
-            _t2.record(); torch.cuda.synchronize()
-            self.t_mlp += _t.elapsed_time(_t2) / 1000.0
-
-            # ---- final layer norm ----
-            torch.cuda.nvtx.range_push("LN_Final")
-            _t.record()
-            x = self.transformer['ln_f'](x)
-            _t2.record(); torch.cuda.synchronize()
-            self.t_ln_f += _t.elapsed_time(_t2) / 1000.0
             torch.cuda.nvtx.range_pop()
+            if _dump_fwd and i == 0:
+                np.save("fwd_blk0_pt.npy", x.detach().to(torch.float32).cpu().numpy())
+        _t2.record(); torch.cuda.synchronize()
+        self.t_mlp += _t.elapsed_time(_t2) / 1000.0
 
-            # ---- lm head ----
-            torch.cuda.nvtx.range_push("LMHead")
-            _t.record()
-            logits = self.lm_head(x)
-            _t2.record(); torch.cuda.synchronize()
-            self.t_lm_head += _t.elapsed_time(_t2) / 1000.0
-            torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_push("LN_Final")
+        _t.record()
+        x = self.transformer['ln_f'](x)
+        if _dump_fwd:
+            np.save("fwd_lnf_pt.npy", x.detach().to(torch.float32).cpu().numpy())
+            GPT._fwd_dumped = True
+            print("[DUMP_FWD] saved fwd_emb_pt.npy, fwd_blk0_pt.npy, fwd_lnf_pt.npy",
+                  flush=True)
+        _t2.record(); torch.cuda.synchronize()
+        self.t_ln_f += _t.elapsed_time(_t2) / 1000.0
+        torch.cuda.nvtx.range_pop()
 
-            # ---- loss (targets already HeadTail-rearranged + sharded) ----
-            loss = None
-            loss_log = None
-            if targets is not None:
-                loss = F.cross_entropy(
-                    logits.view(-1, logits.size(-1)),
-                    targets.view(-1),
-                )
-                # Detached clone for logging only — does not touch the autograd graph.
-                # In-place all_reduce on the live loss tensor would bump its version
-                # counter and silently corrupt cross_entropy's backward.
-                loss_log = loss.detach().clone()
-                torch.distributed.all_reduce(
-                    loss_log, op=torch.distributed.ReduceOp.SUM, group=cp_group
-                )
-                loss_log = loss_log / cp_world_size
+        torch.cuda.nvtx.range_push("LMHead")
+        _t.record()
+        logits = self.lm_head(x)
+        _t2.record(); torch.cuda.synchronize()
+        self.t_lm_head += _t.elapsed_time(_t2) / 1000.0
+        torch.cuda.nvtx.range_pop()
+
+        loss = None
+        loss_log = None
+        if targets is not None:
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                targets.view(-1),
+            )
+            loss_log = loss.detach().clone()
+            torch.distributed.all_reduce(
+                loss_log, op=torch.distributed.ReduceOp.SUM, group=cp_group
+            )
+            loss_log = loss_log / cp_world_size
 
         return logits, loss, loss_log
 
@@ -494,17 +518,13 @@ class GPT(nn.Module):
             {'params': nodecay_params, 'weight_decay': 0.0},
         ]
         return torch.optim.AdamW(
-            optim_groups,
-            lr=learning_rate,
-            betas=(0.9, 0.95),
-            eps=1e-8,
-            fused=False,
-            foreach=True,
+            optim_groups, lr=learning_rate, betas=(0.9, 0.95),
+            eps=1e-8, fused=False, foreach=True,
         )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Data Loader
+# Data Loader (unchanged)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_tokens(filename):
@@ -513,7 +533,6 @@ def load_tokens(filename):
 
 
 class DataLoaderLite:
-
     def __init__(self, B, T, split):
         self.B = B
         self.T = T
@@ -526,12 +545,10 @@ class DataLoaderLite:
         assert len(shards) > 0, f"No '{split}' shards found in {data_root}"
         self.shards = shards
         self.reset()
-
     def reset(self):
         self.current_shard    = 0
         self.tokens           = load_tokens(self.shards[self.current_shard])
         self.current_position = 0
-
     def next_batch(self):
         B, T = self.B, self.T
         buf = self.tokens[self.current_position: self.current_position + B * T + 1]
@@ -546,79 +563,90 @@ class DataLoaderLite:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Buffer sharding helper — replaces the legacy `with context_parallel(...)` block
+# ══════════════════════════════════════════════════════════════════════════════
+
+def shard_for_cp(idx: torch.Tensor, targets: torch.Tensor):
+    """
+    HeadTail-rearrange + sequence-shard idx and targets across cp_mesh.
+    Returns local shards on each rank. Mirrors what context_parallel() does
+    to the buffers internally.
+    """
+    seq_length = idx.shape[1]
+    if _cp_options.enable_load_balance:
+        load_balance_indices = _generate_round_robin_indices(
+            seq_length=seq_length,
+            cp_world_size=cp_world_size,
+            device=idx.device,
+        )
+    else:
+        load_balance_indices = None
+
+    buffers = [idx, targets]
+    buffer_seq_dims = [1, 1]
+    sharded = _context_parallel_buffers(
+        cp_mesh, buffers, buffer_seq_dims, load_balance_indices
+    )
+    return sharded[0], sharded[1]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Training Setup
 # ══════════════════════════════════════════════════════════════════════════════
 
+# MODEL_44M=1 selects the small (~44M) config; mirrors EVERYTHING C++
+# fourtyfour=true changes: dims (n_embd=384, n_layer=3, n_head=6), global batch
+# (65536), and max_steps (6768). Default is the ~161M config (768/12/12).
+_is_44m = int(os.environ.get("MODEL_44M", "0")) == 1
+
+MODEL_TAG = "44M" if _is_44m else "161M"
+
 B = 4
 T = 1024
-total_batch_size = 524288
-
-assert T % cp_world_size == 0, f"T={T} must be divisible by cp_world_size={cp_world_size}"
+total_batch_size = 65536 if _is_44m else 524288   # C++ global_batch
+assert T % cp_world_size == 0
 grad_accum_steps = total_batch_size // (B * T)
 
-config = GPTConfig(vocab_size=50304, n_layer=12, n_head=12, weight_tying=False)
-
+if _is_44m:
+    config = GPTConfig(n_embd=384, vocab_size=50304, n_layer=3, n_head=6,
+                       weight_tying=False)
+else:
+    config = GPTConfig(vocab_size=50304, n_layer=12, n_head=12, weight_tying=False)
 model = GPT(config)
 model.to(device)
 
-# Tag each CPAttention with its layer index for the optional backward dump.
-for _i, _blk in enumerate(model.transformer['h'].children()):
-    setattr(_blk.attn, '_cp_layer_idx', _i)
+# ── Path A: manual CP dispatcher bracketing around SDPA only ───────────────
+# We do NOT call parallelize_module(_AttentionContextParallel) — that would
+# convert ln/c_attn/c_proj params to DTensors and trip the incomplete view
+# sharding rules in PT 2.9 (see PT source TODO: "this should be Shard(2),
+# need to fix Linear layer rules"). Instead each attention module's forward
+# manually enters _enable_cp_dispatcher() around the SDPA op only, wraps
+# q/k/v as DTensors at that point, and registers backward hooks so the
+# dispatcher is re-active when SDPA's backward node fires. All other ops
+# (LN, c_attn, c_proj, residual) run as plain local tensors.
 
-# ----- INIT PARITY DUMP (rank 0) -----
-# Writes init_weights.bin + init_weights_manifest.txt in C++ param order so
-# the C++ test can load identical initial weights via LOAD_INIT_WEIGHTS env.
-# C++ param order: [*blocks(12N), lm_head, wte, wpe, ln_f.w, ln_f.b]
-# Linear weights: PT [out,in] -> C++ [in,out] (transpose); embeddings unchanged.
+for _i, _blk in enumerate(model.transformer['h']):
+    setattr(_blk.attn, '_cp_layer_idx', _i)
+# ───────────────────────────────────────────────────────────────────────────
+
 if master_process:
-    _pt_params = list(model.named_parameters())
-    _wte_n, _wte_p = _pt_params[0]
-    _wpe_n, _wpe_p = _pt_params[1]
-    _lng_n, _lng_p = _pt_params[2]
-    _lnb_n, _lnb_p = _pt_params[3]
-    _blocks        = _pt_params[4:-1]
-    _lmh_n, _lmh_p = _pt_params[-1]
-    _cpp_order = list(_blocks) + [
-        (_lmh_n, _lmh_p),
-        (_wte_n, _wte_p),
-        (_wpe_n, _wpe_p),
-        (_lng_n, _lng_p),
-        (_lnb_n, _lnb_p),
-    ]
-    _no_tx_names = {_wte_n, _wpe_n}
-    with open("init_weights.bin", "wb") as _bf, \
-         open("init_weights_manifest.txt", "w") as _mf:
-        _off = 0
-        for _i, (_name, _p) in enumerate(_cpp_order):
-            _t = _p.detach().cpu().to(torch.float32).contiguous()
-            if _t.dim() == 2 and _name not in _no_tx_names:
-                _t = _t.transpose(0, 1).contiguous()
-            _bf.write(_t.numpy().tobytes())
-            _shape = ",".join(str(s) for s in _t.shape)
-            _mf.write(f"{_i} {_name} shape=[{_shape}] numel={_t.numel()} offset={_off}\n")
-            _off += _t.numel()
-    print(f"Wrote init_weights.bin ({_off} floats) and init_weights_manifest.txt")
-torch.distributed.barrier()
-# ----- END INIT PARITY DUMP -----
+    print("=== GPT-2 CP via _AttentionContextParallel (FP32, HeadTail LB) ===")
+    print(f"  Applied _AttentionContextParallel to {config.n_layer} blocks")
 
 num_params         = sum(p.numel() for p in model.parameters())
 num_params_per_gpu = num_params
-# max_steps = num_params * 5 // total_batch_size
-max_steps    = 1555
+max_steps    = 6768 if _is_44m else 1555   # C++ fourtyfour max_steps
 warmup_steps = max_steps // 10
 
-
-if nsys_report == True:
+if nsys_report:
     max_steps = 1
     warmup_steps = 0
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-
 VAL_FREQ = 100
 
 if master_process:
-    print("=== GPT-2 Context Parallel Training Script (Native PyTorch CP, HeadTail LB) ===")
     print(f"Configuration:")
     print(f"  vocab_size:     {config.vocab_size}")
     print(f"  context_length: {config.block_size}")
@@ -629,16 +657,46 @@ if master_process:
     print(f"  cp_world_size:  {cp_world_size}")
     print(f"  global_batch:   {total_batch_size}")
     print(f"  grad_accum_steps: {grad_accum_steps}")
-    print(f"  Weight Tying:   {'ENABLED' if config.weight_tying else 'DISABLED'}")
-    print(f"  Load Balancing: ENABLED (HeadTail)")
     print(f"  Parameters:          {num_params}")
-    print(f"  Parameters per GPU:  {num_params_per_gpu}")
     print(f"  max_steps:      {max_steps}")
     print(f"  warmup_steps:   {warmup_steps}")
-    print(f"  SDPA Backend:   EFFICIENT_ATTENTION (FP32, auto-selected)")
-    print(f"  CP API:         torch.distributed.tensor.experimental.context_parallel")
+    print(f"  CP API:         _AttentionContextParallel (ParallelStyle)")
 
-optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr )
+optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr)
+
+# ── Save init weights for C++ parity check ──
+if int(os.environ.get("SAVE_INIT_WEIGHTS", "0")) == 1:
+    if master_process:
+        print("Saving init weights to init_weights.bin")
+    import io
+    buf = io.BytesIO()
+    for p in model.parameters():
+        p_cpu = p.detach().to(torch.float32).cpu()
+        buf.write(p_cpu.numpy().tobytes())
+    with open("init_weights.bin", "wb") as f:
+        f.write(buf.getvalue())
+    if master_process:
+        print("  saved init_weights.bin")
+
+# ── Save NAME-KEYED init weights (correct parity: positional load scrambles
+#    because C++ enumerates params in a different order). Record format:
+#    <int32 name_len><name><int32 ndim><int64 dims...><float32 data (PT layout)>
+if int(os.environ.get("SAVE_INIT_NAMED", "0")) == 1 and master_process:
+    import struct
+    _named_fn = f"init_weights_named_{MODEL_TAG}.bin"
+    with open(_named_fn, "wb") as f:
+        n = 0
+        for name, p in model.named_parameters():
+            arr = p.detach().to(torch.float32).cpu().numpy()
+            nm = name.encode()
+            f.write(struct.pack("<i", len(nm)))
+            f.write(nm)
+            f.write(struct.pack("<i", arr.ndim))
+            for d in arr.shape:
+                f.write(struct.pack("<q", int(d)))
+            f.write(arr.tobytes())
+            n += 1
+    print(f"  saved {_named_fn} ({n} named params)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -656,54 +714,24 @@ def get_lr(step):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Data Loaders
+# Data Loaders + CSV Logging
 # ══════════════════════════════════════════════════════════════════════════════
 
 train_loader = DataLoaderLite(B, T, "train")
 val_loader   = DataLoaderLite(B, T, "val")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CSV Logging Setup
-# ══════════════════════════════════════════════════════════════════════════════
-
-log_file        = None
-log_filename    = ""
-config_filename = ""
+log_file = None
+log_filename = ""
 
 if master_process:
-    os.makedirs("Pytorch_CP_HT_FP32_Training_logs", exist_ok=True)
+    os.makedirs("Pytorch_CP_AttnStyle_FP32_Training_logs", exist_ok=True)
     log_idx = 1
     while True:
-        log_filename = f"Pytorch_CP_HT_FP32_Training_logs/Pytorch_CP_HT_FP32_Training_log{log_idx}.csv"
+        log_filename = f"Pytorch_CP_AttnStyle_FP32_Training_logs/Pytorch_CP_AttnStyle_FP32_Training_log{log_idx}.csv"
         if not os.path.exists(log_filename):
             break
         log_idx += 1
-
     print(f"Saving logs to: {log_filename}")
-
-    config_filename = f"Pytorch_CP_HT_FP32_Training_logs/Pytorch_CP_HT_FP32_Training_log{log_idx}_config.txt"
-    with open(config_filename, 'w') as cf:
-        cf.write("Configuration:\n")
-        cf.write(f"  Batch_size: {B}\n")
-        cf.write(f"  context_length: {config.block_size}\n")
-        cf.write(f"  n_embd: {config.n_embd}\n")
-        cf.write(f"  n_heads: {config.n_head}\n")
-        cf.write(f"  vocab_size: {config.vocab_size}\n")
-        cf.write(f"  n_layers: {config.n_layer}\n")
-        cf.write(f"  global_batch: {total_batch_size}\n")
-        cf.write(f"  grad_accum_steps: {grad_accum_steps}\n")
-        cf.write(f"  cp_world_size: {cp_world_size}\n")
-        cf.write(f"  Load Balancing: ENABLED (HeadTail)\n")
-        cf.write(f"  Parameters: {num_params}\n")
-        cf.write(f"  Parameters per GPU: {num_params_per_gpu}\n")
-        cf.write(f"  Max Learning Rate: {max_lr}\n")
-        cf.write(f"  Min Learning Rate: {min_lr}\n")
-        cf.write(f"  max_steps: {max_steps}\n")
-        cf.write(f"  warmup_steps: {warmup_steps}\n")
-        cf.write(f"  SDPA Backend: EFFICIENT_ATTENTION (FP32, auto-selected)\n")
-        cf.write(f"  CP API: torch.distributed.tensor.experimental.context_parallel\n")
-
     log_file = open(log_filename, 'w', newline='')
     log_file.write(
         "step,loss,val_loss,lr,grad_norm,dt_ms,tok_per_sec,"
@@ -716,13 +744,12 @@ if master_process:
 # Step Timers
 # ══════════════════════════════════════════════════════════════════════════════
 
-timer_step       = CudaTimer()
-timer_data       = CudaTimer()
-timer_fwd        = CudaTimer()
-timer_loss_timer = CudaTimer()
-timer_bwd        = CudaTimer()
-timer_clip       = CudaTimer()
-timer_optim      = CudaTimer()
+timer_step  = CudaTimer()
+timer_data  = CudaTimer()
+timer_fwd   = CudaTimer()
+timer_bwd   = CudaTimer()
+timer_clip  = CudaTimer()
+timer_optim = CudaTimer()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -732,19 +759,53 @@ timer_optim      = CudaTimer()
 if master_process:
     print("\nStarting training...")
 
+# ── Step 0 gradient dump (for C++ parity) ──
+if int(os.environ.get("DUMP_STEP0_GRADS", "0")) == 1:
+    if master_process:
+        print("Running step 0 to capture gradients...")
+    model.train()
+    optimizer.zero_grad()
+    x, y = train_loader.next_batch()
+    x = x.to(device)
+    y = y.to(device)
+    if master_process:
+        print(f"[DUMP] first 8 token ids: {x.view(-1)[:8].tolist()}")
+    logits, loss, loss_log = model(x, y)
+    # Single micro-batch, UNSCALED (no 1/grad_accum) to match C++ dump pass.
+    loss.backward()
+    # AVG-all-reduce PARAM grads across ranks so the dumped gradient is the
+    # FULL-batch gradient (sum over all 1024 tokens), independent of how each
+    # impl splits tokens across ranks. Required for a valid per-element compare:
+    # rank0's local shard differs between PT and C++ HeadTail LB.
+    for _p in model.parameters():
+        if _p.grad is not None:
+            torch.distributed.all_reduce(
+                _p.grad, op=torch.distributed.ReduceOp.AVG, group=cp_group)
+
+    if master_process:
+        print("Dumping step 0 gradients:")
+        import pickle
+        dump = {}
+        for name, p in model.named_parameters():
+            if p.grad is not None:
+                dump[name] = p.grad.detach().to(torch.float32).cpu().numpy()
+        with open("step0_grads_pt_attnstyle.pkl", "wb") as f:
+            pickle.dump(dump, f)
+        print("  saved step0_grads_pt_attnstyle.pkl")
+        # Raw arrays for cosine check (PT native layout: weight is [out,in])
+        np.save("raw_ln_f_weight_pt.npy", dump["transformer.ln_f.weight"])
+        np.save("raw_h0_c_attn_weight_pt.npy",
+                dump["transformer.h.0.attn.c_attn.weight"])
+        print("  saved raw_ln_f_weight_pt.npy, raw_h0_c_attn_weight_pt.npy")
+
+    # Reset for actual training
+    train_loader.reset()
+    optimizer.zero_grad()
+    model.train()
+
 val_loss_accum_log = -1.0
 
-# Auto-increment run index for the per-step debug dump file: scan existing
-# debug_rank_lb{rank}_N.md files and pick the next free N. Each rank picks
-# its own (they all see the same FS), so indices stay aligned per rank.
-import glob as _glob
-_debug_run_idx = len(_glob.glob(f"debug_rank_lb{cp_rank}_*.md"))
-debug_file = f"debug_rank_lb{cp_rank}_{_debug_run_idx}.md"
-if master_process:
-    print(f"Debug dump file: {debug_file}")
-
 for step in range(max_steps):
-
     timer_step.start()
 
     # ---- Validation ----
@@ -753,15 +814,16 @@ for step in range(max_steps):
         val_loader.reset()
         val_loss_accum = 0.0
         val_loss_steps = 5
-
         with torch.no_grad():
             for _ in range(val_loss_steps):
                 x, y = val_loader.next_batch()
                 x = x.to(device)
                 y = y.to(device)
+                # NOTE: do NOT shard here. GPT.forward shards once internally
+                # (pre-embedding), matching legacy/C++. Sharding here too would
+                # double-shard (1024->512->256).
                 _, _, loss_log = model(x, y)
                 val_loss_accum += loss_log.item() / val_loss_steps
-
         if master_process:
             print(f"validation loss: {val_loss_accum:.4f}")
         val_loss_accum_log = val_loss_accum
@@ -769,7 +831,6 @@ for step in range(max_steps):
     # ---- Training ----
     model.train()
     optimizer.zero_grad()
-
     loss_accum    = 0.0
     time_data     = 0.0
     time_forward  = 0.0
@@ -778,16 +839,17 @@ for step in range(max_steps):
     model.reset_timing()
 
     for micro_step in range(grad_accum_steps):
-
         torch.cuda.nvtx.range_push("DataLoad")
         timer_data.start()
         x, y = train_loader.next_batch()
         x = x.to(device)
         y = y.to(device)
+        # NOTE: do NOT shard here. GPT.forward shards once internally
+        # (pre-embedding), matching legacy/C++. Sharding here too would
+        # double-shard (1024->512->256).
         time_data += timer_data.elapsed_seconds()
         torch.cuda.nvtx.range_pop()
 
-        # ---- Forward + Loss (context_parallel handles HeadTail + sharding) ----
         torch.cuda.nvtx.range_push("Forward")
         timer_fwd.start()
         logits, loss, loss_log = model(x, y)
@@ -804,35 +866,15 @@ for step in range(max_steps):
 
     model.collect_attn_timing()
 
-    # ---- Gradient All-Reduce across CP ranks ----
-    # Ring backward aggregates dK/dV at the ACTIVATION level, but parameter grads
-    # ∂L/∂W = Σ_t X_t^T ⊗ dY_t are still partial per rank (X_t is local).
-    # Each rank's loss is a local mean over local tokens, so the correct global
-    # gradient is (1/N) Σ_ranks ∂L_local/∂w → use AVG, not SUM (SUM inflates by N×).
-    # for p in model.parameters():
-    #     if p.grad is not None:
-    #         torch.distributed.all_reduce(
-    #             p.grad, op=torch.distributed.ReduceOp.AVG, group=cp_group
-    #         )
-
-    # ---- Post-AR debug: dump param and grad values to rank-specific files ----
-    p_attn = model.transformer['h'][0].attn.c_attn.weight
-    p_mlp  = model.transformer['h'][0].mlp.c_fc.weight
-    with open(debug_file, 'a') as f:
-        f.write(f"\n## Step {step}\n")
-        f.write(f"**c_attn.weight** (first 4): {p_attn[:2, :2].flatten().tolist()}\n")
-        f.write(f"**c_attn.grad** (first 4):   {p_attn.grad[:2, :2].flatten().tolist()}\n")
-        f.write(f"**c_fc.weight** (first 4):   {p_mlp[:2, :2].flatten().tolist()}\n")
-        f.write(f"**c_fc.grad** (first 4):     {p_mlp.grad[:2, :2].flatten().tolist()}\n")
-
     # [GRAD PARITY DUMP] step 0 only: save first-layer c_attn.weight.grad
-    # (accumulated over all micro-steps, before clip/opt). AVG of rank0+rank1
-    # should equal the single-GPU (cp=1) exact reference IFF the CP backward is
-    # mathematically correct. Tagged: legacy, cp<world>, rank<r>.
+    # (accumulated over all micro-steps, before clip/opt) so we can compare
+    # the CP gradient against the single-GPU exact reference. AVG of rank0+rank1
+    # should equal the single-GPU grad IFF the CP backward is mathematically
+    # correct. Tagged: attnstyle, cp<world>, rank<r>.
     if step == 0 and int(os.environ.get("GRAD_PARITY_DUMP", "0")) == 1:
         _g = model.transformer['h'][0].attn.c_attn.weight.grad
         _gp = _g.detach().to(torch.float32).cpu().numpy()
-        _fn = f"gradparity_legacy_cp{cp_world_size}_rank{cp_rank}.npy"
+        _fn = f"gradparity_attnstyle_cp{cp_world_size}_rank{cp_rank}.npy"
         np.save(_fn, _gp)
         print(f"[GRAD PARITY DUMP] saved {_fn} shape={_gp.shape} "
               f"L2={float((_gp**2).sum()**0.5):.6e}", flush=True)
@@ -848,7 +890,6 @@ for step in range(max_steps):
                     p.grad, op=torch.distributed.ReduceOp.AVG, group=cp_group
                 )
 
-    # ---- Gradient Clipping ----
     torch.cuda.nvtx.range_push("GradClip")
     timer_clip.start()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -859,7 +900,6 @@ for step in range(max_steps):
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
-    # ---- Optimizer Step ----
     torch.cuda.nvtx.range_push("Optimizer")
     timer_optim.start()
     optimizer.step()
@@ -923,4 +963,4 @@ if master_process:
     if log_file:
         log_file.close()
     print(f"\nTraining log saved to: {log_filename}")
-    print("\n=== FP32 Context Parallel + HeadTail Training Complete ===")
+    print("\n=== CP via _AttentionContextParallel — Training Complete ===")

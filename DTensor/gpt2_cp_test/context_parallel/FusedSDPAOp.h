@@ -38,6 +38,7 @@
 #include "gpt2_cp_test/context_parallel/SDPAOp.h"
 
 #include <cuda_runtime.h>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -126,14 +127,28 @@ inline SDPAResult sdpa_fused_forward(Tensor &q, Tensor &k, Tensor &v,
   const int64_t o_sB = H * T_q * D, o_sH = T_q * D, o_sM = D;
   const int64_t lse_sB = H * T_q,  lse_sH = T_q;
 
-  OwnTensor::cp::cuda::mem_efficient_attn_forward_tc_strided(
-    Q_ptr, q_sB, q_sM, q_sH,
-    K_ptr, k_sB, k_sM, k_sH,
-    V_ptr, v_sB, v_sM, v_sH,
-    O_ptr, o_sB, o_sM, o_sH,
-    LSE_ptr, lse_sB, lse_sH,
-    B, H, T_q, T_k, q_offset, k_offset, D,
-    is_causal, 0.0f, nullptr);
+  // Parity test: ATTN_FP32=1 forces the scalar fp32 attention kernel (no TF32
+  // WMMA) to isolate whether the C++<->PT attention gap is TF32-vs-fp32.
+  static const bool attn_fp32 = (std::getenv("ATTN_FP32") != nullptr);
+  if (attn_fp32) {
+    OwnTensor::cp::cuda::mem_efficient_attn_forward_strided(
+      Q_ptr, q_sB, q_sM, q_sH,
+      K_ptr, k_sB, k_sM, k_sH,
+      V_ptr, v_sB, v_sM, v_sH,
+      O_ptr, o_sB, o_sM, o_sH,
+      LSE_ptr, lse_sB, lse_sH,
+      B, H, T_q, T_k, q_offset, k_offset, D,
+      is_causal, 0.0f, nullptr);
+  } else {
+    OwnTensor::cp::cuda::mem_efficient_attn_forward_tc_strided(
+      Q_ptr, q_sB, q_sM, q_sH,
+      K_ptr, k_sB, k_sM, k_sH,
+      V_ptr, v_sB, v_sM, v_sH,
+      O_ptr, o_sB, o_sM, o_sH,
+      LSE_ptr, lse_sB, lse_sH,
+      B, H, T_q, T_k, q_offset, k_offset, D,
+      is_causal, 0.0f, nullptr);
+  }
 
   // Synchronise so the caller can safely read results immediately
   // cudaDeviceSynchronize();

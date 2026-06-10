@@ -38,6 +38,20 @@ void fused_attn_forward_tc_sm89_cuda(
 namespace cp {
 
 // ============================================================================
+// TF32 round-to-nearest before WMMA (precision backport from latest TI kernel).
+// The default tf32 WMMA load truncates the fp32 mantissa toward zero (biased);
+// adding half a TF32 ULP before truncation yields round-to-nearest, removing the
+// systematic bias that compounds across layers and training steps. fp32 keeps 23
+// mantissa bits, tf32 keeps 10 -> drop 13 -> half-ULP = (1<<12) = 0x1000.
+// ============================================================================
+template <typename FragType>
+__device__ __forceinline__ void round_tf32_wmma_frag(FragType &frag) {
+#pragma unroll
+  for (int i = 0; i < (int)FragType::num_elements; i++)
+    reinterpret_cast<uint32_t &>(frag.x[i]) += 0x1000u;
+}
+
+// ============================================================================
 // cp.async helpers (copied verbatim from TI)
 // ============================================================================
 
@@ -647,6 +661,7 @@ __global__ void fused_attn_forward_kernel_tc(CPFwdParams params)
 
                 wmma::load_matrix_sync(a_frag, s_q + m_tile * FWD_TC_WMMA_M * HD_PAD + k * FWD_TC_WMMA_K, HD_PAD);
                 wmma::load_matrix_sync(b_frag, s_kv[0] + n_tile * FWD_TC_WMMA_N * HD_PAD + k * FWD_TC_WMMA_K, HD_PAD);
+                round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
                 wmma::mma_sync(acc, a_frag, b_frag, acc);
             }
             wmma::store_matrix_sync(s_scores + m_tile * FWD_TC_WMMA_M * FWD_TC_BK + n_tile * FWD_TC_WMMA_N, acc, FWD_TC_BK, wmma::mem_row_major);
@@ -743,6 +758,7 @@ __global__ void fused_attn_forward_kernel_tc(CPFwdParams params)
                         wmma::fragment<wmma::matrix_b, FWD_TC_WMMA_M, FWD_TC_WMMA_N, FWD_TC_WMMA_K, wmma::precision::tf32, wmma::row_major> b_frag;
                         wmma::load_matrix_sync(a_frag, s_scores + m_tile * FWD_TC_WMMA_M * FWD_TC_BK + k * FWD_TC_WMMA_K, FWD_TC_BK);
                         wmma::load_matrix_sync(b_frag, s_kv[1] + k * FWD_TC_WMMA_K * HD_PAD + n_tile * FWD_TC_WMMA_N, HD_PAD);
+                        round_tf32_wmma_frag(a_frag); round_tf32_wmma_frag(b_frag);
                         wmma::mma_sync(acc, a_frag, b_frag, acc);
                     }
                     wmma::store_matrix_sync(s_pv + m_tile * FWD_TC_WMMA_M * HD_PAD + n_tile * FWD_TC_WMMA_N, acc, HD_PAD, wmma::mem_row_major);

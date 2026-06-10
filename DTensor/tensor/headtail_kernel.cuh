@@ -2,17 +2,17 @@
 
 #include <cuda_runtime.h>
 
-// HeadTail permutation kernel launcher declarations.
+// HeadTail permutation kernel launcher declarations (chunk-level, PyTorch parity).
 //
-// HeadTail interleaves head and reversed-tail of the sequence:
-//   output[2k]   = input[k]           k = 0, ..., T/2-1
-//   output[2k+1] = input[T - 1 - k]  k = 0, ..., T/2-1
+// For sequence length T, world_size N, chunk_sz = T/(2*N), T_local = T/N:
+// Splits T into 2*N equal chunks; rank r owns chunks (r, 2N-1-r) concatenated
+// as [head_chunk, tail_chunk]. After loadbalance + split-by-N, each rank's
+// slice has an early-positions head half and late-positions tail half.
 //
-// Result for T=8: [0, 7, 1, 6, 2, 5, 3, 4]
+// Example (N=2, T=8): perm = [0,1, 6,7, 2,3, 4,5]
+// Example (N=4, T=16): perm = [0,1, 14,15, 2,3, 12,13, 4,5, 10,11, 6,7, 8,9]
 //
-// The inverse (unloadbalance) reverses this mapping:
-//   output[k]       = input[2k]       k = 0, ..., T/2-1
-//   output[T-1-k]   = input[2k+1]    k = 0, ..., T/2-1
+// Matches PyTorch _rearrange_seq_for_load_balance (commit e9ebbd3b).
 
 void launch_headtail_loadbalance(
     const float* src,
@@ -20,6 +20,7 @@ void launch_headtail_loadbalance(
     int64_t outer_size,   // product of dims before chunkdim (B * H for 4D with chunkdim=2)
     int64_t seq_len,      // size of chunkdim (T)
     int64_t inner_size,   // product of dims after chunkdim (D for 4D with chunkdim=2)
+    int64_t world_size,   // N (number of CP ranks)
     cudaStream_t stream);
 
 void launch_headtail_unloadbalance(
@@ -28,4 +29,5 @@ void launch_headtail_unloadbalance(
     int64_t outer_size,
     int64_t seq_len,
     int64_t inner_size,
+    int64_t world_size,
     cudaStream_t stream);

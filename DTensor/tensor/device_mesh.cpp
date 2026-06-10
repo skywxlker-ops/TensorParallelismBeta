@@ -1,6 +1,7 @@
 #include "tensor/device_mesh.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 
 
 DeviceMesh::DeviceMesh(const std::vector<int>& mesh_shape, 
@@ -187,7 +188,13 @@ void DeviceMesh::initialize_process_groups() {
 
         std::shared_ptr<Work> work_obj;
         cudaStream_t comm_stream;
-        cudaStreamCreate(&comm_stream);
+        // NON-BLOCKING so the NCCL comm stream does NOT implicitly serialize with
+        // the legacy NULL stream (stream 0) that compute kernels run on. Default
+        // cudaStreamCreate() is blocking -> it syncs with stream 0 -> zero
+        // compute/comm overlap. This is the stream actually used by the PG (the
+        // stream==0 branch in init_process_group is never taken from here).
+        cudaStreamCreateWithFlags(&comm_stream, cudaStreamNonBlocking);
+        fprintf(stderr, "[DeviceMesh] comm stream = NON-BLOCKING (overlap-capable)\n");
 
         process_groups_[mesh_dim] = init_process_group(group_size, my_group_rank, comm_stream);
     

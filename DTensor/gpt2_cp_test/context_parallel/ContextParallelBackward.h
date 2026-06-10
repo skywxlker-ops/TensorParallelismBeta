@@ -12,9 +12,13 @@
 #include "gpt2_cp_test/context_parallel/SDPAMerger.h"
 #include "gpt2_cp_test/context_parallel/SDPAOp.h"
 
+#include <atomic>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <nvtx3/nvToolsExt.h>
@@ -43,23 +47,29 @@ public:
       std::vector<bool> saved_causal_flags,   // causal flag per ring step
       std::vector<bool> saved_partial_flags,  // partial flag per ring step
       std::vector<Tensor> saved_lse_per_step, // LSE per ring step [B,H,T/n,1]
+      std::vector<Tensor> saved_out_per_step, // OUT per ring step [B,H,T/n,D]
       Tensor merged_lse,                      // final merged LSE [B,H,T/n,1]
       Tensor merged_out,                      // final merged out [B,H,T/n,D]
       // Process group and config
       std::shared_ptr<ProcessGroupNCCL> pg, float attn_scale, bool is_causal,
       int rotator_type, bool load_balance, int world_size,
       int rank, bool unshard = true,
-      bool recompute_k = true)
+      bool recompute_k = true,
+      bool sub_chunk_active = false,
+      bool external_balanced = false)
       : Node(3), // 3 outputs: grad for q, k, v
         saved_q_(saved_q), saved_k_chunks_(saved_k_chunks),
         saved_v_chunks_(saved_v_chunks),
         saved_causal_flags_(saved_causal_flags),
         saved_partial_flags_(saved_partial_flags),
-        saved_lse_per_step_(saved_lse_per_step), merged_lse_(merged_lse),
+        saved_lse_per_step_(saved_lse_per_step),
+        saved_out_per_step_(saved_out_per_step), merged_lse_(merged_lse),
         merged_out_(merged_out), pg_(pg), attn_scale_(attn_scale),
         is_causal_(is_causal), rotator_type_(rotator_type),
         load_balance_(load_balance), world_size_(world_size), rank_(rank),
-        unshard_(unshard), recompute_k_(recompute_k) {}
+        unshard_(unshard), recompute_k_(recompute_k),
+        sub_chunk_active_(sub_chunk_active),
+        external_balanced_(external_balanced) {}
 
   const char *name() const override { return "ContextParallelBackward"; }
 
@@ -67,6 +77,41 @@ public:
     if (grads.empty()) {
       throw std::runtime_error(
           "ContextParallelBackward: no gradients provided");
+    }
+
+    // Env flag: SKIP_DKV_ROTATION=1 disables the dkv ring rotation under LB.
+    // Mimics PyTorch's effective behavior under context_parallel() — its
+    // _templated_ring_attention_backward never runs, so dkv stays local.
+    // WARNING: experimental. May produce partial gradients missing cross-rank
+    // contributions. Verify parity vs the rotated path before trusting.
+    const char *_skip_env = std::getenv("SKIP_DKV_ROTATION");
+    bool skip_dkv_nccl = (_skip_env && _skip_env[0] == '1');
+
+    // Env flag: USE_PER_STEP_LSE=1 feeds the per-step (out, lse) captured at
+    // forward time into sdpa_fused_backward instead of the merged ones. PT's
+    // local aten backward uses per-step quantities because each inner
+    // aten._scaled_dot_product call has its own autograd backward seeing only
+    // that step's outputs. Empirically PT converges to slightly lower loss
+    // than our with-rotation+merged path. This flag lets us test whether the
+    // per-step LSE choice is the cause.
+    const char *_perstep_env = std::getenv("USE_PER_STEP_LSE");
+    const bool use_per_step_lse = (_perstep_env && _perstep_env[0] == '1');
+
+    // Env flag: ITER0_ONLY_DKV=1 accumulates dK/dV ONLY from ring iter i==0
+    // (i.e. local K/V contribution). For i > 0, dK_step/dV_step (which are
+    // for rotated K/V = peer's K/V from this rank's perspective) are dropped
+    // entirely. This precisely mimics PT's behavior under context_parallel():
+    // PT's local aten backward at iter > 0 produces dK_step for the rotated
+    // K, but permute_tensor (non-autograd variant) provides no autograd link
+    // back to the source rank's K parameter, so the gradient is silently
+    // dropped. dQ accumulation is unchanged (PT accumulates dQ at all iters).
+    //
+    // Implies SKIP_DKV_ROTATION=1 — no point rotating an accumulator that
+    // never receives non-zero updates after iter 0.
+    const char *_iter0_env = std::getenv("ITER0_ONLY_DKV");
+    const bool iter0_only_dkv = (_iter0_env && _iter0_env[0] == '1');
+    if (iter0_only_dkv) {
+      skip_dkv_nccl = true;
     }
 
     // ----- Phase 0: Shard the full gradient to local chunk -----
@@ -99,13 +144,23 @@ public:
     std::vector<Tensor> grad_k_accum;
     std::vector<Tensor> grad_v_accum;
 
-    bool lb_active_bwd = load_balance_;
-    if (lb_active_bwd) {
+    // Sub-chunk dispatch (round-robin Q/K/V halving + pipelined dkv_rotater)
+    // is driven by the forward's sub_chunk_active flag, not by raw load_balance_.
+    // This decouples LB sub-chunking from the legacy "HeadTail kernel applied"
+    // semantics, which is what previously caused LB+causal to be disabled.
+    bool lb_active_bwd = sub_chunk_active_;
+    if (sub_chunk_active_ && (T_local_bwd % 2 != 0)) {
+      throw std::runtime_error(
+          "ContextParallelBackward: sub_chunk_active requires even T_local");
+    }
+    if (lb_active_bwd && !skip_dkv_nccl) {
       dkv_rotater = create_rotator();
-    } else {
+    } else if (!lb_active_bwd) {
       grad_k_accum.resize(world_size_);
       grad_v_accum.resize(world_size_);
     }
+    // When skip_dkv_nccl is true under LB, no rotator is created — grad_key /
+    // grad_value just accumulate local step contributions without any exchange.
 
     // Optional kv_rotater for recompute_k mode
     std::unique_ptr<RingRotatorBase> kv_rotater;
@@ -114,6 +169,28 @@ public:
       kv_rotater = create_rotator();
       curr_k = saved_k_chunks_[0];
       curr_v = saved_v_chunks_[0];
+    }
+
+    // ---- Compute/comm overlap setup (LB dK/dV travelling accumulator) ----
+    // The dK/dV exchange is a serial recv->add->send chain, but the SDPA-backward
+    // of step i (independent; uses saved K/V) overlaps the in-flight accumulator
+    // transfer from step i-1 when we (a) consume GPU-side and (b) keep the send
+    // staging buffer alive across the transfer (persistent double-buffer instead
+    // of the previous fresh-per-step alloc that relied on the caching allocator).
+    // CP_NO_OVERLAP=1 reverts to the CPU-blocking path for A/B.
+    // Value-aware: unset OR "0" => overlap ON; any other value => OFF.
+    const char *_cp_no_ovl = std::getenv("CP_NO_OVERLAP");
+    const bool OVERLAP =
+        (_cp_no_ovl == nullptr) || (_cp_no_ovl[0] == '0' && _cp_no_ovl[1] == '\0');
+    cudaStream_t compute_stream = OwnTensor::cuda::getCurrentStream();
+    cudaEvent_t bwd_pack_event = nullptr;
+    Tensor dkv_send[2];
+    std::shared_ptr<Work> dkv_work[2] = {nullptr, nullptr};
+    if (OVERLAP && lb_active_bwd && !skip_dkv_nccl) {
+      cudaEventCreateWithFlags(&bwd_pack_event, cudaEventDisableTiming);
+      int64_t kv2 = grad_key.numel() * 2;
+      for (int s = 0; s < 2; ++s)
+        dkv_send[s] = Tensor::empty(Shape({{kv2}}), grad_key.opts());
     }
 
     // ----- Phase 2: Ring Loop (backward) -----
@@ -165,36 +242,60 @@ public:
         Tensor q_bwd = saved_q_;
         Tensor k_bwd = step_k;
         Tensor v_bwd = step_v;
-        Tensor out_bwd = merged_out_;
+        // Default (merged) path — attn = exp(QK^T - merged_lse) gives the
+        // *fractional* weight of this step's K within the full softmax.
+        // Per-step path (USE_PER_STEP_LSE=1) — mirrors PT's local aten backward
+        // which uses each step's own (out, lse). Per-step lse sums to 1 over
+        // only that step's K so it over-weighs the step's contribution; in
+        // PT this empirically converges better because each rank only gets
+        // iter-0's dK anyway and the over-weight compensates.
+        Tensor out_bwd = use_per_step_lse ? saved_out_per_step_[i] : merged_out_;
         Tensor grad_out_bwd = grad_local;
-        Tensor lse_bwd = merged_lse_;
+        Tensor lse_bwd = use_per_step_lse ? saved_lse_per_step_[i] : merged_lse_;
 
         if (lb_active_bwd && i > 0) {
           if (i <= rank_) {
-            // Past with LB: full Q, first half K/V, full out/grad_out/lse
+            // Past with LB: full Q, first half K/V, full out/grad_out/lse.
+            // sdpa_fused_backward reads per-tensor B/M/H strides from K/V,
+            // so strided half-views can be passed directly — no copy needed.
             std::vector<Tensor> k_halves =
                 step_k.make_shards_inplace_axis(2, seq_dim);
             std::vector<Tensor> v_halves =
                 step_v.make_shards_inplace_axis(2, seq_dim);
-            k_bwd = k_halves[0].contiguous();
-            v_bwd = v_halves[0].contiguous();
+            k_bwd = k_halves[0];
+            v_bwd = v_halves[0];
           } else {
-            // Future with LB: 2nd half of Q, out, grad_out, lse; full K/V
+            // Future with LB: 2nd half of Q, out, grad_out, lse; full K/V.
+            // Q/out/grad_out: backward wrapper reads strides from the tensor
+            // (FusedSDPAOp.h:198-208), so strided half-views are safe.
+            // lse: backward wrapper hard-codes lse strides as
+            // (H * T_q, T_q) at FusedSDPAOp.h:209 — those assume a freshly
+            // allocated contiguous LSE of the kernel's T_q. A half-view of
+            // merged_lse_ keeps the parent's stride pattern, which would
+            // miscompute LSE_bh offsets. Until the wrapper reads LSE strides
+            // from the tensor, lse_bwd must remain materialized.
             std::vector<Tensor> q_halves =
                 saved_q_.make_shards_inplace_axis(2, seq_dim);
-            q_bwd = q_halves[1].contiguous();
-
-            std::vector<Tensor> out_halves =
-                merged_out_.make_shards_inplace_axis(2, seq_dim);
-            out_bwd = out_halves[1].contiguous();
+            q_bwd = q_halves[1];
 
             std::vector<Tensor> grad_halves =
                 grad_local.make_shards_inplace_axis(2, seq_dim);
-            grad_out_bwd = grad_halves[1].contiguous();
+            grad_out_bwd = grad_halves[1];
 
-            std::vector<Tensor> lse_halves =
-                merged_lse_.make_shards_inplace_axis(2, seq_dim);
-            lse_bwd = lse_halves[1].contiguous();
+            // Under per-step mode, saved_out_per_step_[i] / saved_lse_per_step_[i]
+            // are already the half-shaped tensors produced when the forward
+            // SDPA ran with half-Q. No additional halving needed and the
+            // wrapper's hard-coded lse stride (H * T_q, T_q) with T_q = T/2
+            // matches the freshly-allocated per-step lse layout.
+            if (!use_per_step_lse) {
+              std::vector<Tensor> out_halves =
+                  merged_out_.make_shards_inplace_axis(2, seq_dim);
+              out_bwd = out_halves[1];
+
+              std::vector<Tensor> lse_halves =
+                  merged_lse_.make_shards_inplace_axis(2, seq_dim);
+              lse_bwd = lse_halves[1].contiguous();
+            }
           }
         }
 
@@ -213,20 +314,121 @@ public:
         grad_k_step = step_grads[1];
         grad_v_step = step_grads[2];
 
+        // --- Per-step parity probe (gated by DUMP_CP_STEPS=1) ---
+        // Dumps grad_q_step/grad_k_step/grad_v_step for each ring step,
+        // tagged with rank, layer-backward call index, and step index i.
+        // Used to localize which LB sub-chunk step (i=0 causal-full,
+        // 0<i<=rank head-half, i>rank partial) produces divergent grads.
+        {
+          static std::atomic<int> _step_call_idx{0};
+          if (i == 0) _step_call_idx.fetch_add(0);  // no-op, marker
+          const char *env = std::getenv("DUMP_CP_STEPS");
+          if (env && env[0] == '1') {
+            auto dump16 = [](std::ofstream &f, const char *label,
+                             const Tensor &t) {
+              if (!t.is_valid()) {
+                f << label << " <invalid>\n";
+                return;
+              }
+              Tensor host = t.to_cpu();
+              const float *p = host.data<float>();
+              const auto &d = t.shape().dims;
+              f << label << " shape=[";
+              for (size_t k = 0; k < d.size(); ++k) {
+                f << d[k] << (k + 1 == d.size() ? "" : ",");
+              }
+              f << "]\n";
+              // Slice 1: first16 = position [0, 0, 0, 0..15] = chunk_0 head row 0
+              int64_t n0 = std::min<int64_t>(16, t.numel());
+              f << "  " << label << " first16 (head/chunk_0): [";
+              for (int64_t k = 0; k < n0; ++k) {
+                f << p[k] << (k == n0 - 1 ? "" : ", ");
+              }
+              f << "]\n";
+              // 4 sample slices covering both heads (H=0, H=1) and both
+              // chunks (chunk_0 head, chunk_3 tail) for 4D [B,H,T,D].
+              if (d.size() == 4 && d[2] >= 2 && d[1] >= 1) {
+                int64_t T_seq = d[2];
+                int64_t Dd = d[3];
+                int64_t H_stride = T_seq * Dd;
+                auto dump_slice = [&](const char *sublabel, int64_t off) {
+                  int64_t n1 = std::min<int64_t>(16, t.numel() - off);
+                  f << "  " << label << " " << sublabel << " (offset=" << off
+                    << "): [";
+                  for (int64_t k = 0; k < n1; ++k) {
+                    f << p[off + k] << (k == n1 - 1 ? "" : ", ");
+                  }
+                  f << "]\n";
+                };
+                dump_slice("H0_chunk3_start", (T_seq / 2) * Dd);
+                if (d[1] >= 2) {
+                  dump_slice("H1_chunk0_start", H_stride);
+                  dump_slice("H1_chunk3_start", H_stride + (T_seq / 2) * Dd);
+                }
+              }
+            };
+            // call_idx_for_rank = how many times THIS rank's apply was called
+            // before this one; combined with i below to get unique tag.
+            static thread_local int _layer_call_idx = 0;
+            int my_layer = _layer_call_idx;
+            if (i == 0) {
+              // bump on first step of each backward call
+              _layer_call_idx++;
+            }
+            std::string path = "step_bw_rank" + std::to_string(rank_) + ".md";
+            std::ofstream df(path, std::ios::app);
+            df << "\n## layer_call=" << my_layer << " step_i=" << i
+               << " use_causal=" << use_causal
+               << " use_partial=" << use_partial
+               << " src_rank="
+               << (((rank_ - i) % world_size_ + world_size_) % world_size_)
+               << "\n";
+            dump16(df, "grad_q_step", grad_q_step);
+            dump16(df, "grad_k_step", grad_k_step);
+            dump16(df, "grad_v_step", grad_v_step);
+          }
+        }
+
+        // --- DUMP_CP_DEEP: save full tensors for deep parity audit ---
+        // Saves grad_q (before), grad_q_step, plus partial-accumulation
+        // intermediates (gq_1st_clone, gq_2nd_clone, gq_2nd_plus_step) so a
+        // Python diff can pinpoint the exact op where C++ diverges from PT.
+        const char *deep_env = std::getenv("DUMP_CP_DEEP");
+        bool deep_dump = (deep_env && deep_env[0] == '1');
+        auto save_full = [&](const char *label, const Tensor &t) {
+          if (!deep_dump || !t.is_valid()) return;
+          std::string path = "/tmp/cp_bwd_test/deep/cpp_" + std::string(label) +
+                             "_step" + std::to_string(i) + "_rank" +
+                             std::to_string(rank_) + ".bin";
+          Tensor host = t.to_cpu();
+          std::ofstream f(path, std::ios::binary);
+          f.write(reinterpret_cast<const char *>(host.data<float>()),
+                  host.numel() * sizeof(float));
+        };
+        save_full("grad_q_before", grad_q);
+        save_full("grad_q_step", grad_q_step);
+
         // --- Accumulate dQ (local, never rotated) ---
         if (lb_active_bwd && i > rank_) {
           int64_t half_T = T_local_bwd / 2;
           Tensor gq_1st = grad_q.narrow_view(seq_dim, 0, half_T);
           Tensor gq_2nd = grad_q.narrow_view(seq_dim, half_T, half_T);
-          grad_q = Tensor::cat({gq_1st.clone(), gq_2nd.clone() + grad_q_step}, seq_dim);
+          Tensor gq_1st_clone = gq_1st.clone();
+          Tensor gq_2nd_clone = gq_2nd.clone();
+          Tensor gq_2nd_plus_step = gq_2nd_clone + grad_q_step;
+          save_full("gq_1st_clone", gq_1st_clone);
+          save_full("gq_2nd_clone", gq_2nd_clone);
+          save_full("gq_2nd_plus_step", gq_2nd_plus_step);
+          grad_q = Tensor::cat({gq_1st_clone, gq_2nd_plus_step}, seq_dim);
         } else if (grad_q_step.is_valid()) {
           grad_q = grad_q + grad_q_step;
         }
+        save_full("grad_q_after", grad_q);
       }
 
       // --- dK/dV accumulation ---
       if (lb_active_bwd) {
-        // LB path: pipelined rotation via dkv_rotater (PyTorch lines 588-627)
+        // LB path: pipelined rotation via dkv_rotater (unless skip_dkv_nccl)
         if (i == 0) {
           if (grad_k_step.is_valid()) {
             grad_key = grad_key + grad_k_step;
@@ -234,14 +436,28 @@ public:
           if (grad_v_step.is_valid()) {
             grad_value = grad_value + grad_v_step;
           }
+        } else if (iter0_only_dkv) {
+          // PT mimicry: drop iter > 0 step contributions entirely. Their
+          // grad_k_step / grad_v_step are for rotated K/V (= peer's K/V),
+          // and in PT those gradients have no autograd link back so they
+          // are silently dropped. We do the same here. grad_key/grad_value
+          // already hold this rank's iter-0 contribution; nothing to add.
         } else {
-          int64_t k_numel = grad_key.numel();
-          Tensor next_grad_kv = dkv_rotater->next_buffer();
-          Tensor gkv_flat = next_grad_kv.flatten();
-          grad_key =
-              gkv_flat.narrow(0, 0, k_numel).reshape(grad_key.shape());
-          grad_value =
-              gkv_flat.narrow(0, k_numel, k_numel).reshape(grad_value.shape());
+          if (!skip_dkv_nccl) {
+            int64_t k_numel = grad_key.numel();
+            // GPU-side consume: SDPA-backward(i) above already overlapped the
+            // accumulator transfer posted at step i-1; only wait GPU-side here.
+            Tensor next_grad_kv = OVERLAP
+                ? dkv_rotater->next_buffer_streamordered(compute_stream)
+                : dkv_rotater->next_buffer();
+            Tensor gkv_flat = next_grad_kv.flatten();
+            grad_key =
+                gkv_flat.narrow(0, 0, k_numel).reshape(grad_key.shape());
+            grad_value =
+                gkv_flat.narrow(0, k_numel, k_numel).reshape(grad_value.shape());
+          }
+          // When skip_dkv_nccl: grad_key / grad_value carry forward from the
+          // previous iter's local accumulation — no overwrite from peers.
 
           if (i <= rank_ && grad_k_step.is_valid()) {
             int64_t half_T = T_local_bwd / 2;
@@ -261,23 +477,43 @@ public:
           }
         }
 
-        // Send current grad_key/grad_value to next rank
-        int64_t k_numel_send = grad_key.numel();
-        size_t k_bytes_send =
-            static_cast<size_t>(k_numel_send) * sizeof(float);
-        Tensor grad_kv_send =
-            Tensor::empty(Shape({{k_numel_send * 2}}), grad_key.opts());
-        cudaMemcpyAsync(grad_kv_send.data<float>(), grad_key.data<float>(),
-                        k_bytes_send, cudaMemcpyDeviceToDevice, 0);
-        cudaMemcpyAsync(grad_kv_send.data<float>() + k_numel_send,
-                        grad_value.data<float>(), k_bytes_send,
-                        cudaMemcpyDeviceToDevice, 0);
-        nvtxRangePushA("CP.bwd.LB.ring.exchange_buffers");
-        dkv_rotater->exchange_buffers(grad_kv_send);
-        nvtxRangePop();
+        // Send current grad_key/grad_value to next rank (skipped under
+        // SKIP_DKV_ROTATION; in that mode each rank keeps its own local
+        // accumulator with no cross-rank exchange)
+        if (!skip_dkv_nccl) {
+          int64_t k_numel_send = grad_key.numel();
+          size_t k_bytes_send =
+              static_cast<size_t>(k_numel_send) * sizeof(float);
+          int s = i & 1;
+          // Persistent double-buffered send staging when overlapping (was
+          // fresh-per-step, relying on the caching allocator to keep the buffer
+          // alive while the async send drained — fragile under true overlap).
+          // Under CP_NO_OVERLAP: fresh alloc, exactly the original behavior.
+          // (Tensor assignment is shallow/ref-counted, so gks shares dkv_send[s].)
+          Tensor gks = OVERLAP
+              ? dkv_send[s]
+              : Tensor::empty(Shape({{k_numel_send * 2}}), grad_key.opts());
+          cudaStream_t pack_stream = OVERLAP ? compute_stream : 0;
+          // [#1] guard: don't repack slot s until step i-2's send drained.
+          if (OVERLAP && dkv_work[s]) dkv_work[s]->streamWait(compute_stream);
+          cudaMemcpyAsync(gks.data<float>(), grad_key.data<float>(),
+                          k_bytes_send, cudaMemcpyDeviceToDevice, pack_stream);
+          cudaMemcpyAsync(gks.data<float>() + k_numel_send,
+                          grad_value.data<float>(), k_bytes_send,
+                          cudaMemcpyDeviceToDevice, pack_stream);
+          cudaEvent_t ev = nullptr;
+          if (OVERLAP) { cudaEventRecord(bwd_pack_event, compute_stream); ev = bwd_pack_event; }
+          nvtxRangePushA("CP.bwd.LB.ring.exchange_buffers");
+          std::shared_ptr<Work> w = dkv_rotater->exchange_buffers(gks, ev);
+          if (OVERLAP) dkv_work[s] = w;
+          nvtxRangePop();
+        }
       } else {
-        // Non-LB path: batch accumulate per step, single sendrecv at end
-        if (!step_skipped && grad_k_step.is_valid()) {
+        // Non-LB path: batch accumulate per step, single sendrecv at end.
+        // Under ITER0_ONLY_DKV, only iter 0's contribution is kept — peer-K
+        // gradients from i > 0 are dropped (mimics PT's autograd behavior).
+        if (!step_skipped && grad_k_step.is_valid() &&
+            !(iter0_only_dkv && i > 0)) {
           grad_k_accum[i] = grad_k_step;
           grad_v_accum[i] = grad_v_step;
         }
@@ -285,17 +521,22 @@ public:
     }
 
     // --- Final: collect dK/dV from ring ---
-    if (lb_active_bwd) {
+    if (lb_active_bwd && !skip_dkv_nccl) {
       // LB: receive completed travelling accumulator
       int64_t k_numel = grad_key.numel();
       nvtxRangePushA("CP.bwd.LB.post_loop.next_buffer");
-      Tensor final_grad_kv = dkv_rotater->next_buffer();
+      Tensor final_grad_kv = OVERLAP
+          ? dkv_rotater->next_buffer_streamordered(compute_stream)
+          : dkv_rotater->next_buffer();
       nvtxRangePop();
       Tensor final_flat = final_grad_kv.flatten();
       grad_key =
           final_flat.narrow(0, 0, k_numel).reshape(grad_key.shape());
       grad_value =
           final_flat.narrow(0, k_numel, k_numel).reshape(grad_value.shape());
+    } else if (lb_active_bwd && skip_dkv_nccl) {
+      // SKIP_DKV_ROTATION path: grad_key / grad_value already hold this
+      // rank's locally accumulated partials. No cross-rank collection.
     } else {
       // Non-LB: step 0 is local, steps 1..N-1 exchanged via packed sendrecv.
       // grad_key/grad_value (initialized to zeros at lines 88-92) accumulate results.
@@ -347,6 +588,8 @@ public:
       }
     }
 
+    if (bwd_pack_event) cudaEventDestroy(bwd_pack_event);
+
     // Cast back to original dtype
     if (grad_q.dtype() != saved_q_.dtype()) {
       grad_q = grad_q.as_type(saved_q_.dtype());
@@ -354,6 +597,40 @@ public:
     if (grad_key.dtype() != saved_k_chunks_[0].dtype()) {
       grad_key = grad_key.as_type(saved_k_chunks_[0].dtype());
       grad_value = grad_value.as_type(saved_v_chunks_[0].dtype());
+    }
+
+    // Optional backward parity probe (gated by DUMP_CP_OUT=1).
+    // Appends dY + per-rank local dQ/dK/dV first16 for each backward call.
+    // Block 0's backward = LAST call (highest call_idx) in step 0.
+    // Placed BEFORE the unshard branch so it fires on both paths.
+    {
+      static std::atomic<int> _bw_call_idx{0};
+      int call_idx = _bw_call_idx.fetch_add(1);
+      const char *env = std::getenv("DUMP_CP_OUT");
+      if (call_idx < 24 && env && env[0] == '1') {
+        auto dump16 = [](std::ofstream &f, const char *label,
+                         const Tensor &t) {
+          Tensor host = t.to_cpu();
+          const float *p = host.data<float>();
+          int64_t n = std::min<int64_t>(16, t.numel());
+          f << label << " first16: [";
+          for (int64_t i = 0; i < n; ++i) {
+            f << p[i] << (i == n - 1 ? "" : ", ");
+          }
+          f << "]\n";
+        };
+
+        std::string path = "block_bw_rank" + std::to_string(rank_) + ".md";
+        std::ofstream df(path, std::ios::app);
+        df << "\n## call_idx=" << call_idx << "\n";
+        const auto &gd = grad_local.shape().dims;
+        df << "grad_local shape=[" << gd[0] << "," << gd[1] << "," << gd[2]
+           << "," << gd[3] << "]\n";
+        dump16(df, "dY", grad_local);
+        dump16(df, "dQ_local", grad_q);
+        dump16(df, "dK_local", grad_key);
+        dump16(df, "dV_local", grad_value);
+      }
     }
 
     // ----- Phase 4: Unshard gradients -----
@@ -371,8 +648,11 @@ public:
     Tensor full_grad_v = all_gather_along_seq(grad_value);
     nvtxRangePop();
 
-    bool lb_active = load_balance_;
-    if (lb_active) {
+    // Mirror the forward: only unloadbalance the all-gathered grads when CP
+    // itself applied HeadTail (i.e. external pre-shard did NOT). If
+    // external_balanced_ is true, grads are left in HeadTail layout to match
+    // the caller's expectation (parameter grads already trained that way).
+    if (load_balance_ && !external_balanced_) {
       HeadTail lb;
       lb.set_world_size(world_size_);
       lb.set_chunk_dim(2);
@@ -390,6 +670,7 @@ public:
     saved_k_chunks_.clear();
     saved_v_chunks_.clear();
     saved_lse_per_step_.clear();
+    saved_out_per_step_.clear();
     merged_lse_ = Tensor();
     merged_out_ = Tensor();
   }
@@ -401,6 +682,7 @@ private:
   std::vector<bool> saved_causal_flags_;
   std::vector<bool> saved_partial_flags_;
   std::vector<Tensor> saved_lse_per_step_;
+  std::vector<Tensor> saved_out_per_step_;
   Tensor merged_lse_;
   Tensor merged_out_;
 
@@ -413,6 +695,8 @@ private:
   int rank_;
   bool unshard_;
   bool recompute_k_;
+  bool sub_chunk_active_;
+  bool external_balanced_;
 
   std::unique_ptr<RingRotatorBase> create_rotator() const {
     switch (rotator_type_) {

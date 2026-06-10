@@ -126,6 +126,171 @@ int main(int argc, char** argv) {
     DeviceIndex device(Device::CUDA, rank);
 
     // =========================================================================
+    // SIZE-SCALING MICROBENCHMARK (rank 0 only, no CP machinery)
+    //   Goal: does our attention kernel scale DOWN with sequence length?
+    //   Times two things at T = 256 / 512 / 1024 (B=4, H=12, D=64, causal):
+    //     (1) sdpa_fused_forward  -- full wrapper (allocates out/lse per call)
+    //     (2) kernel alone        -- mem_efficient_attn_forward_tc_strided with
+    //                                out/lse pre-allocated once (pure GPU kernel)
+    //   If (2) is roughly flat across 256/512/1024, the kernel has a fixed cost
+    //   that does not shrink with the per-rank shard -> that explains why CP
+    //   (which makes every call small) loses our kernel's normal advantage.
+    // =========================================================================
+    if (rank == 0) {
+        std::cout << "\n=== SIZE-SCALING MICROBENCHMARK (B=4 H=12 D=64, causal) ===\n";
+        std::cout << std::fixed << std::setprecision(4);
+
+        const int64_t Bm = 4, Hm = 12, Dm = 64;
+        const float   scm = 1.0f / std::sqrt(static_cast<float>(Dm));
+        const int     NWARM = 10, NITERS = 50;
+        const int64_t sizes[] = {256, 512, 1024};
+
+        TensorOptions opts_m = TensorOptions()
+            .with_dtype(Dtype::Float32)
+            .with_device(device)
+            .with_req_grad(false);
+
+        cudaEvent_t ev0, ev1;
+        cudaEventCreate(&ev0);
+        cudaEventCreate(&ev1);
+
+        std::cout << "  T      sdpa_fused_forward(ms)   kernel_alone(ms)   "
+                     "wrapper_overhead(ms)\n";
+        for (int64_t Tm : sizes) {
+            Shape qkv_m({{Bm, Hm, Tm, Dm}});
+            Tensor qm = Tensor::randn<float>(qkv_m, opts_m, 77, 0.3f);
+            Tensor km = Tensor::randn<float>(qkv_m, opts_m, 78, 0.3f);
+            Tensor vm = Tensor::randn<float>(qkv_m, opts_m, 79, 0.3f);
+
+            // ---- (1) full wrapper: sdpa_fused_forward ----
+            for (int w = 0; w < NWARM; ++w) {
+                SDPAResult r = sdpa_fused_forward(qm, km, vm, true, scm, 0, 0);
+                (void)r;
+            }
+            cudaDeviceSynchronize();
+            cudaEventRecord(ev0);
+            for (int i = 0; i < NITERS; ++i) {
+                SDPAResult r = sdpa_fused_forward(qm, km, vm, true, scm, 0, 0);
+                (void)r;
+            }
+            cudaEventRecord(ev1);
+            cudaEventSynchronize(ev1);
+            float ms_wrap = 0.0f;
+            cudaEventElapsedTime(&ms_wrap, ev0, ev1);
+            ms_wrap /= NITERS;
+
+            // ---- (2) kernel alone: pre-allocate out/lse once ----
+            Shape out_shape({{Bm, Hm, Tm, Dm}});
+            Shape lse_shape({{Bm, Hm, Tm, 1}});
+            Tensor outm = Tensor::empty(out_shape, opts_m);
+            Tensor lsem = Tensor::empty(lse_shape, opts_m);
+
+            const float *Qp = qm.data<float>();
+            const float *Kp = km.data<float>();
+            const float *Vp = vm.data<float>();
+            float       *Op = outm.data<float>();
+            float       *Lp = lsem.data<float>();
+
+            // contiguous [B,H,T,D] strides
+            const int64_t sB  = Hm * Tm * Dm, sH = Tm * Dm, sM = Dm;
+            const int64_t lsB = Hm * Tm,      lsH = Tm;
+
+            auto launch_kernel = [&]() {
+                OwnTensor::cp::cuda::mem_efficient_attn_forward_tc_strided(
+                    Qp, sB, sM, sH,
+                    Kp, sB, sM, sH,
+                    Vp, sB, sM, sH,
+                    Op, sB, sM, sH,
+                    Lp, lsB, lsH,
+                    Bm, Hm, Tm, Tm, 0, 0, Dm,
+                    true, 0.0f, nullptr);
+            };
+
+            for (int w = 0; w < NWARM; ++w) launch_kernel();
+            cudaDeviceSynchronize();
+            cudaEventRecord(ev0);
+            for (int i = 0; i < NITERS; ++i) launch_kernel();
+            cudaEventRecord(ev1);
+            cudaEventSynchronize(ev1);
+            float ms_kern = 0.0f;
+            cudaEventElapsedTime(&ms_kern, ev0, ev1);
+            ms_kern /= NITERS;
+
+            std::cout << "  " << Tm << "    " << ms_wrap
+                      << "                  " << ms_kern
+                      << "             " << (ms_wrap - ms_kern) << "\n";
+        }
+        cudaEventDestroy(ev0);
+        cudaEventDestroy(ev1);
+        std::cout << "  (If kernel_alone is ~flat across 256/512/1024 -> fixed-cost "
+                     "floor, kernel doesn't scale down to CP shards)\n";
+        std::cout << "=== END SIZE-SCALING MICROBENCHMARK ===\n\n";
+    }
+
+    // =========================================================================
+    // LB-SHAPE CHECK: time our kernel at the ACTUAL load-balanced ring shapes,
+    // not clean squares. cp=2 round-robin per-step dispatch is:
+    //   i=0        : T_q=512, T_k=512, causal      (diagonal)
+    //   i<=rank    : T_q=512, T_k=256, non-causal  (full Q, half K)
+    //   i>rank     : T_q=256, T_k=512, non-causal  (half Q, full K, partial)
+    // Each non-square step does ~131k pair-work, same as the causal diagonal.
+    // CP-trace per-call reference: ours ~593us, PyTorch cutlass ~177-200us.
+    // =========================================================================
+    if (rank == 0) {
+        std::cout << "=== LB-SHAPE CHECK (B=4 H=12 D=64) ===\n";
+        std::cout << std::fixed << std::setprecision(4);
+        const int64_t Bm = 4, Hm = 12, Dm = 64;
+        const int     NWARM = 10, NITERS = 50;
+        TensorOptions opts_m = TensorOptions().with_dtype(Dtype::Float32)
+            .with_device(device).with_req_grad(false);
+        cudaEvent_t e0, e1; cudaEventCreate(&e0); cudaEventCreate(&e1);
+
+        struct Case { const char* name; int64_t Tq, Tk; bool causal; };
+        const Case cases[] = {
+            {"i=0  512x512 causal", 512, 512, true},
+            {"i<=r 512x256 full  ", 512, 256, false},
+            {"i>r  256x512 full  ", 256, 512, false},
+            {"     512x512 full  ", 512, 512, false},
+        };
+        std::cout << "  shape                 time(ms)   pair-work     pairs/us\n";
+        for (const auto& c : cases) {
+            Shape qsh({{Bm, Hm, c.Tq, Dm}}), ksh({{Bm, Hm, c.Tk, Dm}});
+            Tensor qm = Tensor::randn<float>(qsh, opts_m, 77, 0.3f);
+            Tensor km = Tensor::randn<float>(ksh, opts_m, 78, 0.3f);
+            Tensor vm = Tensor::randn<float>(ksh, opts_m, 79, 0.3f);
+            Tensor outm = Tensor::empty(Shape({{Bm, Hm, c.Tq, Dm}}), opts_m);
+            Tensor lsem = Tensor::empty(Shape({{Bm, Hm, c.Tq, 1}}), opts_m);
+            const float *Qp = qm.data<float>(), *Kp = km.data<float>(), *Vp = vm.data<float>();
+            float *Op = outm.data<float>(), *Lp = lsem.data<float>();
+            const int64_t qsB = Hm*c.Tq*Dm, qsH = c.Tq*Dm, qsM = Dm;
+            const int64_t ksB = Hm*c.Tk*Dm, ksH = c.Tk*Dm, ksM = Dm;
+            const int64_t osB = Hm*c.Tq*Dm, osH = c.Tq*Dm, osM = Dm;
+            const int64_t lsB = Hm*c.Tq,    lsH = c.Tq;
+            auto run = [&]() {
+                OwnTensor::cp::cuda::mem_efficient_attn_forward_tc_strided(
+                    Qp, qsB, qsM, qsH, Kp, ksB, ksM, ksH, Vp, ksB, ksM, ksH,
+                    Op, osB, osM, osH, Lp, lsB, lsH,
+                    Bm, Hm, c.Tq, c.Tk, 0, 0, Dm, c.causal, 0.0f, nullptr);
+            };
+            for (int w = 0; w < NWARM; ++w) run();
+            cudaDeviceSynchronize(); cudaEventRecord(e0);
+            for (int i = 0; i < NITERS; ++i) run();
+            cudaEventRecord(e1); cudaEventSynchronize(e1);
+            float ms = 0.0f; cudaEventElapsedTime(&ms, e0, e1); ms /= NITERS;
+            // pair-work: causal = Tq*Tk/2 (lower-tri), full = Tq*Tk
+            double pairs = c.causal ? (double)Bm*Hm*c.Tq*c.Tk/2.0
+                                    : (double)Bm*Hm*c.Tq*c.Tk;
+            std::cout << "  " << c.name << "   " << ms << "     "
+                      << (long long)pairs << "   "
+                      << (pairs / (ms * 1000.0)) << "\n";
+        }
+        cudaEventDestroy(e0); cudaEventDestroy(e1);
+        std::cout << "  (compare time to CP-trace per-call: ours ~0.59ms, cutlass ~0.18ms)\n";
+        std::cout << "=== END LB-SHAPE CHECK ===\n\n";
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // =========================================================================
     // Test parameters — small enough to inspect, large enough to expose bugs
     // =========================================================================
     const int64_t B = 2, H = 2, T = 8, D = 4;

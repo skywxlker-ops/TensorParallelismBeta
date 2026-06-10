@@ -1776,10 +1776,14 @@ void HeadTail::loadbalance(Tensor &tensor) {
 
   int64_t seq_len = tensor.shape().dims[chunkdim];
 
-  if (seq_len % 2 != 0) {
+  if (world_size <= 0) {
+    throw std::runtime_error(
+        "HeadTail::loadbalance: world_size must be > 0 (call set_world_size first)");
+  }
+  if (seq_len % (2 * world_size) != 0) {
     std::ostringstream oss;
     oss << "HeadTail::loadbalance: Sequence length (" << seq_len
-        << ") must be even";
+        << ") must be divisible by 2*world_size (2*" << world_size << ")";
     throw std::runtime_error(oss.str());
   }
 
@@ -1794,14 +1798,15 @@ void HeadTail::loadbalance(Tensor &tensor) {
   // Allocate temp buffer for the permuted result
   Tensor result = Tensor::empty(tensor.shape(), tensor.opts());
 
-  // HeadTail permutation via CUDA kernel:
-  //   output[2k]   = input[k]          (head)
-  //   output[2k+1] = input[T-1-k]      (tail, reversed)
-  // Result: [0, T-1, 1, T-2, 2, T-3, ...]
+  // HeadTail permutation via CUDA kernel (chunk-level, PyTorch parity):
+  //   Splits T into 2*N chunks of size chunk_sz = T/(2*N). Rank r ends up
+  //   owning chunks (r, 2N-1-r) concatenated as [head_chunk, tail_chunk]
+  //   after a subsequent split-by-N along the seq dim.
   launch_headtail_loadbalance(
       tensor.data<float>(),
       result.data<float>(),
       outer_size, seq_len, inner_size,
+      world_size,
       stream_);
 
   // Copy permuted data back to the original tensor's GPU buffer
@@ -1818,10 +1823,14 @@ void HeadTail::unloadbalance(Tensor &tensor) {
 
   int64_t seq_len = tensor.shape().dims[chunkdim];
 
-  if (seq_len % 2 != 0) {
+  if (world_size <= 0) {
+    throw std::runtime_error(
+        "HeadTail::unloadbalance: world_size must be > 0 (call set_world_size first)");
+  }
+  if (seq_len % (2 * world_size) != 0) {
     std::ostringstream oss;
     oss << "HeadTail::unloadbalance: Sequence length (" << seq_len
-        << ") must be even";
+        << ") must be divisible by 2*world_size (2*" << world_size << ")";
     throw std::runtime_error(oss.str());
   }
 
@@ -1833,13 +1842,13 @@ void HeadTail::unloadbalance(Tensor &tensor) {
 
   Tensor result = Tensor::empty(tensor.shape(), tensor.opts());
 
-  // Inverse HeadTail permutation via CUDA kernel:
-  //   output[k]       = input[2k]       (recover head)
-  //   output[T-1-k]   = input[2k+1]    (recover tail)
+  // Inverse HeadTail permutation via CUDA kernel (chunk-level inverse).
+  // Restores original sequence order from a loadbalanced layout.
   launch_headtail_unloadbalance(
       tensor.data<float>(),
       result.data<float>(),
       outer_size, seq_len, inner_size,
+      world_size,
       stream_);
 
   cudaMemcpyAsync(tensor.data<float>(), result.data<float>(),

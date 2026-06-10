@@ -5,6 +5,9 @@
 #include <vector>
 #include <memory>
 #include <stdexcept>
+#include <cstdio>
+#include <cstdlib>
+#include <cuda_runtime.h>
 
 using namespace OwnTensor;
 
@@ -25,8 +28,27 @@ public:
 
     virtual ~RingRotatorBase() = default;
 
-    virtual void exchange_buffers(Tensor& curr_buffer) = 0;
+    // Posts the async send of curr_buffer and receives into the rotator's
+    // (double-buffered) recv slot. Returns the Work handle so the CALLER can
+    // guard reuse of its own send-staging buffer (must outlive the transfer).
+    //
+    // pack_event: if non-null, the rotator makes its communication stream wait
+    // on this event BEFORE issuing the NCCL send — used to order a caller-side
+    // pack memcpy (on the compute stream) -> send (on the comm stream), so the
+    // send never reads a half-packed buffer. nullptr => legacy behavior.
+    virtual std::shared_ptr<Work> exchange_buffers(Tensor& curr_buffer,
+                                                   cudaEvent_t pack_event = nullptr) = 0;
+
+    // CPU-blocking consume (legacy path; used when CP_NO_OVERLAP is set).
     virtual Tensor next_buffer() = 0;
+
+    // GPU-side consume: make `compute_stream` wait on the pending recv event
+    // (no CPU stall) and return the received buffer. Default falls back to the
+    // CPU-blocking next_buffer() (correct, just not overlapped) so rotators that
+    // cannot pipeline (e.g. AllGather) remain valid.
+    virtual Tensor next_buffer_streamordered(cudaStream_t /*compute_stream*/) {
+        return next_buffer();
+    }
 
 protected:
     std::shared_ptr<ProcessGroupNCCL> pg_;
@@ -45,42 +67,66 @@ protected:
 class P2PRingRotator : public RingRotatorBase {
 public:
     P2PRingRotator(std::shared_ptr<ProcessGroupNCCL> pg)
-        : RingRotatorBase(pg), recv_buffer_(), buffer_allocated_(false) {}
+        : RingRotatorBase(pg), buffer_allocated_(false), slot_(0) {}
 
-    void exchange_buffers(Tensor& curr_buffer) override {
+    // Double-buffered ring shift: receive into the slot NOT being read by the
+    // current step's compute, so recv(i+1) can be in flight while compute(i)
+    // reads recv(i). Returns the Work covering both this step's send and recv.
+    std::shared_ptr<Work> exchange_buffers(Tensor& curr_buffer,
+                                           cudaEvent_t pack_event = nullptr) override {
         int next_rank = (rank_ + 1) % world_size_;
         int prev_rank = (rank_ - 1 + world_size_) % world_size_;
 
         size_t count = static_cast<size_t>(curr_buffer.numel());
         Dtype dtype = curr_buffer.dtype();
 
-        // Pre-allocate receive buffer once, reuse across ring steps
+        // Pre-allocate BOTH receive slots once (ping-pong), reuse across steps.
         if (!buffer_allocated_) {
-            recv_buffer_ = Tensor::empty(curr_buffer.shape(), curr_buffer.opts());
+            for (int s = 0; s < 2; ++s)
+                recv_[s] = Tensor::empty(curr_buffer.shape(), curr_buffer.opts());
             buffer_allocated_ = true;
         }
 
-        pending_work_ = pg_->sendrecv_async(
-            curr_buffer.data<float>(), recv_buffer_.data<float>(),
+        // Order send-after-pack: make the comm stream wait for the caller's pack
+        // memcpy (recorded on the compute stream) before NCCL reads curr_buffer.
+        if (pack_event != nullptr) {
+            cudaStreamWaitEvent(pg_->getStream(), pack_event, 0);
+        }
+
+        slot_ ^= 1;  // receive into the free slot
+        work_[slot_] = pg_->sendrecv_async(
+            curr_buffer.data<float>(), recv_[slot_].data<float>(),
             next_rank, prev_rank, count, dtype);
+        return work_[slot_];
     }
 
     Tensor next_buffer() override {
-        if (pending_work_) {
-            pending_work_->wait();
-            pending_work_ = nullptr;
+        if (work_[slot_]) {
+            work_[slot_]->wait();      // CPU-blocking (legacy / CP_NO_OVERLAP path)
+            work_[slot_] = nullptr;
         }
-
-        if (!recv_buffer_.is_valid()) {
+        if (!recv_[slot_].is_valid()) {
             throw std::runtime_error("P2PRingRotator::next_buffer: no buffer available");
         }
-        return recv_buffer_;
+        return recv_[slot_];
+    }
+
+    Tensor next_buffer_streamordered(cudaStream_t compute_stream) override {
+        if (work_[slot_]) {
+            work_[slot_]->streamWait(compute_stream);  // GPU-side, no CPU stall
+        }
+        if (!recv_[slot_].is_valid()) {
+            throw std::runtime_error(
+                "P2PRingRotator::next_buffer_streamordered: no buffer available");
+        }
+        return recv_[slot_];
     }
 
 private:
-    Tensor recv_buffer_;
+    Tensor recv_[2];                       // ping-pong recv slots
     bool buffer_allocated_;
-    std::shared_ptr<Work> pending_work_;
+    int  slot_;                            // slot most recently received into
+    std::shared_ptr<Work> work_[2];        // pending op per recv slot
 };
 
 
@@ -106,7 +152,12 @@ public:
     // receive from rank (i-1)%N. Matches PyTorch's permute_tensor
     // with dsts=[1,2,...,n-1,0] using alltoallv with sparse split sizes.
     // Buffer: 1x per_rank_count (not world_size * per_rank_count).
-    void exchange_buffers(Tensor& curr_buffer) override {
+    // One sparse alltoallv per step (send->next_rank, recv<-prev_rank): exactly
+    // ONE in-flight op writing ONE recv destination per step — structurally
+    // identical to P2P, so the ping-pong (recv_[2]/slot_) applies. The sparse
+    // split arrays are slot-independent (they encode ranks, computed once).
+    std::shared_ptr<Work> exchange_buffers(Tensor& curr_buffer,
+                                           cudaEvent_t pack_event = nullptr) override {
         int next_rank = (rank_ + 1) % world_size_;
         int prev_rank = (rank_ - 1 + world_size_) % world_size_;
 
@@ -114,40 +165,48 @@ public:
         Dtype dtype = curr_buffer.dtype();
 
         if (!buffer_allocated_) {
-            recv_buffer_ = Tensor::empty(curr_buffer.shape(), curr_buffer.opts());
-            // Build sparse split sizes: send numel to next_rank, recv numel from prev_rank
+            for (int s = 0; s < 2; ++s)
+                recv_[s] = Tensor::empty(curr_buffer.shape(), curr_buffer.opts());
             sendcounts_.assign(world_size_, 0);
             recvcounts_.assign(world_size_, 0);
             senddispls_.assign(world_size_, 0);
             recvdispls_.assign(world_size_, 0);
             sendcounts_[next_rank] = numel;
             recvcounts_[prev_rank] = numel;
-            // Displacements are 0 for both (single contiguous buffer)
             buffer_allocated_ = true;
         }
 
-        pending_work_ = pg_->alltoallv_async(
+        if (pack_event != nullptr) {
+            cudaStreamWaitEvent(pg_->getStream(), pack_event, 0);
+        }
+
+        slot_ ^= 1;
+        work_[slot_] = pg_->alltoallv_async(
             curr_buffer.data(), sendcounts_.data(), senddispls_.data(),
-            recv_buffer_.data(), recvcounts_.data(), recvdispls_.data(),
+            recv_[slot_].data(), recvcounts_.data(), recvdispls_.data(),
             dtype);
+        return work_[slot_];
     }
 
     Tensor next_buffer() override {
-        if (pending_work_) {
-            pending_work_->wait();
-            pending_work_ = nullptr;
-        }
-        return recv_buffer_;
+        if (work_[slot_]) { work_[slot_]->wait(); work_[slot_] = nullptr; }
+        return recv_[slot_];
+    }
+
+    Tensor next_buffer_streamordered(cudaStream_t compute_stream) override {
+        if (work_[slot_]) work_[slot_]->streamWait(compute_stream);
+        return recv_[slot_];
     }
 
 private:
-    Tensor recv_buffer_;
+    Tensor recv_[2];
     bool buffer_allocated_;
+    int  slot_ = 0;
     std::vector<size_t> sendcounts_;
     std::vector<size_t> recvcounts_;
     std::vector<size_t> senddispls_;
     std::vector<size_t> recvdispls_;
-    std::shared_ptr<Work> pending_work_;
+    std::shared_ptr<Work> work_[2];
 };
 
 
@@ -162,7 +221,18 @@ public:
     AllGatherRingRotator(std::shared_ptr<ProcessGroupNCCL> pg)
         : RingRotatorBase(pg), idx_(0), aggregated_buffer_() {}
 
-    void exchange_buffers(Tensor& curr_buffer) override {
+    std::shared_ptr<Work> exchange_buffers(Tensor& curr_buffer,
+                                           cudaEvent_t /*pack_event*/ = nullptr) override {
+        // [#8] AllGather cannot pipeline (single blocking collective); surface
+        // the lost overlap once, unless the caller explicitly disabled overlap.
+        static bool warned = false;
+        if (!warned && std::getenv("CP_NO_OVERLAP") == nullptr) {
+            warned = true;
+            fprintf(stderr,
+                    "[CP overlap WARNING] AllGatherRingRotator selected: ring "
+                    "communication will NOT overlap compute (single blocking "
+                    "all_gather). Use P2P/AlltoAll rotator for overlap.\n");
+        }
         idx_ += 1;
 
         if (!aggregated_buffer_.is_valid()) {
@@ -184,6 +254,7 @@ public:
 
             per_rank_numel_ = per_rank_count;
         }
+        return nullptr;  // blocking all_gather already completed; no pending Work
     }
 
     Tensor next_buffer() override {

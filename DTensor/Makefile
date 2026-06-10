@@ -11,8 +11,29 @@ NVCC_LINK_FLAGS = -std=c++17 -Xcompiler -fPIC -O3 -g -arch=sm_86 -ccbin=/home/bl
 TARGET = main
 
 CUDA_HOME      := /usr/local/cuda
-TENSOR_LIB_DIR := /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Tensor-Implementations
-TENSOR_LIB_A   := /home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Tensor-Implementations/lib/libtensor.a
+TENSOR_LIB_DIR := /home/blu-bridge25/TP/OldPush/TensorParallelismBeta/DTensor/Tensor-Implementations
+TENSOR_LIB_A   := /home/blu-bridge25/TP/OldPush/TensorParallelismBeta/DTensor/Tensor-Implementations/lib/libtensor.a
+BLAS_DIR       := $(TENSOR_LIB_DIR)/BluBridge-BLAS
+BLAS_LIB_DIR   := $(TENSOR_LIB_DIR)/lib
+
+# =============================================================================
+# BLAS Backend Selection  (default: cublas | WITH_BLUBLAS=1 -> blublas)
+# Must match the backend libtensor.a was built with in Tensor-Implementations.
+# =============================================================================
+ifeq ($(WITH_BLUBLAS),1)
+  BLAS_BACKEND  := blublas
+  CXXFLAGS      += -DWITH_MYBLAS
+  NVCC_FLAGS    += -DWITH_MYBLAS
+  BLAS_INCLUDES := -I$(BLAS_DIR)/include
+  BLAS_LIBS     := -lblublas
+  BLAS_RPATH    := -Xlinker -rpath -Xlinker $(BLAS_LIB_DIR)
+else
+  BLAS_BACKEND  := cublas
+  BLAS_INCLUDES :=
+  BLAS_LIBS     :=
+  BLAS_RPATH    :=
+endif
+$(info [DTensor] BLAS backend: $(BLAS_BACKEND))
 
 INCLUDES = \
     -I. \
@@ -22,20 +43,21 @@ INCLUDES = \
     -I./memory \
     -I./bridge \
     -I$(TENSOR_LIB_DIR)/include \
+    $(BLAS_INCLUDES) \
     -I$(CUDA_HOME)/include \
 #     -I/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/include \
     $(AUTOGRAD_INCLUDES)
 
 LIB_PATHS = \
-    -L/home/blu-bridge25/TP/TensorParallelismBeta/DTensor/Tensor-Implementations/lib \
+    -L/home/blu-bridge25/TP/OldPush/TensorParallelismBeta/DTensor/Tensor-Implementations/lib \
 #     -L/home/blu-bridge25/Study/Code/TensorParallelismBeta/autograd/cgadimpl/build \
     -L$(CUDA_HOME)/lib64 \
     -L/usr/lib/x86_64-linux-gnu/openmpi/lib \
     $(AUTOGRAD_LIB_PATHS)
 
-LIBS = -lmpi -lnccl -lcudart -lcublas -lcurand -lgomp -lstdc++ $(AUTOGRAD_LIBS) -lz -lpthread -ldl -lnvToolsExt
+LIBS = -lmpi -lnccl -lcudart -lcublas -lcuda -lcurand -lgomp -lstdc++ $(BLAS_LIBS) $(AUTOGRAD_LIBS) -lz -lpthread -ldl -lnvToolsExt -lnvidia-ml
 
-LDFLAGS = -L/home/blu-bridge25/.local/lib -Xlinker -rpath -Xlinker /home/blu-bridge25/.local/lib
+LDFLAGS = -L/home/blu-bridge25/.local/lib -Xlinker -rpath -Xlinker /home/blu-bridge25/.local/lib $(BLAS_RPATH)
 
 SRCS = main.cpp \
 	tensor/dtensor.cpp \
@@ -670,6 +692,34 @@ gpt2_cp_test: $(GPT2_CP_TEST_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] GPT2 Context Parallel Test build complete."
 	@echo "\nRun with: mpirun -np <N> ./gpt2_cp_test_exec \n"
 
+# Tensor library narrow_view+clone+cat sanity test (single-GPU)
+TENSOR_LIB_PARTIAL_SRCS = \
+    gpt2_cp_test/tensor_lib_partial_update_test.cpp
+
+TENSOR_LIB_PARTIAL_OBJS = $(TENSOR_LIB_PARTIAL_SRCS:.cpp=.o)
+
+tensor_lib_partial_update_test: $(TENSOR_LIB_PARTIAL_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: tensor_lib_partial_update_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o tensor_lib_partial_update_test_exec $(TENSOR_LIB_PARTIAL_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] Tensor library partial-update sanity test build complete."
+	@echo "\nRun with: ./tensor_lib_partial_update_test_exec\n"
+
+# Isolated CP backward parity test (PT vs C++)
+CP_BWD_ISOLATED_SRCS = \
+    gpt2_cp_test/cp_bwd_isolated_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+CP_BWD_ISOLATED_OBJS = $(CP_BWD_ISOLATED_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/FusedAdamWKernel.o dnn/VectorizedLayerNormKernel.o dnn/FusedLayerNormOp.o dnn/AttentionKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ) $(CP_ATTN_FWD_KERNEL_OBJ) $(CP_ATTN_BWD_KERNEL_OBJ) $(KV_PACK_KERNEL_OBJ)
+
+cp_bwd_isolated_test: $(CP_BWD_ISOLATED_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: cp_bwd_isolated_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o cp_bwd_isolated_test_exec $(CP_BWD_ISOLATED_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] CP backward isolated test build complete."
+	@echo "\nRun with: DUMP_CP_STEPS=1 mpirun -np 2 ./cp_bwd_isolated_test_exec \n"
+
 # CP vs Standard SDPA Comparison Test (2 GPUs, MPI)
 CP_SDPA_COMPARE_SRCS = \
     gpt2_cp_test/cp_sdpa_compare_test.cpp \
@@ -678,7 +728,7 @@ CP_SDPA_COMPARE_SRCS = \
     process_group/processGroupNCCL.cpp \
     tensor/placement.cpp
 
-CP_SDPA_COMPARE_OBJS = $(CP_SDPA_COMPARE_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/AttentionKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ)
+CP_SDPA_COMPARE_OBJS = $(CP_SDPA_COMPARE_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/AttentionKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ) $(CP_ATTN_FWD_KERNEL_OBJ) $(CP_ATTN_BWD_KERNEL_OBJ)
 
 cp_sdpa_compare_test: $(CP_SDPA_COMPARE_OBJS) $(TENSOR_LIB_A)
 	@echo "\n[LINKING] Creating executable: cp_sdpa_compare_test_exec"

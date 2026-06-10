@@ -7,6 +7,9 @@
 #include "ops/UnaryOps/Exponents.h"
 #include "ops/TensorOps.h"
 #include <stdexcept>
+#include <cstdlib>
+#include <fstream>
+#include <string>
 
 using namespace OwnTensor;
 
@@ -36,7 +39,12 @@ public:
           lse_(),
           out_dtype_(Dtype::Float32),
           lse_dtype_(Dtype::Float32),
-          initialized_(false) {}
+          initialized_(false),
+          merge_call_counter_(0) {}
+
+private:
+    int merge_call_counter_;
+public:
 
     // -----------------------------------------------------------------------
     // step
@@ -83,8 +91,15 @@ public:
         if (partial) {
             int64_t T = out_.shape().dims[seq_dim];
             int64_t half_T = T / 2;
-            accum_out = out_.narrow_view(seq_dim, half_T, half_T);
-            accum_lse = lse_.narrow_view(lse_seq_dim, half_T, half_T);
+            // Bug fix: narrow_view on a non-leading axis returns a strided view,
+            // but the tensor library's element-wise binary ops fast-path through
+            // flat memory and ignore per-axis strides. That makes block - view
+            // read the WRONG positions for any head index > 0 (head 1's "second
+            // half" view physically maps to head 1 first half under the flat
+            // fast-path). Clone() forces contiguity so all subsequent arithmetic
+            // is correct regardless of the op's stride handling.
+            accum_out = out_.narrow_view(seq_dim, half_T, half_T).clone();
+            accum_lse = lse_.narrow_view(lse_seq_dim, half_T, half_T).clone();
         } else {
             accum_out = out_;
             accum_lse = lse_;
@@ -104,6 +119,41 @@ public:
         Tensor sig_neg = autograd::sigmoid(neg_lse_diff);
         Tensor log_sig = OwnTensor::log(sig_neg);
         Tensor new_lse = accum_lse - log_sig;
+
+        // DUMP_CP_MERGE=1: dump all intermediates of this merge call so we can
+        // diff vs PT's _SDPAMerger._merge_one. Sequential counter across calls
+        // gives a unique tag per (rank, merger.step invocation index).
+        {
+            const char *env = std::getenv("DUMP_CP_MERGE");
+            const char *rank_env = std::getenv("OMPI_COMM_WORLD_RANK");
+            if (env && env[0] == '1' && rank_env) {
+                int rank_i = std::atoi(rank_env);
+                int call_idx = merge_call_counter_++;
+                auto dump = [&](const char *label, const Tensor &t) {
+                    Tensor host = t.to_cpu();
+                    std::string path = std::string("/tmp/cp_bwd_test/deep/cpp_mrg_") +
+                                       label + "_call" + std::to_string(call_idx) +
+                                       "_partial" + (partial ? "1" : "0") +
+                                       "_rank" + std::to_string(rank_i) + ".bin";
+                    std::ofstream f(path, std::ios::binary);
+                    f.write(reinterpret_cast<const char *>(host.data<float>()),
+                            host.numel() * sizeof(float));
+                };
+                dump("accum_out", accum_out);
+                dump("accum_lse", accum_lse);
+                dump("block_out", block_out);
+                dump("block_lse", block_lse);
+                dump("lse_diff", lse_diff);
+                dump("sig", sig);
+                dump("out_diff", out_diff);
+                dump("correction", correction);
+                dump("new_out", new_out);
+                dump("neg_lse_diff", neg_lse_diff);
+                dump("sig_neg", sig_neg);
+                dump("log_sig", log_sig);
+                dump("new_lse", new_lse);
+            }
+        }
 
         if (partial) {
             // Partial merge: replace 2nd half with merged result via contiguous-safe cat.

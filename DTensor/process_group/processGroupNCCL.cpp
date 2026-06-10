@@ -86,7 +86,7 @@ std::shared_ptr<ProcessGroupNCCL> init_process_group(int world_size, int rank,
     cudaSetDevice(rank);
     CUDACHECK(cudaStreamCreateWithFlags(
         &communication_stream,
-        cudaStreamDefault)); // better than normal cudaStreamCreate
+        cudaStreamNonBlocking)); // better than normal cudaStreamCreate
     stream_created = true;
   } else {
     communication_stream = stream;
