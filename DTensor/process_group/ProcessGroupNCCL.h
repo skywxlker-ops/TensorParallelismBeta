@@ -124,7 +124,7 @@ public:
 
 
     template<typename NCCLFUNC>
-    std::shared_ptr<Work> launch_work_collectives( cudaStream_t stream, NCCLFUNC nccl_op, bool to_sync = false);
+    std::shared_ptr<Work> launch_work_collectives( cudaStream_t stream, NCCLFUNC nccl_op, bool to_sync = false, ncclComm_t work_comm = nullptr);
 
     //collectves
 
@@ -182,7 +182,20 @@ public:
     bool is_owns_stream(){ return owns_stream_; }  
     std::shared_ptr<Work> get_work_obj(){ return work_obj_; }
     cudaStream_t getStream(){return communication_stream_;}
-    
+
+    // Dedicated NON-BLOCKING stream for the CP ring K/V rotation ONLY (lazily
+    // created). The shared communication_stream_ stays BLOCKING so DP/TP
+    // collectives keep their implicit FIFO ordering; only the CP ring overlaps
+    // local attention compute. Mirrors torchtitan's cp_comm_stream model.
+    cudaStream_t cpRingStream();
+    std::shared_ptr<Work> sendrecv_async_stream(
+        const void* sendbuff, void* recvbuff, int send_rank, int recv_rank,
+        size_t count, OwnTensor::Dtype dtype, cudaStream_t stream);
+    std::shared_ptr<Work> alltoallv_async_stream(
+        const void* sendbuff, const size_t* sendcounts, const size_t* senddispls,
+        void* recvbuff, const size_t* recvcounts, const size_t* recvdispls,
+        OwnTensor::Dtype dtype, cudaStream_t stream);
+
     //synchronization using cudaEvent_t
     bool blockStreamEvent();
 
@@ -203,12 +216,23 @@ private:
     int gpus_per_node_ = 8;
     int root_ = 0;  
     ncclUniqueId id_;
+    ncclUniqueId cp_id_;  // unique id for the dedicated CP-ring communicator
     std::shared_ptr<Work> work_obj_;
     std::mutex mutex_lock_; //to access the work_obj
     cudaStream_t communication_stream_ = 0;
+    cudaStream_t cp_ring_stream_ = nullptr;  // dedicated non-blocking CP-ring stream
     cudaEvent_t start_ = nullptr;
     cudaEvent_t stop_ = nullptr;
     ncclComm_t comm_ = nullptr;
+    // Dedicated communicator for the CP ring (overlap path) — isolates ring
+    // traffic from the loss/param all-reduces on comm_, matching PyTorch's
+    // separate-comm-per-parallelism-dimension design. Driven exclusively by the
+    // cp_ring_stream_, so ring collectives serialize on one stream and are never
+    // concurrent on cp_comm_ (NCCL-safe, incl. the AlltoAll variant).
+    ncclComm_t cp_comm_ = nullptr;
+    // DIAGNOSTIC: CP_SYNC_RING=1 -> host-sync the ring stream after each ring
+    // exchange (overlap code path kept, concurrency removed). Race vs logic test.
+    bool cp_sync_ring_ = false;
     bool owns_stream_ = false;
 
     std::string cuda_error_in_nccl = ""; 

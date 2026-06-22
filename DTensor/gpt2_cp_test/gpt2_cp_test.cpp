@@ -33,7 +33,7 @@ public:
 #include "nn/optimizer/Optim.h"
 #include "process_group/ProcessGroupNCCL.h"
 #include "tensor/dtensor.h"
-
+#include "device/AllocationTracker.h"
 // DataLoader (same path as gpt2_tp_test)
 #include "Data_Loader/dl_test.cpp"
 
@@ -220,7 +220,7 @@ public:
     //   past chunks (source_rank < rank_): full attention
     //   future chunks (source_rank > rank_): skipped
     cp_ = std::make_shared<ContextParallel>(
-        mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::AlltoAll,
+        mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::P2P,
         /*load_balance=*/load_balancing, /*recompute_k=*/false);
 
     ln.to(device);
@@ -571,6 +571,7 @@ private:
 // =============================================================================
 
 int main(int argc, char **argv) {
+  OwnTensor::AllocationTracker::instance().init("2step.csv");
   MPI_Init(&argc, &argv);
 
   int rank, world_size;
@@ -581,13 +582,16 @@ int main(int argc, char **argv) {
     std::cout << "=== GPT-2 Context Parallel Training Script ===" << std::endl;
   }
 
-  bool nsys_report = false;
+  bool nsys_report = true;
   //nsys profile -t cuda -o my_report ./path/to/your_executable
   //nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report /path/to/my_report.nsys-rep
   //nsys profile -t cuda -o my_report ./your_executable && nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report my_report.nsys-rep
   try {
 
     bool fourtyfour = false;
+    // Env override to select the small (~44M) config for fast overlap testing
+    // (matches PT MODEL_44M). Load init_weights_named_44M.bin to match.
+    if (std::getenv("CP_MODEL_44M")) fourtyfour = true;
 
     // Configuration
     GPTConfig config;
@@ -602,7 +606,10 @@ int main(int argc, char **argv) {
 
     const int B = static_cast<int>(config.batch_size);
     const int T = static_cast<int>(config.context_length);
-    const int global_batch = fourtyfour?65536:524288;
+    int global_batch = fourtyfour?65536:524288;
+    // Test-only override: shrink the global batch (=> smaller grad_accum =>
+    // faster steps) for quick overlap-bisection runs. Default = original.
+    if (const char *e = std::getenv("CP_GLOBAL_BATCH")) global_batch = atoi(e);
     const int grad_accum_steps = global_batch / (B * T);
 
     const float max_lr = 6e-4f;
@@ -613,9 +620,12 @@ int main(int argc, char **argv) {
     // int max_steps    = (static_cast<int>(num_params) / global_batch ) * 5;
     int max_steps = fourtyfour?6768:1555;
     int warmup_steps = max_steps / 10;
+    // Test-only overrides for fast overlap-bisection runs (default = original).
+    if (const char *e = std::getenv("CP_MAX_STEPS")) max_steps = atoi(e);
+    if (const char *e = std::getenv("CP_WARMUP"))    warmup_steps = atoi(e);
     if (nsys_report)
     {
-      max_steps = 1;
+      max_steps = 2;
       warmup_steps = 0;
     }
     // const int max_steps    = 1;
@@ -1466,6 +1476,10 @@ int main(int argc, char **argv) {
         }
 
         val_loss_log = -1.0f;
+
+        if(step==0){
+        OwnTensor::CachingCUDAAllocator::instance().empty_cache();
+        }
 
       } catch (const std::exception &e) {
         std::cerr << "EXCEPTION RANK " << rank << " STEP " << step << ": "

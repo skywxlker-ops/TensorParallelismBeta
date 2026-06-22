@@ -736,6 +736,22 @@ cp_sdpa_compare_test: $(CP_SDPA_COMPARE_OBJS) $(TENSOR_LIB_A)
 	@echo "[SUCCESS] CP SDPA Compare Test build complete."
 	@echo "\nRun with: mpirun -np 2 ./cp_sdpa_compare_test_exec \n"
 
+# CP forward-overlap co-execution race repro (2 GPUs, MPI)
+CP_COEXEC_RACE_SRCS = \
+    gpt2_cp_test/cp_coexec_race_test.cpp \
+    tensor/dtensor.cpp \
+    tensor/device_mesh.cpp \
+    process_group/processGroupNCCL.cpp \
+    tensor/placement.cpp
+
+CP_COEXEC_RACE_OBJS = $(CP_COEXEC_RACE_SRCS:.cpp=.o) $(CUDA_OBJS) dnn/EntropyKernels.o dnn/AttentionKernels.o $(FUSED_SDPA_KERNEL_OBJ) $(FUSED_SDPA_BWD_KERNEL_OBJ) $(CP_ATTN_FWD_KERNEL_OBJ) $(CP_ATTN_BWD_KERNEL_OBJ)
+
+cp_coexec_race_test: $(CP_COEXEC_RACE_OBJS) $(TENSOR_LIB_A)
+	@echo "\n[LINKING] Creating executable: cp_coexec_race_test_exec"
+	$(NVCC_LINKER) $(NVCC_LINK_FLAGS) $(LIB_PATHS) -o cp_coexec_race_test_exec $(CP_COEXEC_RACE_OBJS) -Xlinker --start-group $(TENSOR_LIB_A) -Xlinker --end-group $(LIBS) $(LDFLAGS)
+	@echo "[SUCCESS] CP co-exec race repro build complete."
+	@echo "\nRun with: mpirun -np 2 ./cp_coexec_race_test_exec \n"
+
 # CP Ring Attention Benchmark (2 GPUs, MPI) — autoresearch eval harness
 CP_RING_BENCH_SRCS = \
     gpt2_cp_test/cp_ring_attn_bench.cpp \

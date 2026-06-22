@@ -290,9 +290,27 @@ public:
       local_v = autograd::contiguous(v_chunks[rank_]); // [B, H, T/n, D]
     }
 
+    // DUMP_CP_DEEP_FWD alignment: fire the per-step deep dumps ONLY on the very
+    // first forward_cp invocation (block 0, step 0) so two separate runs
+    // (overlap vs CP_SYNC_RING) dump the SAME deterministic call with identical
+    // loaded-init inputs. Without this gate the dump overwrites every call and
+    // two processes capture different last-calls (even different shapes), making
+    // the diff meaningless.
+    static std::atomic<int> _deep_call_idx{0};
+    const int my_call_idx = _deep_call_idx.fetch_add(1);
+    const bool deep_first_call = (my_call_idx == 0);
+
     // ----- Phase 2: Ring Attention Loop -----
-    // Create rotator for K,V communication
-    std::unique_ptr<RingRotatorBase> kv_rotator = create_rotator();
+    // Rotator for K,V communication. PERSISTENT across forward_cp calls (bound
+    // below, once the per-rank KV size is known). Rationale: with a fresh
+    // rotator + stack send_buf per call, the ring staging churned through the
+    // caching allocator, and under steady-state pressure the per-step SDPA
+    // OUTPUT buffer could be handed a block physically overlapping an in-flight
+    // ring buffer -> the concurrent ring write clobbered the attention output
+    // (diagnosed: lse stayed bit-identical, out did not; only the V/output
+    // pathway was corrupted; draining the ring before SDPA fixed it). Persistent
+    // ring buffers never share a block with per-step SDPA allocations.
+    RingRotatorBase *kv_rotator = nullptr;
 
     // Initialize merger for accumulating partial attention outputs
     SDPAMerger merger(/*convert_to_f32=*/true);
@@ -313,18 +331,49 @@ public:
     // CP_NO_OVERLAP=1 reverts to the serialized (CPU-blocking) path for A/B.
     // Value-aware: unset OR "0" => overlap ON; any other value => OFF.
     const char *_cp_no_ovl = std::getenv("CP_NO_OVERLAP");
-    const bool OVERLAP =
+    bool OVERLAP =
         (_cp_no_ovl == nullptr) || (_cp_no_ovl[0] == '0' && _cp_no_ovl[1] == '\0');
+    // Independent FORWARD overlap gate (for bisecting fwd-vs-bwd races):
+    // CP_NO_OVERLAP_FWD=1 forces the forward ring onto the blocking/CPU path
+    // even when overlap is on.
+    const char *_no_fwd = std::getenv("CP_NO_OVERLAP_FWD");
+    if (_no_fwd != nullptr && !(_no_fwd[0] == '0' && _no_fwd[1] == '\0'))
+        OVERLAP = false;
     cudaStream_t compute_stream = OwnTensor::cuda::getCurrentStream();
 
     int64_t k_numel = local_k.numel();
     int64_t kv_numel = k_numel * 2;
-    // [#6] Double-buffered send staging: each slot holds K AND V (kv_numel each).
-    Tensor send_buf[2] = {Tensor::empty(Shape({{kv_numel}}), local_k.opts()),
-                          Tensor::empty(Shape({{kv_numel}}), local_k.opts())};
+    // [#6] Persistent double-buffered send staging + rotator, keyed on the
+    // per-rank KV size. Reused across forward_cp calls; reallocated only when the
+    // size changes (e.g. training T vs generation T). Each slot holds K AND V
+    // (kv_numel each). Persistence is the fix for the forward-overlap race: it
+    // stops the ring buffers churning through the allocator so they can never
+    // share a caching-allocator block with the per-step SDPA output.
+    if (persistent_kv_numel_ != kv_numel) {
+      send_buf_[0] = Tensor::empty(Shape({{kv_numel}}), local_k.opts());
+      send_buf_[1] = Tensor::empty(Shape({{kv_numel}}), local_k.opts());
+      kv_rotator_persistent_ = create_rotator(); // fresh recv_ slots for new size
+      persistent_kv_numel_ = kv_numel;
+    }
+    // AllGatherRingRotator gathers all KV ONCE on its first exchange_buffers and
+    // never re-gathers (aggregated_buffer_ stays valid; idx_ only increments).
+    // That is correct for a single ring, but the persistent instance above is
+    // reused across every forward call -- so for AllGather it would serve the
+    // FIRST step's stale K/V forever, with a drifting (rank - idx_) shard index.
+    // P2P/AlltoAll re-communicate fresh data on every exchange, so persistence is
+    // safe (and necessary) for them; AllGather can't overlap, so it gains nothing
+    // from persistence. Recreate a fresh AllGather rotator each forward so it
+    // re-gathers the CURRENT step's K/V with idx_ reset to 0.
+    if (rotator_type_ == RotatorType::AllGather) {
+      kv_rotator_persistent_ = create_rotator();
+    }
+    kv_rotator = kv_rotator_persistent_.get();
+    Tensor *send_buf = send_buf_; // alias so downstream send_buf[s] is unchanged
     std::shared_ptr<Work> exch_work[2] = {nullptr, nullptr};  // [#1] per send slot
-    cudaEvent_t pack_event = nullptr;
-    if (OVERLAP) cudaEventCreateWithFlags(&pack_event, cudaEventDisableTiming);
+    // Pack-ordering events are OWNED by the rotator (persistent, per-slot).
+    // Never create/destroy them per call: destroying an event with a pending
+    // cudaStreamWaitEvent referencing it is unconditional UB (it was a race at
+    // EVERY step; shallow pipelines merely won the timing).
 
     // Current K, V being processed (starts with local chunk)
     Tensor curr_k = local_k;
@@ -338,6 +387,18 @@ public:
         Tensor next_kv = OVERLAP
             ? kv_rotator->next_buffer_streamordered(compute_stream)
             : kv_rotator->next_buffer();
+        // DIAGNOSTIC (CP_FWD_SYNC_RECV=1): real host-side sync of the ring
+        // stream immediately after consuming the received K/V, BEFORE the SDPA
+        // reads it. Isolates the recv->SDPA ordering: next_buffer_streamordered
+        // uses cudaStreamWaitEvent (GPU-side) to order the recv ahead of the
+        // SDPA; if that event ordering is ineffective, the SDPA reads recv_[slot]
+        // before the NCCL recv lands. If this flag flattens the norm (with send
+        // overlap still on), the broken link is the recv-consume event ordering,
+        // and the fix belongs in next_buffer_streamordered -- NOT a blanket ring
+        // sync.
+        const char *_fwd_sync_recv = std::getenv("CP_FWD_SYNC_RECV");
+        if (_fwd_sync_recv && _fwd_sync_recv[0] == '1')
+          cudaStreamSynchronize(pg_->cpRingStream());
         Tensor kv_flat = next_kv.flatten();
         curr_k = kv_flat.narrow(0, 0, k_numel).reshape(local_k.shape());
         curr_v = kv_flat.narrow(0, k_numel, k_numel).reshape(local_v.shape());
@@ -356,10 +417,12 @@ public:
         cudaMemcpyAsync(send_buf[s].data<float>() + k_numel,
                         curr_v.data<float>(), k_bytes, cudaMemcpyDeviceToDevice,
                         compute_stream);
-        cudaEvent_t ev = nullptr;
-        if (OVERLAP) { cudaEventRecord(pack_event, compute_stream); ev = pack_event; }
         nvtxRangePushA("CP.fwd.ring.exchange_buffers");
-        exch_work[s] = kv_rotator->exchange_buffers(send_buf[s], ev);
+        // Explicit overlap flag + the pack (compute) stream. The flag is
+        // separate because compute may run on the legacy NULL stream (0),
+        // which cannot double as a "no overlap" sentinel.
+        exch_work[s] =
+            kv_rotator->exchange_buffers(send_buf[s], OVERLAP, compute_stream);
         nvtxRangePop();
       }
 
@@ -432,6 +495,23 @@ public:
       saved_causal_flags[i] = use_causal;
       saved_partial_flags[i] = use_partial;
 
+      // DIAGNOSTIC (CP_DRAIN_AT=N): localize WHICH step-0 stream-0 op races the
+      // concurrent i==0 ring send/recv, by bisecting the position of a real
+      // ring-stream drain. Drain at P fixes the explosion iff the racing op runs
+      // AFTER P. Endpoints already known: drain-before-everything (CP_SYNC_RING)
+      // fixes; drain-after-all-step-0 (CP_FWD_SYNC_RECV) does not; SDPA output
+      // ruled out by CP_SELFCHECK. So the victim is the clone (above) or the
+      // merger.step (below). Points:
+      //   1 = here, AFTER the backward-save clone, BEFORE SDPA
+      //   2 = after SDPA, before merger.step
+      //   3 = after merger.step
+      // Run N=1,2,3; the LARGEST N that flattens the norm => racing op is the
+      //   one immediately after that drain. (N=1 fixes => merger; N=1 fails =>
+      //   clone is the victim.)
+      const char *_drain = std::getenv("CP_DRAIN_AT");
+      if (_drain && _drain[0] == '1')
+        cudaStreamSynchronize(pg_->cpRingStream());
+
       // Step 5: Compute fused SDPA
       // With LB sub-chunking: no cross-chunk causal offsets needed (is_causal
       // only on diagonal, sub-chunks handle the rest).
@@ -462,6 +542,95 @@ public:
       SDPAResult result = sdpa_fused_forward(
           q_use, k_use, v_use, use_causal, attn_scale_, q_off, k_off);
 
+      // CP_DRAIN_AT=2: drain AFTER SDPA, before merger.step (see point 1 note).
+      {
+        const char *_d2 = std::getenv("CP_DRAIN_AT");
+        if (_d2 && _d2[0] == '2')
+          cudaStreamSynchronize(pg_->cpRingStream());
+      }
+
+      // DIAGNOSTIC (CP_SELFCHECK=1): single-run, weight-drift-immune race
+      // detector. The SDPA above just read curr_k/curr_v as the overlap
+      // scheduling delivered them (possibly before the NCCL recv landed). Now
+      // force the ring stream fully done, recompute the SAME SDPA on the SAME
+      // buffers (guaranteed-correct data), and diff. If the recv ordering held,
+      // the two outputs are bit-identical; any nonzero diff at step i means the
+      // first SDPA read not-yet-arrived K -> pinpoints the race in ONE run,
+      // immune to cross-run weight drift. Logs the first offending (global call,
+      // step) with the max-abs diff. Heavy: use only for diagnosis.
+      {
+        // NOTE: checks ALL steps including i==0. i==0 is the local causal SDPA
+        // that runs CONCURRENTLY with the just-posted i==0 ring send/recv -- the
+        // i>0-only earlier version skipped exactly this overlap window.
+        const char *_sc = std::getenv("CP_SELFCHECK");
+        if (_sc && _sc[0] == '1') {
+          // ARTIFACT FIX: snapshot result.out/lse to HOST *before* the recompute.
+          // The earlier version compared result.out vs ref.out AFTER ref ran, so
+          // ref's own fresh out/lse/workspace allocations could clobber result.out
+          // and fake a huge diff (we saw out_diff~1.8, lse_diff=0 -- the signature
+          // of the OUTPUT buffer, not the inputs, being overwritten by ref). By
+          // copying to host first, ref cannot touch what we compare. h_out/h_lse
+          // are the genuine SDPA(i) output as produced under overlap; we then
+          // recompute a clean reference (ring drained) and diff. Any nonzero diff
+          // now means the SDPA output truly differs with vs without the ring
+          // co-executing -> real forward-output corruption, not an artifact.
+          cudaStreamSynchronize(0); // finish this step's SDPA on the compute stream
+          Tensor h_out = result.out.to_cpu();
+          Tensor h_lse = result.lse.to_cpu();
+          // Clean reference: ring fully drained, recompute same SDPA.
+          cudaStreamSynchronize(pg_->cpRingStream());
+          cudaStreamSynchronize(0);
+          SDPAResult ref = sdpa_fused_forward(
+              q_use, k_use, v_use, use_causal, attn_scale_, q_off, k_off);
+          cudaStreamSynchronize(0);
+          Tensor h_ref_out = ref.out.to_cpu();
+          Tensor h_ref_lse = ref.lse.to_cpu();
+          auto maxdiff = [](const Tensor &ha, const Tensor &hb) -> double {
+            const float *pa = ha.data<float>();
+            const float *pb = hb.data<float>();
+            int64_t n = std::min<int64_t>(ha.numel(), hb.numel());
+            double mx = 0.0;
+            for (int64_t j = 0; j < n; ++j) {
+              double d = std::fabs((double)pa[j] - (double)pb[j]);
+              if (d > mx) mx = d;
+            }
+            return mx;
+          };
+          double mx_out = maxdiff(h_out, h_ref_out);
+          double mx_lse = maxdiff(h_lse, h_ref_lse);
+          if (mx_out > 0.0 || mx_lse > 0.0) {
+            static std::atomic<int> _sc_call{0};
+            int c = _sc_call.fetch_add(1);
+            std::cerr << "[CP_SELFCHECK] RACE call=" << c << " rank=" << rank_
+                      << " step=" << i
+                      << " maxabs_out_diff=" << mx_out
+                      << " maxabs_lse_diff=" << mx_lse << "\n";
+            // Persist the FIRST hit per rank to a file so it can be read without
+            // catching a scrolling terminal. Includes magnitudes: a tiny out
+            // diff (~1e-6) is kernel FP nondeterminism (noise); a large one
+            // (>1e-3) is real corruption. Also records the reference magnitude
+            // so the relative size is judgeable.
+            static std::atomic<bool> _sc_written{false};
+            bool expected = false;
+            if (_sc_written.compare_exchange_strong(expected, true)) {
+              const float *pro = h_ref_out.data<float>();
+              double refmax = 0.0;
+              for (int64_t j = 0; j < h_ref_out.numel(); ++j)
+                if (std::fabs((double)pro[j]) > refmax) refmax = std::fabs((double)pro[j]);
+              std::string path =
+                  "/tmp/cp_selfcheck_rank" + std::to_string(rank_) + ".log";
+              std::ofstream f(path);
+              f << "FIRST RACE HIT\n"
+                << "call=" << c << " rank=" << rank_ << " step=" << i << "\n"
+                << "maxabs_out_diff=" << mx_out << "\n"
+                << "maxabs_lse_diff=" << mx_lse << "\n"
+                << "ref_out_maxabs=" << refmax << "\n"
+                << "rel_out_diff=" << (mx_out / (refmax + 1e-30)) << "\n";
+            }
+          }
+        }
+      }
+
       // Save per-step LSE and OUT for backward. Backward calls
       // sdpa_fused_backward with these per-step values so the kernel's
       // D = sum(out*dout) and softmax(QK^T - lse) are computed against the
@@ -474,12 +643,19 @@ public:
       // Step 6: Merge into accumulator (with partial flag)
       merger.step(result.out, result.lse, use_partial);
 
+      // CP_DRAIN_AT=3: drain AFTER merger.step (see point 1 note).
+      {
+        const char *_d3 = std::getenv("CP_DRAIN_AT");
+        if (_d3 && _d3[0] == '3')
+          cudaStreamSynchronize(pg_->cpRingStream());
+      }
+
       // DUMP_CP_DEEP_FWD=1: per-step merged_out/merged_lse + per-step
       // SDPA result (block_out/block_lse). Lets us pin which ring step
       // (i=0 full merge or i>=1 partial-tail merge) introduces drift.
       {
         const char *env = std::getenv("DUMP_CP_DEEP_FWD");
-        if (env && env[0] == '1') {
+        if (env && env[0] == '1' && deep_first_call) {
           auto [cur_out, cur_lse] = merger.results();
           auto save_bin = [&](const char *label, const Tensor &t) {
             Tensor host = t.to_cpu();
@@ -498,7 +674,85 @@ public:
       }
     }
 
-    if (pack_event) cudaEventDestroy(pack_event);
+    // cudaEvent_t memcpy_event;
+    // cudaEventCreate(&memcpy_event);
+    // cudaEventRecord(memcpy_event, compute_stream);
+    // cudaStreamWaitEvent(pg_->getStream(), memcpy_event, 0);
+
+    // [#2] Order the compute stream after ALL pending ring sends at loop exit.
+    // Coverage audit: WITHIN the loop, each slot's send is guarded before
+    // re-pack (exch_work[s]->streamWait above), so at loop exit at most the last
+    // two sends (one per slot) can still be in flight — and we order against
+    // BOTH slots here, not just the final one.
+    //
+    // LIFETIME SAFETY IS NOT PROVIDED BY THIS DRAIN. Only the send_buf[2] Tensor
+    // HANDLES are stack-local; their device storage is caching-allocator memory
+    // (Tensor::empty), not a CPU stack buffer. So the destructor at function
+    // return does NOT free GPU memory directly — it routes to
+    // CachingCUDAAllocator::deallocate(), which at CudaCachingAllocator.cpp:362
+    // checks block->recorded_streams: exchange_buffers() called
+    // recordStream(send_buf.data(), cp_ring_stream_) in the overlap path
+    // (RingRotator.h), so deallocate takes the DEFERRED branch — insert_events()
+    // records an event on cp_ring_stream_ (ordered after the send) and the block
+    // is returned to the free pool only once process_events() sees that event
+    // complete. A later (e.g. backward) allocation therefore cannot reuse this
+    // memory while the send is still reading it.
+    // Forward sends and the backward dkv_rotater both ride the SINGLE shared
+    // cp_ring_stream_, so they additionally serialize on that one stream. The
+    // reuse-clobber race earlier revisions of this comment feared cannot occur
+    // given recordStream; this loop is therefore NOT a use-after-free guard.
+    //
+    // What the streamWait below DOES do: it makes the compute stream wait on the
+    // tail sends so subsequent compute-stream work is ordered after them. A
+    // CPU-blocking wait() is unnecessary for correctness (recordStream covers
+    // buffer lifetime); streamWait keeps the tail GPU-ordered without a CPU stall.
+    if (OVERLAP) {
+      for (int s = 0; s < 2; ++s)
+        if (exch_work[s]) exch_work[s]->streamWait(compute_stream);
+    }
+
+    // DIAGNOSTIC (CP_DUMP_KV_CHUNKS=1): cross-rank send/recv content check.
+    // Dump this rank's per-step saved K chunks on the FIRST forward_cp call.
+    // For ws=2: saved_k_chunks[0] = this rank's LOCAL K (what it sent),
+    // saved_k_chunks[1] = the K it RECEIVED from the peer. The transfer is
+    // correct iff rank0's received-K equals rank1's sent-K and vice versa:
+    //   diff  cpp_kvchunk_k1_rank0.bin  (rank0 received)
+    //         cpp_kvchunk_k0_rank1.bin  (rank1 sent)
+    //   diff  cpp_kvchunk_k1_rank1.bin  vs  cpp_kvchunk_k0_rank0.bin
+    // Settled host snapshot (to_cpu syncs), so this catches CONTENT corruption
+    // of the transferred bytes (recv timing already ruled out by CP_FWD_SYNC_RECV).
+    {
+      // Fire at a configurable call index so we can inspect STEADY STATE (near
+      // the ~650-step onset), not just the first call. CP_DUMP_KV_CALL=N => dump
+      // once on the first forward_cp call with index >= N (default 0 = first).
+      // Cross-rank comparison is valid at ANY step (both ranks are at the same
+      // step of the same run), so no weight-drift concern.
+      const char *_dkv = std::getenv("CP_DUMP_KV_CHUNKS");
+      const char *_dkv_call = std::getenv("CP_DUMP_KV_CALL");
+      int dkv_threshold = _dkv_call ? std::atoi(_dkv_call) : 0;
+      static std::atomic<bool> _dkv_done{false};
+      bool dkv_fire = false;
+      if (_dkv && _dkv[0] == '1' && my_call_idx >= dkv_threshold) {
+        bool expected = false;
+        dkv_fire = _dkv_done.compare_exchange_strong(expected, true);
+      }
+      if (dkv_fire) {
+        std::cerr << "[CP_DUMP_KV_CHUNKS] dumping at call=" << my_call_idx
+                  << " rank=" << rank_ << "\n";
+        cudaStreamSynchronize(pg_->cpRingStream());
+        cudaStreamSynchronize(0);
+        for (int s = 0; s < world_size_; ++s) {
+          if (!saved_k_chunks[s].is_valid()) continue;
+          Tensor h = saved_k_chunks[s].to_cpu();
+          std::string path = std::string("/tmp/cp_bwd_test/cpp_kvchunk_k") +
+                             std::to_string(s) + "_rank" +
+                             std::to_string(rank_) + ".bin";
+          std::ofstream f(path, std::ios::binary);
+          f.write(reinterpret_cast<const char *>(h.data<float>()),
+                  h.numel() * sizeof(float));
+        }
+      }
+    }
 
     // ----- Phase 3: Get final merged result -----
     auto [merged_out, merged_lse] = merger.results();
@@ -507,7 +761,7 @@ public:
     // PT-vs-C++ parity diff of the forward outputs that feed backward.
     {
       const char *env = std::getenv("DUMP_CP_DEEP_FWD");
-      if (env && env[0] == '1') {
+      if (env && env[0] == '1' && deep_first_call) {
         auto save_bin = [&](const char *label, const Tensor &t) {
           Tensor host = t.to_cpu();
           std::string path = std::string("/tmp/cp_bwd_test/deep/cpp_") + label +
@@ -638,6 +892,22 @@ public:
       output_tensor.set_requires_grad(true);
     }
 
+    // DIAGNOSTIC (CP_FWD_SYNC_RETURN=1): force the compute stream (0) to drain
+    // before forward_cp returns and the local kv_rotator (with its recv_ slots)
+    // destructs. Hypothesis under test: the recv buffers are recordStream'd only
+    // on the ring stream (writer), NOT on stream 0 (the SDPA reader), so after
+    // recv completes the allocator can recycle a recv block into the NEXT layer's
+    // forward_cp while THIS layer's SDPA is still reading it on stream 0 -- a
+    // cross-layer write-after-read that only manifests with forward overlap on.
+    // If the norm explosion vanishes under this flag (forward overlap still on),
+    // the consumer-lifetime gap is confirmed and the real fix is to recordStream
+    // recv_[slot] on the compute stream in next_buffer_streamordered.
+    {
+      const char *_fwd_sync_ret = std::getenv("CP_FWD_SYNC_RETURN");
+      if (_fwd_sync_ret && _fwd_sync_ret[0] == '1')
+        cudaStreamSynchronize(0);
+    }
+
     return output_tensor;
   }
 
@@ -652,6 +922,14 @@ private:
   int world_size_;
   int rank_;
   HeadTail load_balancer_;
+
+  // Persistent forward ring buffers (see Phase 2). Reused across forward_cp
+  // calls and reallocated only when the per-rank KV size changes, so the ring
+  // staging never churns the caching allocator and never shares a block with a
+  // per-step SDPA output allocation (the forward-overlap corruption).
+  Tensor send_buf_[2];
+  std::unique_ptr<RingRotatorBase> kv_rotator_persistent_;
+  int64_t persistent_kv_numel_ = -1;
 
   std::unique_ptr<RingRotatorBase> create_rotator() const {
     switch (rotator_type_) {

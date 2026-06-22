@@ -739,8 +739,23 @@ __global__ void fused_attn_forward_kernel_tc(CPFwdParams params)
             }
         }
 
-        // Wait for V tile, compute P@V
-        if (v_packed) cp_async_wait_group<1>();
+        // Wait for V tile, compute P@V.
+        // V was committed as a cp.async group above; the next-K prefetch (if
+        // has_next) was committed AFTER it. wait_group<1> waits for "all groups
+        // except the 1 most recent", i.e. it waits for V while leaving the
+        // next-K prefetch in flight -- correct ONLY while a next-K group exists.
+        // On the final KV iteration has_next is false, so no next-K group was
+        // committed and V is the single pending group; wait_group<1> would then
+        // wait for NOTHING, letting P@V read a not-yet-arrived V tile. That race
+        // is benign under exclusive occupancy (the copy finishes during the
+        // score/softmax work) but corrupts the output when co-execution (e.g.
+        // the CP ring NCCL kernel) delays the copy -- lse stays correct (K is
+        // always fully waited at the top of the loop), only the V->out path is
+        // hit. Wait for ALL groups when there is no next-K to keep in flight.
+        if (v_packed) {
+            if (has_next) cp_async_wait_group<1>();
+            else          cp_async_wait_group<0>();
+        }
         __syncthreads();
 
         {

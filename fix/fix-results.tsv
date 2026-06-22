@@ -1,2 +1,0 @@
-iteration	category	target	delta	guard	status	description
-0	bug	ContextParallel.h:217-227	-1	n/a	fixed	Replaced offset-based sub-chunk path with LEFT_HALF/BOT_HALF geometric masks for load-balanced cross-chunk attention. HeadTail permutation was designed for these masks. Offsets assumed linear mapping which HeadTail invalidates.

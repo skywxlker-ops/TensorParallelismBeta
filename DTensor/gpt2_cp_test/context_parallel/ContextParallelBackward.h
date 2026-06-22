@@ -154,7 +154,24 @@ public:
           "ContextParallelBackward: sub_chunk_active requires even T_local");
     }
     if (lb_active_bwd && !skip_dkv_nccl) {
-      dkv_rotater = create_rotator();
+      // The backward dK/dV is a TRAVELLING ACCUMULATOR (see above): a buffer
+      // that is rotated around the ring and has the local contribution added
+      // at every step. AllGatherRingRotator communicates ONLY on its first
+      // exchange_buffers call (it caches a one-shot all_gather snapshot) and
+      // every subsequent call is a no-op serving cached slices. That is correct
+      // for the read-only FORWARD KV ring, but it CANNOT carry a write-
+      // accumulate gradient buffer: per-step dK/dV updates are never re-
+      // communicated, so cross-rank gradient contributions from steps > 0 are
+      // silently dropped -> wrong gradients -> the model trains worse (observed
+      // as a monotonically growing validation-loss gap, AllGather-only).
+      // PyTorch sidesteps this identically: _templated_ring_attention_backward
+      // FORCES its dkv_rotater to _RotateMethod.ALL_TO_ALL regardless of the
+      // configured forward rotate method. Mirror that here -- force a true
+      // per-step ring for the gradient accumulator when forward uses AllGather.
+      // (rotator_type_: 0=P2P, 1=AlltoAll, 2=AllGather; see create_rotator().)
+      dkv_rotater = (rotator_type_ == 2)
+          ? std::make_unique<AlltoAllRingRotator>(pg_)
+          : create_rotator();
     } else if (!lb_active_bwd) {
       grad_k_accum.resize(world_size_);
       grad_v_accum.resize(world_size_);
@@ -180,14 +197,23 @@ public:
     // CP_NO_OVERLAP=1 reverts to the CPU-blocking path for A/B.
     // Value-aware: unset OR "0" => overlap ON; any other value => OFF.
     const char *_cp_no_ovl = std::getenv("CP_NO_OVERLAP");
-    const bool OVERLAP =
+    bool OVERLAP =
         (_cp_no_ovl == nullptr) || (_cp_no_ovl[0] == '0' && _cp_no_ovl[1] == '\0');
+    // Independent BACKWARD overlap gate (for bisecting fwd-vs-bwd races):
+    // CP_NO_OVERLAP_BWD=1 forces the backward ring onto the blocking/CPU path
+    // even when forward overlap is on.
+    const char *_no_bwd = std::getenv("CP_NO_OVERLAP_BWD");
+    if (_no_bwd != nullptr && !(_no_bwd[0] == '0' && _no_bwd[1] == '\0'))
+        OVERLAP = false;
+    {
+      static bool _once = false;
+      if (!_once) { _once = true;
+        fprintf(stderr, "[CP bwd] overlap=%s\n", OVERLAP ? "ON" : "OFF"); }
+    }
     cudaStream_t compute_stream = OwnTensor::cuda::getCurrentStream();
-    cudaEvent_t bwd_pack_event = nullptr;
     Tensor dkv_send[2];
     std::shared_ptr<Work> dkv_work[2] = {nullptr, nullptr};
     if (OVERLAP && lb_active_bwd && !skip_dkv_nccl) {
-      cudaEventCreateWithFlags(&bwd_pack_event, cudaEventDisableTiming);
       int64_t kv2 = grad_key.numel() * 2;
       for (int s = 0; s < 2; ++s)
         dkv_send[s] = Tensor::empty(Shape({{kv2}}), grad_key.opts());
@@ -501,10 +527,11 @@ public:
           cudaMemcpyAsync(gks.data<float>() + k_numel_send,
                           grad_value.data<float>(), k_bytes_send,
                           cudaMemcpyDeviceToDevice, pack_stream);
-          cudaEvent_t ev = nullptr;
-          if (OVERLAP) { cudaEventRecord(bwd_pack_event, compute_stream); ev = bwd_pack_event; }
           nvtxRangePushA("CP.bwd.LB.ring.exchange_buffers");
-          std::shared_ptr<Work> w = dkv_rotater->exchange_buffers(gks, ev);
+          // Explicit overlap flag + pack (compute) stream; the rotator owns the
+          // persistent per-slot pack event (no per-call create/destroy UB).
+          std::shared_ptr<Work> w =
+              dkv_rotater->exchange_buffers(gks, OVERLAP, compute_stream);
           if (OVERLAP) dkv_work[s] = w;
           nvtxRangePop();
         }
@@ -530,10 +557,18 @@ public:
           : dkv_rotater->next_buffer();
       nvtxRangePop();
       Tensor final_flat = final_grad_kv.flatten();
+      // MUST .clone(): final_grad_kv is a view into dkv_rotater's recv buffer,
+      // and dkv_rotater is a LOCAL unique_ptr destroyed when this function
+      // returns. grad_key/grad_value are returned to the autograd engine and
+      // consumed LATER by the downstream c_attn (Linear) backward. Without the
+      // clone they dangle into the freed rotator buffer; under no-overlap the
+      // CPU-blocking timing + caching allocator hide it, but under overlap the
+      // CPU races ahead and the freed buffer can be reused before consumption ->
+      // rare corruption that compounds into the ~step-140 grad-norm explosion.
       grad_key =
-          final_flat.narrow(0, 0, k_numel).reshape(grad_key.shape());
+          final_flat.narrow(0, 0, k_numel).reshape(grad_key.shape()).clone();
       grad_value =
-          final_flat.narrow(0, k_numel, k_numel).reshape(grad_value.shape());
+          final_flat.narrow(0, k_numel, k_numel).reshape(grad_value.shape()).clone();
     } else if (lb_active_bwd && skip_dkv_nccl) {
       // SKIP_DKV_ROTATION path: grad_key / grad_value already hold this
       // rank's locally accumulated partials. No cross-rank collection.
@@ -588,7 +623,17 @@ public:
       }
     }
 
-    if (bwd_pack_event) cudaEventDestroy(bwd_pack_event);
+    // [#2] Drain pending dK/dV ring sends before dkv_send[2] frees at return.
+    // Both slots drained (in-loop guard covers reuse; at most 2 in flight here).
+    // CPU-wait (not GPU-side streamWait): the freed dkv_send/recv blocks can be
+    // reused by allocations whose NCCL writes come from a different stream than
+    // the compute stream under full fwd+bwd overlap, so a compute-stream-only
+    // drain leaves a reuse-vs-in-flight-send race. See the matching Context
+    // Parallel.h post-loop comment for the full rationale.
+    if (OVERLAP) {
+      for (int s = 0; s < 2; ++s)
+        if (dkv_work[s]) dkv_work[s]->streamWait(compute_stream);
+    }
 
     // Cast back to original dtype
     if (grad_q.dtype() != saved_q_.dtype()) {

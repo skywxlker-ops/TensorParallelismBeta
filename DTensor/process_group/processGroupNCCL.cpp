@@ -49,10 +49,29 @@ ProcessGroupNCCL::ProcessGroupNCCL(int world_size, int rank, ncclUniqueId &id,
   if (comm_ == (ncclComm_t)NULL) {
     throw std::runtime_error(std::string("NCCL COMMUNICATION NOT INITIALIZED"));
   }
+
+  // Second, DEDICATED communicator for the CP ring overlap path. Keeps ring
+  // sendrecv/alltoallv off the comm_ used by loss/param all-reduces so the two
+  // never share one NCCL communicator (PyTorch parity). cp_id_ is broadcast the
+  // same way as id_ (MPI_COMM_WORLD, root 0) — correct for a 1D CP mesh where
+  // the pg spans all of WORLD; a multi-dim mesh would need the per-dim
+  // sub-communicator (pre-existing limitation of id handling, not new here).
+  if (rank_ == 0) {
+    NCCLCHECK(ncclGetUniqueId(&cp_id_));
+  }
+  MPI_Bcast(&cp_id_, sizeof(cp_id_), MPI_BYTE, 0, MPI_COMM_WORLD);
+  NCCLCHECK(ncclCommInitRank(&cp_comm_, world_size_, cp_id_, rank_));
+  const char *_sync_ring = std::getenv("CP_SYNC_RING");
+  cp_sync_ring_ = (_sync_ring && _sync_ring[0] == '1');
+  if (cp_sync_ring_ && rank_ == 0)
+    fprintf(stderr, "[CP ring] CP_SYNC_RING=1: host-sync after each exchange "
+                    "(diagnostic: overlap path, no concurrency)\n");
 }
 
 ProcessGroupNCCL::~ProcessGroupNCCL() {
   NCCLCHECK(ncclCommDestroy(comm_));
+  if (cp_comm_) NCCLCHECK(ncclCommDestroy(cp_comm_));
+  if (cp_ring_stream_) CUDACHECK(cudaStreamDestroy(cp_ring_stream_));
   if (owns_stream_) {
     CUDACHECK(cudaStreamDestroy(communication_stream_));
   }
@@ -539,6 +558,78 @@ ProcessGroupNCCL::sendrecv_async(const void *sendbuff, void *recvbuff,
       sync_);
 }
 
+// Lazily create the dedicated non-blocking CP-ring stream.
+cudaStream_t ProcessGroupNCCL::cpRingStream() {
+  if (cp_ring_stream_ == nullptr) {
+    // DIAGNOSTIC: CP_RING_BLOCKING=1 creates a BLOCKING stream, which implicitly
+    // orders with the legacy default stream (stream 0). If this is stable while
+    // the non-blocking stream explodes, the corruption is the non-blocking
+    // concurrency with stream-0 compute; if it still explodes, the NCCL op
+    // itself is at fault, not stream-0 interplay.
+    if (std::getenv("CP_RING_BLOCKING")) {
+      CUDACHECK(cudaStreamCreate(&cp_ring_stream_));
+      if (rank_ == 0) fprintf(stderr, "[CP ring] CP_RING_BLOCKING=1: blocking ring stream\n");
+    } else {
+      CUDACHECK(cudaStreamCreateWithFlags(&cp_ring_stream_, cudaStreamNonBlocking));
+    }
+  }
+  return cp_ring_stream_;
+}
+
+// sendrecv on an EXPLICIT stream (the dedicated CP-ring stream), not the shared
+// communication_stream_. The Work's event is recorded (in launch_work_collectives)
+// on this stream AFTER the grouped send+recv -> waiting on it waits for the recv.
+std::shared_ptr<Work> ProcessGroupNCCL::sendrecv_async_stream(
+    const void *sendbuff, void *recvbuff, int send_rank, int recv_rank,
+    size_t count, OwnTensor::Dtype dtype, cudaStream_t stream) {
+  // Runs on the DEDICATED cp_comm_ (not comm_) so the ring never shares a
+  // communicator with the loss/param all-reduces.
+  auto w = launch_work_collectives(
+      stream,
+      [&]() -> ncclResult_t {
+        ncclGroupStart();
+        ncclResult_t s = ncclSend(sendbuff, count, ncclTypeConversion(dtype),
+                                  recv_rank, cp_comm_, stream);
+        ncclRecv(recvbuff, count, ncclTypeConversion(dtype), send_rank, cp_comm_,
+                 stream);
+        ncclGroupEnd();
+        return s;
+      },
+      false, cp_comm_);
+  // DIAGNOSTIC: CP_SYNC_RING=1 forces a full host-side sync of the ring stream
+  // after every exchange, keeping the overlap CODE PATH but removing all
+  // concurrency. If divergence vanishes under this -> the bug is a missing
+  // synchronization (a race); if it persists -> the bug is logic, not timing.
+  if (cp_sync_ring_) CUDACHECK(cudaStreamSynchronize(stream));
+  return w;
+}
+
+std::shared_ptr<Work> ProcessGroupNCCL::alltoallv_async_stream(
+    const void *sendbuff, const size_t *sendcounts, const size_t *senddispls,
+    void *recvbuff, const size_t *recvcounts, const size_t *recvdispls,
+    OwnTensor::Dtype dtype, cudaStream_t stream) {
+  ncclDataType_t nccl_type = ncclTypeConversion(dtype);
+  size_t elem_size = OwnTensor::Tensor::dtype_size(dtype);
+  auto w = launch_work_collectives(
+      stream,
+      [&]() -> ncclResult_t {
+        ncclGroupStart();
+        for (int r = 0; r < world_size_; ++r) {
+          if (sendcounts[r] > 0)
+            ncclSend(static_cast<const char *>(sendbuff) + senddispls[r] * elem_size,
+                     sendcounts[r], nccl_type, r, cp_comm_, stream);
+          if (recvcounts[r] > 0)
+            ncclRecv(static_cast<char *>(recvbuff) + recvdispls[r] * elem_size,
+                     recvcounts[r], nccl_type, r, cp_comm_, stream);
+        }
+        return ncclGroupEnd();
+      },
+      false, cp_comm_);
+  // DIAGNOSTIC: see sendrecv_async_stream above (CP_SYNC_RING=1).
+  if (cp_sync_ring_) CUDACHECK(cudaStreamSynchronize(stream));
+  return w;
+}
+
 std::shared_ptr<Work> ProcessGroupNCCL::send_async(const void *sendbuff,
                                                    size_t count,
                                                    OwnTensor::Dtype dtype,
@@ -585,9 +676,10 @@ ProcessGroupNCCL::broadcast_inplace(OwnTensor::Tensor &sendbuff, int rank,
 template <typename NCCLFUNC>
 std::shared_ptr<Work>
 ProcessGroupNCCL::launch_work_collectives(cudaStream_t stream, NCCLFUNC nccl_op,
-                                          bool to_sync) {
-  // create the work collective
-  auto work_collectives = std::make_shared<Work>(stream, comm_);
+                                          bool to_sync, ncclComm_t work_comm) {
+  // create the work collective (Work uses the op's comm for async-error checks)
+  auto work_collectives =
+      std::make_shared<Work>(stream, work_comm ? work_comm : comm_);
 
   PG_CHECK_FALSE(work_collectives->begin(),
                  "Error in work_collective->begin()");
