@@ -75,7 +75,7 @@ struct CudaTimer {
 // =============================================================================
 
 struct GPTConfig {
-  int64_t batch_size = 8;
+  int64_t batch_size = 4;
   int64_t context_length = 1024;
   int64_t vocab_size = 50304;
   int64_t n_embd = 384;
@@ -87,6 +87,11 @@ struct GPTConfig {
   // When true:  CP layers allgather output to full [B,T,C]; loss is scalar-identical
   //             across ranks, no allreduce needed.
   bool cp_unshard = false;
+  // Ring rotator used by ContextParallel (P2P / AlltoAll / AllGather).
+  RotatorType rotator = RotatorType::AlltoAll;
+  // Recompute K in the ring backward instead of storing all ring-step K
+  // buffers (trades compute for memory; PyTorch CP recomputes by default).
+  bool recompute_k = false;
 };
 
 // =============================================================================
@@ -203,7 +208,9 @@ public:
   CPAttention(int64_t n_embd, int64_t n_heads, int64_t n_layers,
               DeviceIndex device, std::shared_ptr<ProcessGroupNCCL> pg,
               const DeviceMesh &mesh, uint64_t seed = 1234,
-              bool load_balancing = false, bool unshard = true)
+              bool load_balancing = false, bool unshard = true,
+              RotatorType rotator = RotatorType::AlltoAll,
+              bool recompute_k = false)
       : ln(n_embd), c_attn(n_embd, 3 * n_embd, true),
         c_proj(n_embd, n_embd, true), n_embd_(n_embd), n_heads_(n_heads),
         head_dim_(n_embd / n_heads), unshard_(unshard),
@@ -220,8 +227,8 @@ public:
     //   past chunks (source_rank < rank_): full attention
     //   future chunks (source_rank > rank_): skipped
     cp_ = std::make_shared<ContextParallel>(
-        mesh, pg, attn_scale, /*is_causal=*/true, RotatorType::P2P,
-        /*load_balance=*/load_balancing, /*recompute_k=*/false);
+        mesh, pg, attn_scale, /*is_causal=*/true, rotator,
+        /*load_balance=*/load_balancing, /*recompute_k=*/recompute_k);
 
     ln.to(device);
     c_attn.to(device);
@@ -381,7 +388,7 @@ public:
       auto a = std::make_shared<CPAttention>(
           cfg.n_embd, cfg.n_heads, cfg.n_layers, device, pg, mesh,
           seed + 200 + i * 10,
-          cfg.load_balancing, cfg.cp_unshard);
+          cfg.load_balancing, cfg.cp_unshard, cfg.rotator, cfg.recompute_k);
       auto m = std::make_shared<MLP>(cfg.n_embd, cfg.n_layers, device,
                                      seed + 200 + i * 10);
       // seed + 300 + static_cast<uint64_t>(i) * 10);
@@ -571,18 +578,34 @@ private:
 // =============================================================================
 
 int main(int argc, char **argv) {
-  OwnTensor::AllocationTracker::instance().init("2step.csv");
+  // ISOLATION TEST (CP_ALLOC_LEGACY=1): reproduce the OLD tracker init — before
+  // MPI_Init, shared "1step.csv" for all ranks. Used to test whether the
+  // tracker relocation caused the peak-memory change.
+  const bool legacy_tracker = std::getenv("CP_ALLOC_LEGACY") != nullptr;
+  if (legacy_tracker) {
+    OwnTensor::AllocationTracker::instance().init("1step.csv");
+  }
   MPI_Init(&argc, &argv);
 
   int rank, world_size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
+  // Rank-aware allocation-trace filename so multiple ranks don't clobber one
+  // shared file. Override base via CP_ALLOC_CSV (default "1step"); rank suffix
+  // is always appended -> e.g. 1step_rank0.csv.
+  if (!legacy_tracker) {
+    const char *base = std::getenv("CP_ALLOC_CSV");
+    std::string csv = std::string(base ? base : "1step") + "_rank" +
+                      std::to_string(rank) + ".csv";
+    OwnTensor::AllocationTracker::instance().init(csv.c_str());
+  }
+
   if (rank == 0) {
     std::cout << "=== GPT-2 Context Parallel Training Script ===" << std::endl;
   }
 
-  bool nsys_report = true;
+  bool nsys_report = false;
   //nsys profile -t cuda -o my_report ./path/to/your_executable
   //nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report /path/to/my_report.nsys-rep
   //nsys profile -t cuda -o my_report ./your_executable && nsys stats --report cuda_gpu_kern_sum:base --format csv -o my_custom_report my_report.nsys-rep
@@ -601,8 +624,47 @@ int main(int argc, char **argv) {
     config.n_embd = fourtyfour?384:768;
     config.n_layers = fourtyfour?3:12;
     config.n_heads = fourtyfour?6:12;
-    config.weight_tying = false;
+    config.weight_tying = true;
     config.load_balancing = true;
+
+    // ── Memory-scaling sweep overrides (env-driven) ────────────────────────
+    // Optional; defaults preserve original behavior. Mirror the PyTorch probe
+    // knobs so the mem_scaling harness can drive identical sweeps.
+    //   CP_T            : sequence length (also sets the wpe/pos table size)
+    //   CP_N_EMBD/CP_N_LAYER/CP_N_HEAD : override model dims
+    //   CP_WEIGHT_TYING : 1/0 to tie lm_head to wte
+    //   CP_MEM_PROBE    : 1 = run CP_MEM_PROBE_STEPS steps (grad_accum=1), skip
+    //                     val/gen, snapshot nvidia-smi + cudaMemGetInfo, exit.
+    //   CP_MEM_PROBE_STEPS : steps in probe mode (default 2).
+    //   CP_MODEL_LABEL  : free-text label embedded in snapshots.
+    if (const char *e = std::getenv("CP_T"))         config.context_length = atoll(e);
+    if (const char *e = std::getenv("CP_N_EMBD"))    config.n_embd = atoll(e);
+    if (const char *e = std::getenv("CP_N_LAYER"))   config.n_layers = atoll(e);
+    if (const char *e = std::getenv("CP_N_HEAD"))    config.n_heads = atoll(e);
+    if (const char *e = std::getenv("CP_WEIGHT_TYING"))
+      config.weight_tying = (atoi(e) != 0);
+    const bool mem_probe = std::getenv("CP_MEM_PROBE") != nullptr &&
+                           atoi(std::getenv("CP_MEM_PROBE")) != 0;
+    const int mem_probe_steps =
+        std::getenv("CP_MEM_PROBE_STEPS") ? atoi(std::getenv("CP_MEM_PROBE_STEPS")) : 2;
+    const std::string mem_label =
+        std::getenv("CP_MODEL_LABEL") ? std::getenv("CP_MODEL_LABEL") : "cpp";
+    // Rotator selection: CP_ROTATOR = p2p | alltoall | allgather (default a2a).
+    std::string rotator_label = "alltoall";
+    if (const char *e = std::getenv("CP_ROTATOR")) {
+      std::string rv = e;
+      if (rv == "p2p" || rv == "P2P") {
+        config.rotator = RotatorType::P2P; rotator_label = "p2p";
+      } else if (rv == "allgather" || rv == "AllGather") {
+        config.rotator = RotatorType::AllGather; rotator_label = "allgather";
+      } else {
+        config.rotator = RotatorType::AlltoAll; rotator_label = "alltoall";
+      }
+    }
+    // Recompute K in ring backward (CP_RECOMPUTE_K=1) to lower peak memory.
+    if (const char *e = std::getenv("CP_RECOMPUTE_K")) {
+      config.recompute_k = (e[0] == '1');
+    }
 
     const int B = static_cast<int>(config.batch_size);
     const int T = static_cast<int>(config.context_length);
@@ -610,6 +672,9 @@ int main(int argc, char **argv) {
     // Test-only override: shrink the global batch (=> smaller grad_accum =>
     // faster steps) for quick overlap-bisection runs. Default = original.
     if (const char *e = std::getenv("CP_GLOBAL_BATCH")) global_batch = atoi(e);
+    // Probe mode: one micro-batch (B*T tokens) -> grad_accum=1. Activation peak
+    // is identical to a full grad-accum loop (sequential), so this is faithful.
+    if (mem_probe) global_batch = B * T;
     const int grad_accum_steps = global_batch / (B * T);
 
     const float max_lr = 6e-4f;
@@ -623,11 +688,14 @@ int main(int argc, char **argv) {
     // Test-only overrides for fast overlap-bisection runs (default = original).
     if (const char *e = std::getenv("CP_MAX_STEPS")) max_steps = atoi(e);
     if (const char *e = std::getenv("CP_WARMUP"))    warmup_steps = atoi(e);
-    if (nsys_report)
+    if (nsys_report && !mem_probe)
     {
-      max_steps = 2;
+      max_steps = 1;
       warmup_steps = 0;
     }
+    // mem_probe takes precedence over nsys_report so memory/throughput probes
+    // always run the requested number of steps (need >=2 for steady-state).
+    if (mem_probe) { max_steps = mem_probe_steps; warmup_steps = 1; }
     // const int max_steps    = 1;
 
     if (rank == 0) {
@@ -910,8 +978,8 @@ int main(int argc, char **argv) {
       try {
         timer_step.start_timer();
 
-        // ---- Validation every VAL_FREQ steps ----
-        if (step % VAL_FREQ == 0 || step == max_steps - 1) {
+        // ---- Validation every VAL_FREQ steps ---- (skipped in probe mode)
+        if (!mem_probe && (step % VAL_FREQ == 0 || step == max_steps - 1)) {
           val_loader.reset();
           float val_loss_accum = 0.0f;
           const int val_steps = 5;
@@ -948,8 +1016,8 @@ int main(int argc, char **argv) {
           val_loss_log = val_loss_accum;
         }
 
-        // ---- Token generation every TOK_GEN_FREQ steps ----
-        if (step > 0 && (step % TOK_GEN_FREQ == 0 || step == max_steps - 1)) {
+        // ---- Token generation every TOK_GEN_FREQ steps ---- (skip in probe)
+        if (!mem_probe && step > 0 && (step % TOK_GEN_FREQ == 0 || step == max_steps - 1)) {
           if (rank == 0) {
             std::cout << "--- Generating tokens at step " << step << " ---\n";
           }
@@ -1476,6 +1544,122 @@ int main(int argc, char **argv) {
         }
 
         val_loss_log = -1.0f;
+
+        // ── Memory-probe snapshot: after final probe step, capture nvidia-smi
+        //    + cudaMemGetInfo (live, before teardown), then stop. ───────────
+        if (mem_probe && step == max_steps - 1) {
+          cudaDeviceSynchronize();
+          size_t pf = 0, pt = 0;
+          cudaMemGetInfo(&pf, &pt);
+          double probe_used_mb = static_cast<double>(pt - pf) / (1024.0 * 1024.0);
+          // Caching-allocator breakdown: reserved vs active vs requested lets us
+          // see how much of the footprint is size-class rounding (internal frag)
+          // vs cached-but-free blocks vs genuine live memory.
+          auto mstats =
+              OwnTensor::CachingCUDAAllocator::instance().get_stats(rank);
+          const double MB = 1024.0 * 1024.0;
+          double st_reserved_mb  = mstats.reserved_current / MB;
+          double st_active_mb    = mstats.active_current / MB;
+          double st_requested_mb = mstats.allocated_current / MB;
+          double st_frag_pct     = mstats.fragmentation_ratio();
+          // Running-max peaks over the whole probe (true max occupancy during
+          // fwd+bwd), the apples-to-apples analog of PyTorch's torch.peak_*.
+          double st_active_peak_mb   = mstats.active_peak / MB;
+          double st_reserved_peak_mb = mstats.reserved_peak / MB;
+          double st_cached_free_mb =
+              (mstats.reserved_current > mstats.active_current)
+                  ? (mstats.reserved_current - mstats.active_current) / MB
+                  : 0.0;
+          if (rank == 0) {
+            OwnTensor::CachingCUDAAllocator::instance().print_memory_summary();
+          }
+          std::string tag = "CPP_" + mem_label + "_" + rotator_label + "_T" +
+                            std::to_string(config.context_length) + "_ws" +
+                            std::to_string(world_size);
+          std::cout << "[MEM_PROBE rank=" << rank << "] tag=" << tag
+                    << " used_mb=" << std::fixed << std::setprecision(1)
+                    << probe_used_mb << "\n";
+          if (rank == 0) {
+            const char *sd = std::getenv("MEM_SNAPSHOT_DIR");
+            std::string snap_dir = sd ? sd : "mem_scaling_runs";
+            std::filesystem::create_directories(snap_dir);
+            std::string snap_path = snap_dir + "/" + tag + ".txt";
+            std::ofstream sf(snap_path);
+            sf << "# MEM PROBE SNAPSHOT  tag=" << tag << "\n";
+            sf << "# impl=Cpp label=" << mem_label << " rotator=" << rotator_label
+               << " recompute_k=" << (config.recompute_k ? 1 : 0)
+               << " n_embd=" << config.n_embd << " n_layer=" << config.n_layers
+               << " n_head=" << config.n_heads
+               << " weight_tying=" << (config.weight_tying ? 1 : 0) << "\n";
+            sf << "# B=" << B << " T=" << config.context_length
+               << " cp_world_size=" << world_size << " params=" << num_params << "\n";
+            sf << "# cudaMemGetInfo used_mb(rank0)=" << std::fixed
+               << std::setprecision(1) << probe_used_mb << "\n";
+            // Allocator breakdown (rank0): reserved = active + cached-free;
+            // active = requested + internal-fragmentation (size-class rounding).
+            sf << "# ALLOC reserved_mb=" << std::fixed << std::setprecision(1)
+               << st_reserved_mb << " active_mb=" << st_active_mb
+               << " requested_mb=" << st_requested_mb
+               << " cached_free_mb=" << st_cached_free_mb
+               << " internal_frag_pct=" << std::setprecision(2) << st_frag_pct
+               << "\n";
+            // Peak (running-max) occupancy — true max during fwd+bwd, matches
+            // PyTorch's torch.peak_alloc/peak_reserved semantics.
+            sf << "# ALLOC_PEAK active_peak_mb=" << std::fixed << std::setprecision(1)
+               << st_active_peak_mb << " reserved_peak_mb=" << st_reserved_peak_mb
+               << "\n";
+            // Machine-readable live per-GPU used MiB (parsed by the table gen).
+            // nvidia-smi ignores CUDA_VISIBLE_DEVICES and lists ALL physical
+            // GPUs; on a shared box we keep only the GPUs this run uses (the
+            // physical indices in CUDA_VISIBLE_DEVICES) so a co-tenant's memory
+            // does not pollute the reported number.
+            {
+              std::string smi_used;
+              // Build the set of allowed physical indices from the env var.
+              std::vector<std::string> vis;
+              if (const char *cvd = std::getenv("CUDA_VISIBLE_DEVICES")) {
+                std::string s(cvd), cur;
+                for (char c : s) {
+                  if (c == ',') { if (!cur.empty()) vis.push_back(cur); cur.clear(); }
+                  else if (c != ' ') cur += c;
+                }
+                if (!cur.empty()) vis.push_back(cur);
+              }
+              auto allowed = [&](const std::string &idx) {
+                if (vis.empty()) return true;
+                for (auto &v : vis) if (v == idx) return true;
+                return false;
+              };
+              FILE *qp = popen("nvidia-smi --query-gpu=index,memory.used "
+                               "--format=csv,noheader,nounits 2>/dev/null", "r");
+              if (qp) {
+                char buf[256];
+                while (fgets(buf, sizeof(buf), qp)) {
+                  std::string ln(buf);
+                  while (!ln.empty() && (ln.back() == '\n' || ln.back() == '\r'))
+                    ln.pop_back();
+                  std::string cleaned;
+                  for (char c : ln) if (c != ' ') cleaned += c;
+                  if (cleaned.empty()) continue;
+                  std::string idx = cleaned.substr(0, cleaned.find(','));
+                  if (!allowed(idx)) continue;
+                  if (!smi_used.empty()) smi_used += ";";
+                  smi_used += cleaned;
+                }
+                pclose(qp);
+              }
+              sf << "# SMI_USED_MB_PER_GPU=" << smi_used << "\n";
+            }
+            sf << "# ---- nvidia-smi ----\n";
+            sf.close();
+            std::string cmd = "nvidia-smi >> '" + snap_path + "' 2>&1";
+            int rc = std::system(cmd.c_str());
+            (void)rc;
+            std::cout << "[MEM_PROBE] wrote snapshot " << snap_path << "\n";
+          }
+          MPI_Barrier(MPI_COMM_WORLD);
+          break;
+        }
 
         if(step==0){
         OwnTensor::CachingCUDAAllocator::instance().empty_cache();

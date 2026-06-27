@@ -131,7 +131,11 @@ torch.manual_seed(1234)
 cp_mesh = init_device_mesh("cuda", (cp_world_size,))
 _cp_options.enable_load_balance = True
 _cp_options.convert_to_f32      = True
-set_rotate_method("alltoall")
+# Rotate method: ROTATE_METHOD = alltoall | allgather (PyTorch CP supports two).
+ROTATE_METHOD = os.environ.get("ROTATE_METHOD", "alltoall").lower()
+if ROTATE_METHOD not in ("alltoall", "allgather"):
+    ROTATE_METHOD = "alltoall"
+set_rotate_method(ROTATE_METHOD)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -601,17 +605,71 @@ _is_44m = int(os.environ.get("MODEL_44M", "0")) == 1
 
 MODEL_TAG = "44M" if _is_44m else "161M"
 
+# ── Memory-scaling sweep parametrization (env-driven) ──────────────────────
+# All optional; defaults preserve the original behavior. Used by the memory
+# occupancy sweep harness (mem_scaling) to vary T and the model config without
+# editing this file per run.
+#   T              : sequence length (default 2048; sweep 1024,2048,4096,...)
+#   N_EMBD/N_LAYER/N_HEAD : override model dims (else fall back to 44M/161M)
+#   WEIGHT_TYING   : 1/0 to tie lm_head to wte (overrides config default)
+#   MODEL_LABEL    : free-text label embedded in snapshots/logs (e.g. "124M")
+#   MEM_PROBE      : 1 = run exactly MEM_PROBE_STEPS steps (grad_accum=1), skip
+#                    validation/token-gen, snapshot nvidia-smi + peak mem, exit.
+#   MEM_PROBE_STEPS: steps to run in probe mode (default 2).
+_env_T          = os.environ.get("T")
+_env_n_embd     = os.environ.get("N_EMBD")
+_env_n_layer    = os.environ.get("N_LAYER")
+_env_n_head     = os.environ.get("N_HEAD")
+_env_tying      = os.environ.get("WEIGHT_TYING")
+_mem_probe      = int(os.environ.get("MEM_PROBE", "0")) == 1
+_mem_probe_steps = int(os.environ.get("MEM_PROBE_STEPS", "2"))
+MODEL_LABEL     = os.environ.get("MODEL_LABEL", MODEL_TAG)
+
 B = 4
-T = 1024
+T = int(_env_T) if _env_T else 2048
 total_batch_size = 65536 if _is_44m else 524288   # C++ global_batch
-assert T % cp_world_size == 0
+# In probe mode we only care about per-microstep peak memory, so force
+# grad_accum_steps = 1 (one micro-batch of B*T tokens). Activation memory of a
+# normal grad-accum loop is identical (the loop is sequential), so this is a
+# faithful memory measurement that runs fast.
+if _mem_probe:
+    total_batch_size = B * T
+
+# ── Sequence-length sanity checks (generalize T past the default 1024) ──
+# 1. CP shards the sequence across ranks, so T must divide evenly.
+assert T % cp_world_size == 0, (
+    f"T={T} must be divisible by cp_world_size={cp_world_size}"
+)
+# 2. grad_accum is integer token bookkeeping; B*T must divide the global batch.
+assert total_batch_size % (B * T) == 0, (
+    f"B*T={B * T} must divide total_batch_size={total_batch_size}"
+)
 grad_accum_steps = total_batch_size // (B * T)
 
+# block_size (== positional-embedding table rows, wpe) must be >= T, otherwise
+# pos = arange(0, T) indexes past the end of wpe and the embedding lookup throws
+# a device-side assert. Derive it from T so any sequence length "just works".
+# NOTE: changing block_size changes wpe's shape -> the model has DIFFERENT params
+# and is NOT parity-compatible with init_weights_named_*.bin or the C++ ref
+# (both assume block_size=1024). Override with BLOCK_SIZE env if you need a
+# fixed table larger than T (e.g. to keep the 1024 layout while testing T<1024).
+_block_size = int(os.environ.get("BLOCK_SIZE", str(max(1024, T))))
+assert _block_size >= T, f"block_size={_block_size} must be >= T={T}"
+
+# Base dims from the 44M/161M presets, then apply any per-dim env overrides so
+# the sweep can hit arbitrary configs (25M/124M/etc) by toggling tying.
 if _is_44m:
-    config = GPTConfig(n_embd=384, vocab_size=50304, n_layer=3, n_head=6,
-                       weight_tying=False)
+    _base_embd, _base_layer, _base_head, _base_tie = 384, 3, 6, False
 else:
-    config = GPTConfig(vocab_size=50304, n_layer=12, n_head=12, weight_tying=False)
+    _base_embd, _base_layer, _base_head, _base_tie = 768, 12, 12, False
+
+_cfg_embd  = int(_env_n_embd)  if _env_n_embd  else _base_embd
+_cfg_layer = int(_env_n_layer) if _env_n_layer else _base_layer
+_cfg_head  = int(_env_n_head)  if _env_n_head  else _base_head
+_cfg_tie   = (_env_tying == "1") if _env_tying is not None else _base_tie
+
+config = GPTConfig(n_embd=_cfg_embd, block_size=_block_size, vocab_size=50304,
+                   n_layer=_cfg_layer, n_head=_cfg_head, weight_tying=_cfg_tie)
 model = GPT(config)
 model.to(device)
 
@@ -636,7 +694,9 @@ if master_process:
 num_params         = sum(p.numel() for p in model.parameters())
 num_params_per_gpu = num_params
 max_steps    = 6768 if _is_44m else 1555   # C++ fourtyfour max_steps
-warmup_steps = max_steps // 10
+if _mem_probe:
+    max_steps = _mem_probe_steps
+warmup_steps = max(1, max_steps // 10)
 
 if nsys_report:
     max_steps = 1
@@ -808,8 +868,8 @@ val_loss_accum_log = -1.0
 for step in range(max_steps):
     timer_step.start()
 
-    # ---- Validation ----
-    if step % VAL_FREQ == 0 or step == max_steps - 1:
+    # ---- Validation ---- (skipped entirely in memory-probe mode)
+    if not _mem_probe and (step % VAL_FREQ == 0 or step == max_steps - 1):
         model.eval()
         val_loader.reset()
         val_loss_accum = 0.0
@@ -953,6 +1013,64 @@ for step in range(max_steps):
             log_file.flush()
 
     val_loss_accum_log = -1.0
+
+    # ── Memory-probe snapshot: after the final probe step, capture nvidia-smi
+    #    + per-rank torch peak memory, then stop. ───────────────────────────
+    if _mem_probe and step == max_steps - 1:
+        torch.cuda.synchronize()
+        peak_alloc_mb = torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0)
+        peak_resv_mb  = torch.cuda.max_memory_reserved(device) / (1024.0 * 1024.0)
+        snap_dir = os.environ.get("MEM_SNAPSHOT_DIR", "mem_scaling_runs")
+        tag = f"PT_{MODEL_LABEL}_{ROTATE_METHOD}_T{T}_ws{cp_world_size}"
+        # All ranks print their peak so the harness can read per-GPU usage.
+        print(f"[MEM_PROBE rank={cp_rank}] tag={tag} "
+              f"peak_alloc_mb={peak_alloc_mb:.1f} peak_reserved_mb={peak_resv_mb:.1f}",
+              flush=True)
+        if master_process:
+            os.makedirs(snap_dir, exist_ok=True)
+            snap_path = os.path.join(snap_dir, f"{tag}.txt")
+            import subprocess
+            with open(snap_path, "w") as sf:
+                sf.write(f"# MEM PROBE SNAPSHOT  tag={tag}\n")
+                sf.write(f"# impl=PyTorch label={MODEL_LABEL} rotator={ROTATE_METHOD} "
+                         f"n_embd={config.n_embd} n_layer={config.n_layer} "
+                         f"n_head={config.n_head} weight_tying={config.weight_tying}\n")
+                sf.write(f"# B={B} T={T} cp_world_size={cp_world_size} "
+                         f"params={num_params}\n")
+                sf.write(f"# torch.peak_alloc_mb(rank0)={peak_alloc_mb:.1f} "
+                         f"torch.peak_reserved_mb(rank0)={peak_resv_mb:.1f}\n")
+                # Machine-readable live per-GPU used MiB (parsed by the table gen).
+                # nvidia-smi ignores CUDA_VISIBLE_DEVICES and lists ALL physical
+                # GPUs, so on a shared box we filter to only the GPUs this run
+                # uses (the physical indices in CUDA_VISIBLE_DEVICES). Without
+                # this, a co-tenant's memory would pollute the reported number.
+                _vis = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+                _vis_set = {v.strip() for v in _vis.split(",") if v.strip() != ""} \
+                    if _vis else None
+                try:
+                    q = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=index,memory.used",
+                         "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=30).stdout.strip()
+                    keep = []
+                    for ln in q.splitlines():
+                        parts = [p.strip() for p in ln.split(",")]
+                        if len(parts) >= 2 and (_vis_set is None or parts[0] in _vis_set):
+                            keep.append(",".join(parts))
+                    smi_used = ";".join(keep)
+                except Exception as e:
+                    smi_used = f"query_failed:{e}"
+                sf.write(f"# SMI_USED_MB_PER_GPU={smi_used}\n")
+                sf.write("# ---- nvidia-smi ----\n")
+                try:
+                    smi = subprocess.run(["nvidia-smi"], capture_output=True,
+                                         text=True, timeout=30).stdout
+                except Exception as e:
+                    smi = f"nvidia-smi failed: {e}\n"
+                sf.write(smi)
+            print(f"[MEM_PROBE] wrote snapshot {snap_path}", flush=True)
+        torch.distributed.barrier()
+        break
 
 
 # ══════════════════════════════════════════════════════════════════════════════

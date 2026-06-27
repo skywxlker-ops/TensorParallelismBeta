@@ -195,6 +195,13 @@ public:
         const void* sendbuff, const size_t* sendcounts, const size_t* senddispls,
         void* recvbuff, const size_t* recvcounts, const size_t* recvdispls,
         OwnTensor::Dtype dtype, cudaStream_t stream);
+    // Async all_gather on an explicit stream using the dedicated CP communicator
+    // (cp_comm_), returning a Work (no CPU sync). Mirrors alltoallv_async_stream
+    // so the AllGather rotator can overlap the gather with local attention compute
+    // instead of CPU-blocking on the shared comm.
+    std::shared_ptr<Work> all_gather_async_stream(
+        const void* sendbuff, void* recvbuff, size_t sendcount,
+        OwnTensor::Dtype dtype, cudaStream_t stream);
 
     //synchronization using cudaEvent_t
     bool blockStreamEvent();

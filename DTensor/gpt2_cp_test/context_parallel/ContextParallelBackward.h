@@ -182,10 +182,26 @@ public:
     // Optional kv_rotater for recompute_k mode
     std::unique_ptr<RingRotatorBase> kv_rotater;
     Tensor curr_k, curr_v;
+    // Persistent (static) double-buffered send staging for the recompute_k
+    // re-rotation, REUSED across all layer-backward calls. The forward already
+    // keeps persistent ring buffers (ContextParallel.h Phase 2); the backward
+    // recompute path used a fresh Tensor::empty per ring step (and thus per
+    // layer), churning/fragmenting the caching pool so the single large logits
+    // allocation fails at the frontier even when total memory is lower. Static
+    // reuse removes that churn. Grown (never shrunk) to the largest KV seen.
+    static thread_local Tensor s_kv_send[2];
+    static thread_local int64_t s_kv_send_numel = 0;
+    std::shared_ptr<Work> kv_send_work[2] = {nullptr, nullptr};
     if (recompute_k_) {
       kv_rotater = create_rotator();
       curr_k = saved_k_chunks_[0];
       curr_v = saved_v_chunks_[0];
+      int64_t need = curr_k.numel() * 2;
+      if (s_kv_send_numel < need) {
+        for (int s = 0; s < 2; ++s)
+          s_kv_send[s] = Tensor::empty(Shape({{need}}), curr_k.opts());
+        s_kv_send_numel = need;
+      }
     }
 
     // ---- Compute/comm overlap setup (LB dK/dV travelling accumulator) ----
@@ -235,14 +251,17 @@ public:
         if (i < (world_size_ - 1)) {
           int64_t k_numel = curr_k.numel();
           size_t k_bytes = static_cast<size_t>(k_numel) * sizeof(float);
-          Tensor kv_send =
-              Tensor::empty(Shape({{k_numel * 2}}), curr_k.opts());
+          int s = i & 1;
+          // Reuse the persistent slot; ensure its prior send (step i-2) drained
+          // before overwriting (no-op at world_size<=2 where each slot sends once).
+          if (kv_send_work[s]) kv_send_work[s]->streamWait(0);
+          Tensor kv_send = s_kv_send[s];
           cudaMemcpyAsync(kv_send.data<float>(), curr_k.data<float>(),
                           k_bytes, cudaMemcpyDeviceToDevice, 0);
           cudaMemcpyAsync(kv_send.data<float>() + k_numel,
                           curr_v.data<float>(), k_bytes,
                           cudaMemcpyDeviceToDevice, 0);
-          kv_rotater->exchange_buffers(kv_send);
+          kv_send_work[s] = kv_rotater->exchange_buffers(kv_send);
         }
         step_k = curr_k;
         step_v = curr_v;

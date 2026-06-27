@@ -323,6 +323,15 @@ public:
     std::vector<Tensor> saved_lse_per_step(world_size_);
     std::vector<Tensor> saved_out_per_step(world_size_);
 
+    // Per-step (out, lse) are consumed by the backward ONLY under
+    // USE_PER_STEP_LSE=1; the default backward path uses merged_out/merged_lse.
+    // Saving them per ring step otherwise is dead weight retained from forward
+    // through backward across every layer (the dominant CP memory overhead at
+    // large T). Gate the save on the same env so the default path keeps these
+    // vectors empty and frees that memory. (Backward indexes them only when the
+    // same env is set, so empty is safe.)
+    const bool save_per_step_stats = std::getenv("USE_PER_STEP_LSE") != nullptr;
+
     // Sequence length of each rank's local chunk
     int64_t T_local_fwd = local_q.shape().dims[2];
     const int seq_dim = 2; // [B, H, T, D]
@@ -355,19 +364,15 @@ public:
       kv_rotator_persistent_ = create_rotator(); // fresh recv_ slots for new size
       persistent_kv_numel_ = kv_numel;
     }
-    // AllGatherRingRotator gathers all KV ONCE on its first exchange_buffers and
-    // never re-gathers (aggregated_buffer_ stays valid; idx_ only increments).
-    // That is correct for a single ring, but the persistent instance above is
-    // reused across every forward call -- so for AllGather it would serve the
-    // FIRST step's stale K/V forever, with a drifting (rank - idx_) shard index.
-    // P2P/AlltoAll re-communicate fresh data on every exchange, so persistence is
-    // safe (and necessary) for them; AllGather can't overlap, so it gains nothing
-    // from persistence. Recreate a fresh AllGather rotator each forward so it
-    // re-gathers the CURRENT step's K/V with idx_ reset to 0.
-    if (rotator_type_ == RotatorType::AllGather) {
-      kv_rotator_persistent_ = create_rotator();
-    }
     kv_rotator = kv_rotator_persistent_.get();
+    // Re-arm the persistent rotator for THIS forward's ring. No-op for P2P/AlltoAll
+    // (they re-communicate fresh data every exchange). Critical for AllGather: its
+    // rotator caches a one-shot all_gather and would otherwise serve the FIRST
+    // step's stale K/V forever (with a drifting (rank - idx_) shard index) across
+    // the reused persistent instance. reset() invalidates that cache so the next
+    // exchange re-gathers the CURRENT step's K/V, while keeping the buffer storage
+    // and the persistent pack-event (no allocator churn, no event-destroy UB).
+    kv_rotator->reset();
     Tensor *send_buf = send_buf_; // alias so downstream send_buf[s] is unchanged
     std::shared_ptr<Work> exch_work[2] = {nullptr, nullptr};  // [#1] per send slot
     // Pack-ordering events are OWNED by the rotator (persistent, per-slot).
@@ -637,8 +642,10 @@ public:
       // SAME K used in this step, not the final merged values (which
       // accumulate contributions from other ranks' K and corrupt the partial
       // step's gradient computation).
-      saved_lse_per_step[i] = result.lse;
-      saved_out_per_step[i] = result.out;
+      if (save_per_step_stats) {
+        saved_lse_per_step[i] = result.lse;
+        saved_out_per_step[i] = result.out;
+      }
 
       // Step 6: Merge into accumulator (with partial flag)
       merger.step(result.out, result.lse, use_partial);

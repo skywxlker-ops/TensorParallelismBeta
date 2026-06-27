@@ -630,6 +630,22 @@ std::shared_ptr<Work> ProcessGroupNCCL::alltoallv_async_stream(
   return w;
 }
 
+std::shared_ptr<Work> ProcessGroupNCCL::all_gather_async_stream(
+    const void *sendbuff, void *recvbuff, size_t sendcount,
+    OwnTensor::Dtype dtype, cudaStream_t stream) {
+  ncclDataType_t nccl_type = ncclTypeConversion(dtype);
+  auto w = launch_work_collectives(
+      stream,
+      [&]() -> ncclResult_t {
+        return ncclAllGather(sendbuff, recvbuff, sendcount, nccl_type, cp_comm_,
+                             stream);
+      },
+      false, cp_comm_);
+  // DIAGNOSTIC: see sendrecv_async_stream / alltoallv_async_stream (CP_SYNC_RING=1).
+  if (cp_sync_ring_) CUDACHECK(cudaStreamSynchronize(stream));
+  return w;
+}
+
 std::shared_ptr<Work> ProcessGroupNCCL::send_async(const void *sendbuff,
                                                    size_t count,
                                                    OwnTensor::Dtype dtype,

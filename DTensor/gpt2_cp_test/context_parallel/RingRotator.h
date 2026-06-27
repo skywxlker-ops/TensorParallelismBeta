@@ -63,6 +63,15 @@ public:
         return next_buffer();
     }
 
+    // Re-arm the rotator for a NEW ring (called once per forward_cp before the
+    // ring loop). P2P/AlltoAll re-communicate fresh data on every exchange, so
+    // they need no re-arming -> default no-op. AllGather caches a one-shot gather
+    // and must re-gather the current step's KV each forward, so it overrides this
+    // to invalidate its cached buffer (without freeing it -- the storage and the
+    // persistent pack-event are reused, avoiding allocator churn and the
+    // event-destroy UB that recreating the rotator each call would cause).
+    virtual void reset() {}
+
 protected:
     std::shared_ptr<ProcessGroupNCCL> pg_;
     int rank_;
@@ -297,80 +306,141 @@ private:
 // ---------------------------------------------------------------------------
 // AllGather Ring Rotator
 //
-// Gathers all buffers from all ranks in a single all_gather call on the
-// first exchange. Subsequent calls just index into the gathered buffer.
+// Gathers all ranks' KV in a single all_gather on the first exchange of a ring,
+// then indexes into the gathered buffer for each subsequent ring step.
+//
+// OVERLAP: the gather is issued ASYNC on the dedicated CP ring stream (cp_comm_)
+// and the consuming compute stream waits on it GPU-side (streamWait), exactly
+// like P2P/AlltoAll. So the gather overlaps step 0's LOCAL attention compute
+// instead of CPU-blocking the whole step on the shared comm (the source of the
+// erratic-throughput rendezvous jitter). Note: AllGather issues ONE collective,
+// so it can only overlap the gather with the first (local) SDPA -- P2P/AlltoAll
+// hide a hop behind every step and so overlap more, but this removes the
+// CPU-side blocking barrier that made AllGather's step time oscillate.
+//
+// The instance is PERSISTENT (owned by ContextParallel); reset() re-arms it for
+// each forward (re-gather the current step's KV) while reusing the aggregated
+// buffer storage and the persistent pack-event -> no per-call allocation churn
+// and no event-destroy UB.
 // ---------------------------------------------------------------------------
 class AllGatherRingRotator : public RingRotatorBase {
 public:
     AllGatherRingRotator(std::shared_ptr<ProcessGroupNCCL> pg)
-        : RingRotatorBase(pg), idx_(0), aggregated_buffer_() {}
+        : RingRotatorBase(pg) {}
+
+    ~AllGatherRingRotator() override {
+        if (pack_ev_) cudaEventDestroy(pack_ev_);
+    }
+
+    // Re-arm for a new ring: invalidate the cached gather (so the next exchange
+    // re-gathers the CURRENT step's KV) and reset the shard index. Keep the
+    // aggregated buffer storage and the pack-event for reuse.
+    void reset() override {
+        gathered_ = false;
+        idx_ = 0;
+        work_ = nullptr;  // waits on its event were already issued last ring
+    }
 
     std::shared_ptr<Work> exchange_buffers(Tensor& curr_buffer,
-                                           bool /*overlap*/ = false,
-                                           cudaStream_t /*pack_stream*/ = nullptr) override {
-        // [#8] AllGather cannot pipeline (single blocking collective); surface
-        // the lost overlap once, unless the caller explicitly disabled overlap.
-        static bool warned = false;
-        if (!warned && std::getenv("CP_NO_OVERLAP") == nullptr) {
-            warned = true;
-            fprintf(stderr,
-                    "[CP overlap WARNING] AllGatherRingRotator selected: ring "
-                    "communication will NOT overlap compute (single blocking "
-                    "all_gather). Use P2P/AlltoAll rotator for overlap.\n");
+                                           bool overlap = false,
+                                           cudaStream_t pack_stream = nullptr) override {
+        idx_ += 1;                       // tracks ring step for next_buffer indexing
+        {
+            // One-time confirmation of which forward ring path is active.
+            static bool _once = false;
+            if (!_once) { _once = true;
+                fprintf(stderr, "[CP ring AllGather] %s\n", overlap
+                    ? "OVERLAP: async all_gather on dedicated ring stream"
+                    : "NO-OVERLAP: blocking all_gather on shared stream"); }
         }
-        idx_ += 1;
+        if (gathered_) return nullptr;   // gather for this ring already issued
 
-        if (!aggregated_buffer_.is_valid()) {
-            size_t per_rank_count = static_cast<size_t>(curr_buffer.numel());
-            size_t total_count = per_rank_count * static_cast<size_t>(world_size_);
-            Dtype dtype = curr_buffer.dtype();
+        size_t per_rank_count = static_cast<size_t>(curr_buffer.numel());
+        size_t total_count = per_rank_count * static_cast<size_t>(world_size_);
+        Dtype dtype = curr_buffer.dtype();
+        per_rank_numel_ = per_rank_count;
 
+        // Reuse the aggregated buffer across forwards; reallocate only if the
+        // per-rank size changed (training T vs generation T).
+        if (!aggregated_buffer_.is_valid() ||
+            static_cast<size_t>(aggregated_buffer_.numel()) != total_count) {
             Shape agg_shape({{static_cast<int64_t>(total_count)}});
             aggregated_buffer_ = Tensor::empty(agg_shape, curr_buffer.opts());
-
-            Tensor flat_input = curr_buffer.flatten();
-
-            pg_->all_gather(
-                flat_input.data<float>(),
-                aggregated_buffer_.data<float>(),
-                per_rank_count,
-                dtype,
-                true);
-
-            per_rank_numel_ = per_rank_count;
         }
-        return nullptr;  // blocking all_gather already completed; no pending Work
+
+        Tensor flat_input = curr_buffer.flatten();
+
+        if (overlap) {
+            cudaStream_t rs = pg_->cpRingStream();
+            // Order the ring stream after the caller's pack memcpy (which ran on
+            // pack_stream) so the gather never reads a half-packed send buffer.
+            // The same event also orders the gather after the PREVIOUS forward's
+            // reads of aggregated_buffer_ (pack_stream is the compute stream,
+            // which is FIFO), making the buffer reuse safe. Persistent event:
+            // never destroyed per-call (UB to destroy while a wait is pending).
+            if (pack_ev_ == nullptr)
+                cudaEventCreateWithFlags(&pack_ev_, cudaEventDisableTiming);
+            cudaEventRecord(pack_ev_, pack_stream);
+            cudaStreamWaitEvent(rs, pack_ev_, 0);
+            // send + recv buffers are read/written on the ring stream but owned by
+            // the compute stream; recordStream stops the caching allocator from
+            // recycling them while the gather is in flight.
+            OwnTensor::CachingCUDAAllocator::instance().recordStream(flat_input.data(), rs);
+            OwnTensor::CachingCUDAAllocator::instance().recordStream(aggregated_buffer_.data(), rs);
+            work_ = pg_->all_gather_async_stream(
+                flat_input.data<float>(), aggregated_buffer_.data<float>(),
+                per_rank_count, dtype, rs);
+            gathered_ = true;
+            return work_;
+        }
+
+        // Legacy blocking path (CP_NO_OVERLAP): synchronous gather on the shared
+        // comm; no pending Work.
+        pg_->all_gather(flat_input.data<float>(), aggregated_buffer_.data<float>(),
+                        per_rank_count, dtype, /*sync=*/true);
+        gathered_ = true;
+        return nullptr;
     }
 
     Tensor next_buffer() override {
-        if (!aggregated_buffer_.is_valid()) {
+        if (!gathered_)
             throw std::runtime_error("AllGatherRingRotator::next_buffer: exchange_buffers not called");
-        }
+        if (work_) work_->wait();  // CPU-block until the async gather lands
+        return index_chunk(/*stream=*/0, /*blocking=*/true);
+    }
 
-        int source_rank = ((rank_ - idx_) % world_size_ + world_size_) % world_size_;
-        int64_t offset = static_cast<int64_t>(source_rank) * static_cast<int64_t>(per_rank_numel_);
-
-        float* base_ptr = aggregated_buffer_.data<float>() + offset;
-
-        Shape chunk_shape({{static_cast<int64_t>(per_rank_numel_)}});
-        Tensor chunk = Tensor::empty(chunk_shape, aggregated_buffer_.opts());
-
-        // Synchronous copy: the AllGather rotator does not pipeline, and the
-        // caller may consume `chunk` on a stream other than the legacy default
-        // (0). An async copy on stream 0 with no sync would let the caller read
-        // `chunk` before the copy lands when its compute stream is non-blocking.
-        // The blocking copy keeps this path correct regardless of caller stream.
-        cudaMemcpy(
-            chunk.data<float>(),
-            base_ptr,
-            per_rank_numel_ * sizeof(float),
-            cudaMemcpyDeviceToDevice);
-
-        return chunk;
+    Tensor next_buffer_streamordered(cudaStream_t compute_stream) override {
+        if (!gathered_)
+            throw std::runtime_error("AllGatherRingRotator::next_buffer_streamordered: exchange_buffers not called");
+        if (work_) work_->streamWait(compute_stream);  // GPU-side: no CPU stall
+        return index_chunk(compute_stream, /*blocking=*/false);
     }
 
 private:
-    int idx_;
+    // Copy this ring step's shard (rank - idx_) out of the gathered buffer.
+    Tensor index_chunk(cudaStream_t stream, bool blocking) {
+        int source_rank = ((rank_ - idx_) % world_size_ + world_size_) % world_size_;
+        int64_t offset = static_cast<int64_t>(source_rank) * static_cast<int64_t>(per_rank_numel_);
+        float* base_ptr = aggregated_buffer_.data<float>() + offset;
+        Shape chunk_shape({{static_cast<int64_t>(per_rank_numel_)}});
+        Tensor chunk = Tensor::empty(chunk_shape, aggregated_buffer_.opts());
+        if (blocking) {
+            cudaMemcpy(chunk.data<float>(), base_ptr,
+                       per_rank_numel_ * sizeof(float), cudaMemcpyDeviceToDevice);
+        } else {
+            // Ordered after the streamWait above (gather has landed) and before
+            // the caller's SDPA, since both run on compute_stream.
+            cudaMemcpyAsync(chunk.data<float>(), base_ptr,
+                            per_rank_numel_ * sizeof(float),
+                            cudaMemcpyDeviceToDevice, stream);
+        }
+        return chunk;
+    }
+
+    int idx_ = 0;
+    bool gathered_ = false;
     Tensor aggregated_buffer_;
     size_t per_rank_numel_ = 0;
+    std::shared_ptr<Work> work_;
+    cudaEvent_t pack_ev_ = nullptr;  // persistent pack-ordering event
 };
